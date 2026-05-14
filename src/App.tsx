@@ -1,7 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { auth, db, handleFirestoreError, OperationType } from './lib/firebase';
-import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
-import { collection, onSnapshot, query, addDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { 
   Plus, 
   TrendingUp, 
@@ -17,16 +14,34 @@ import {
   Coins,
   Flame,
   Search,
-  Settings2
+  Settings,
+  Download,
+  Upload,
+  History,
+  MoreVertical,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Asset, PortfolioStats, HistoryPoint } from './types';
+import {
+  buildAllocationPieCalloutMap,
+  renderAllocationPieCalloutFromLayout,
+  ALLOCATION_PIE_CHART_MARGIN,
+  allocationPieMarginsWithNudge,
+  loadAllocationLabelOffsets,
+  saveAllocationLabelOffsets,
+  loadAllocationChromePrefs,
+  saveAllocationChromePrefs,
+  type AllocationLabelOffset,
+  type AllocationChromePrefs,
+} from './allocationPieLabels';
 import { 
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Treemap
+  AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Treemap,
 } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
+import { formatCurrency } from './formatCurrency';
+import { DividendsEngine } from './DividendsEngine';
 
 // --- Types & Enums ---
 
@@ -34,19 +49,184 @@ enum View {
   DASHBOARD = 'DASHBOARD',
   DIVIDENDS = 'DIVIDENDS',
   FIRE = 'FIRE',
-  MARKET_RECAP = 'MARKET_RECAP'
+  MARKET_RECAP = 'MARKET_RECAP',
+  OPTIONS = 'OPTIONS'
 }
 
-// --- Components ---
+function dedupeHistoryByDate(points: HistoryPoint[]): HistoryPoint[] {
+  const seen = new Set<string>();
+  return [...points]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .filter((p) => {
+      if (seen.has(p.date)) return false;
+      seen.add(p.date);
+      return true;
+    });
+}
 
-const formatCurrency = (value: number, currency: string = 'EUR') => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+function normalizeCashAmountEur(raw: unknown): number | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, raw);
+  if (typeof raw === 'string') {
+    const n = parseFloat(raw.replace(',', '.'));
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return null;
+}
+
+function isAbortError(e: unknown): boolean {
+  return (
+    (e instanceof DOMException && e.name === 'AbortError') ||
+    (e instanceof Error && e.name === 'AbortError')
+  );
+}
+
+const HistoryPointModal = ({
+  modal,
+  onClose,
+  onSaved,
+}: {
+  modal: { type: 'edit'; point: HistoryPoint } | { type: 'add' };
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) => {
+  const [dateStr, setDateStr] = useState(
+    modal.type === 'edit' ? modal.point.date : new Date().toISOString().split('T')[0]
+  );
+  const [valueStr, setValueStr] = useState(
+    modal.type === 'edit' ? String(modal.point.value) : ''
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    const val = parseFloat(valueStr.replace(',', '.'));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      setErr('Use date format YYYY-MM-DD');
+      return;
+    }
+    if (!Number.isFinite(val)) {
+      setErr('Enter a valid number');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch('/api/portfolio/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: dateStr, value: val }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      await onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (modal.type !== 'edit') return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/portfolio/history/${encodeURIComponent(modal.point.date)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok && res.status !== 204) throw new Error('Delete failed');
+      await onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to delete');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-bg/95 backdrop-blur-xl z-[60] flex items-center justify-center p-4"
+    >
+      <motion.div
+        initial={{ scale: 0.96, opacity: 0, y: 12 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.96, opacity: 0, y: 12 }}
+        className="glass-panel p-8 w-full max-w-md border-border bg-card/80 shadow-2xl"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-black uppercase tracking-tight text-text-p">
+            {modal.type === 'edit' ? 'Edit history row' : 'Add history row'}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-text-s hover:text-text-p hover:bg-white/5"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">Date</label>
+            <input
+              type="date"
+              className="w-full bg-bg/50 border border-border rounded-xl px-4 py-3 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
+              value={dateStr}
+              disabled={modal.type === 'edit'}
+              onChange={(e) => setDateStr(e.target.value)}
+            />
+            {modal.type === 'edit' && (
+              <p className="text-[9px] text-text-s mt-1.5 opacity-70">Date cannot be changed; delete and re-add if needed.</p>
+            )}
+          </div>
+          <div>
+            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">
+              Total portfolio value (EUR)
+            </label>
+            <input
+              type="text"
+              inputMode="decimal"
+              className="w-full bg-bg/50 border border-border rounded-xl px-4 py-3 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
+              placeholder="e.g. 125000.50"
+              value={valueStr}
+              onChange={(e) => setValueStr(e.target.value)}
+            />
+          </div>
+          {err && (
+            <p className="text-[10px] text-red font-bold uppercase tracking-widest">{err}</p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-3 mt-8">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={save}
+            className="flex-1 min-w-[120px] py-3 bg-accent text-white rounded-xl font-black uppercase tracking-widest text-[10px] disabled:opacity-50"
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          {modal.type === 'edit' && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={remove}
+              className="px-4 py-3 rounded-xl border border-red/40 text-red font-black uppercase tracking-widest text-[10px] hover:bg-red/10 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
 };
+
+// --- Components ---
 
 const LoadingScreen = () => (
   <div className="fixed inset-0 bg-bg flex items-center justify-center z-50">
@@ -58,7 +238,13 @@ const LoadingScreen = () => (
   </div>
 );
 
-const Header = ({ isLocalMode, apiStatus }: { isLocalMode: boolean, apiStatus: string }) => (
+const Header = ({
+  apiStatus,
+  feedDetail,
+}: {
+  apiStatus: 'connecting' | 'connected' | 'error';
+  feedDetail: string | null;
+}) => (
   <header className="border-b border-border bg-bg px-6 py-4 flex items-center justify-between">
     <div className="flex items-center gap-2">
       <div className="font-black text-xl tracking-tighter flex items-center gap-1 text-text-p uppercase">
@@ -75,7 +261,12 @@ const Header = ({ isLocalMode, apiStatus }: { isLocalMode: boolean, apiStatus: s
             ) : apiStatus === 'connecting' ? (
               <span className="text-text-s flex items-center gap-1.5 animate-pulse">Connecting...</span>
             ) : (
-              <span className="text-red flex items-center gap-1.5">Stream Error</span>
+              <span
+                className="text-red flex items-center gap-1.5 max-w-[min(420px,45vw)] truncate cursor-help"
+                title={feedDetail ?? 'Yahoo health check failed. Run npm run dev (Express + Vite) and ensure outbound network allows Yahoo Finance.'}
+              >
+                Offline
+              </span>
             )}
           </div>
         </div>
@@ -88,53 +279,175 @@ const Header = ({ isLocalMode, apiStatus }: { isLocalMode: boolean, apiStatus: s
 // --- Main App Logic ---
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isLocalMode, setIsLocalMode] = useState(false);
+  const [dataStoreHint, setDataStoreHint] = useState<string>('SQLite');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const recordAttemptedRef = useRef<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [historyModal, setHistoryModal] = useState<
+    null | { type: 'edit'; point: HistoryPoint } | { type: 'add' }
+  >(null);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
   const [marketChanges, setMarketChanges] = useState<Record<string, number>>({});
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ 'EUR': 1 });
   const [apiStatus, setApiStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
+  const [feedDetail, setFeedDetail] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
+  const importBackupRef = useRef<HTMLInputElement>(null);
+  /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
+  const portfolioMutationEpochRef = useRef(0);
+  /** Strict Mode / remount: incremented on effect cleanup so stale async cannot apply portfolio state. */
+  const portfolioBootstrapGenerationRef = useRef(0);
+  const statsTotalValueRef = useRef(0);
+  const [cashEur, setCashEur] = useState(0);
+  const [cashInput, setCashInput] = useState('');
+  const [cashSaving, setCashSaving] = useState(false);
+
+  const cashLineEur = useMemo(() => {
+    const n = normalizeCashAmountEur(cashEur);
+    if (n !== null) return n;
+    const raw = Number(cashEur);
+    return Number.isFinite(raw) && raw >= 0 ? raw : 0;
+  }, [cashEur]);
 
   useEffect(() => {
     const checkApi = async () => {
       try {
-        const res = await fetch('/api/health/yahoo');
-        const data = await res.json();
-        if (data.status === 'connected') setApiStatus('connected');
-        else setApiStatus('error');
+        const res = await fetch('/api/health/yahoo', { cache: 'no-store' });
+        const text = await res.text();
+        let data: { status?: string; error?: string; message?: string } = {};
+        try {
+          data = JSON.parse(text) as typeof data;
+        } catch {
+          setApiStatus('error');
+          setFeedDetail(
+            res.ok
+              ? 'Invalid JSON from /api/health/yahoo'
+              : `HTTP ${res.status} — use npm run dev so API routes are served (not vite alone).`
+          );
+          return;
+        }
+        if (res.ok && data.status === 'connected') {
+          setApiStatus('connected');
+          setFeedDetail(null);
+        } else {
+          setApiStatus('error');
+          const hint =
+            data.error ||
+            data.message ||
+            (typeof data.status === 'string' ? data.status : null) ||
+            `HTTP ${res.status}`;
+          setFeedDetail(hint);
+        }
       } catch (e) {
         setApiStatus('error');
+        const msg = e instanceof Error ? e.message : String(e);
+        setFeedDetail(
+          /failed to fetch|networkerror|load failed/i.test(msg)
+            ? `${msg} — is the app server running (npm run dev on the same origin)?`
+            : msg
+        );
       }
     };
-    checkApi();
-    const interval = setInterval(checkApi, 30000); // Check every 30s
+    void checkApi();
+    const interval = setInterval(() => void checkApi(), 30000); // Check every 30s
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      if (!u) {
-        try {
-          await signInAnonymously(auth);
-        } catch (err) {
-          console.warn("Secure session initialization restricted. Activating Hybrid Local Mode.");
-          setIsLocalMode(true);
-          setLoading(false);
+    const gen = portfolioBootstrapGenerationRef.current;
+    let cancelled = false;
+    const ac = new AbortController();
+    const { signal } = ac;
+    const pf = { signal, cache: 'no-store' as RequestCache };
+    (async () => {
+      try {
+        const statusRes = await fetch('/api/portfolio/status', pf);
+        if (statusRes.ok) {
+          const s = await statusRes.json();
+          if (s.dbPath && typeof s.dbPath === 'string') {
+            const short = s.dbPath.replace(/\\/g, '/').split('/').slice(-2).join('/');
+            if (!cancelled) setDataStoreHint(`SQLite (${short})`);
+          }
         }
-      } else {
-        setUser(u);
-        setIsLocalMode(false);
-        setLoading(false);
+
+        let snapshot = portfolioMutationEpochRef.current;
+        let assetsData: Asset[] = [];
+        let historyData: HistoryPoint[] = [];
+        let hydrated = false;
+
+        for (let attempt = 0; attempt < 12 && !cancelled; attempt++) {
+          assetsData = await fetch('/api/portfolio/assets', pf).then((r) => r.json());
+          historyData = await fetch('/api/portfolio/history', pf).then((r) => r.json());
+
+          if (assetsData.length === 0 && historyData.length === 0) {
+            const raw = localStorage.getItem('alpha_os_assets');
+            const rawH = localStorage.getItem('alpha_os_history');
+            if (raw || rawH) {
+              await fetch('/api/portfolio/import?mode=merge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  assets: raw ? (JSON.parse(raw) as Asset[]) : [],
+                  history: rawH ? (JSON.parse(rawH) as HistoryPoint[]) : [],
+                }),
+                ...pf,
+              });
+              assetsData = await fetch('/api/portfolio/assets', pf).then((r) => r.json());
+              historyData = await fetch('/api/portfolio/history', pf).then((r) => r.json());
+            }
+          }
+
+          if (cancelled) return;
+          if (portfolioMutationEpochRef.current === snapshot) {
+            if (portfolioBootstrapGenerationRef.current !== gen) return;
+            setAssets(assetsData);
+            setHistory(dedupeHistoryByDate(historyData));
+            hydrated = true;
+            break;
+          }
+          snapshot = portfolioMutationEpochRef.current;
+        }
+        if (!cancelled && !hydrated && portfolioBootstrapGenerationRef.current === gen) {
+          setAssets(assetsData);
+          setHistory(dedupeHistoryByDate(historyData));
+        }
+
+        // One cash read after assets/history are stable — avoids interleaving GET /cash with
+        // in-flight PUT /cash during the retry loop (which could reapply stale cash in state).
+        // Re-check `cancelled` after await: Strict Mode can unmount while GET /cash is in flight;
+        // the aborted fetch must not call setCashEur (and .catch must not swallow AbortError).
+        if (!cancelled) {
+          try {
+            const r = await fetch('/api/portfolio/cash', pf);
+            if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
+            const cashData = (r.ok ? await r.json() : { amountEur: 0 }) as { amountEur?: unknown };
+            if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
+            const loadedCash = normalizeCashAmountEur(cashData.amountEur) ?? 0;
+            setCashEur(Number(loadedCash));
+            setCashInput(loadedCash === 0 ? '' : String(loadedCash));
+          } catch (e) {
+            if (isAbortError(e)) return;
+            if (!cancelled && portfolioBootstrapGenerationRef.current === gen) {
+              setCashEur(0);
+              setCashInput('');
+            }
+          }
+        }
+      } catch (e) {
+        if (isAbortError(e)) return;
+        console.error('Portfolio load failed:', e);
+      } finally {
+        if (!cancelled && portfolioBootstrapGenerationRef.current === gen) setLoading(false);
       }
-    });
-    return unsubscribe;
+    })();
+    return () => {
+      cancelled = true;
+      ac.abort();
+      portfolioBootstrapGenerationRef.current += 1;
+    };
   }, []);
 
   // Real-time market data: Integrated Yahoo Finance Backend
@@ -187,93 +500,15 @@ export default function App() {
     };
   }, [assets]);
 
-  // Hybrid State Management: Cloud Sync or Local Storage
-  useEffect(() => {
-    if (isLocalMode) {
-      const saved = localStorage.getItem('alpha_os_assets');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved) as Asset[];
-          const hydrated = parsed.map(a => ({
-            ...a,
-            id: a.id || `local-${Math.random().toString(36).substr(2, 9)}`
-          }));
-          setAssets(hydrated);
-        } catch (e) {
-          console.error("Local data corrupted. Purging cache.");
-          localStorage.removeItem('alpha_os_assets');
-        }
-      }
-
-      const savedHistory = localStorage.getItem('alpha_os_history');
-      if (savedHistory) {
-        try {
-          setHistory(JSON.parse(savedHistory));
-        } catch (e) {
-          localStorage.removeItem('alpha_os_history');
-        }
-      }
-    }
-  }, [isLocalMode]);
-
-  useEffect(() => {
-    if (isLocalMode) {
-      localStorage.setItem('alpha_os_assets', JSON.stringify(assets));
-    }
-  }, [assets, isLocalMode]);
-
-  useEffect(() => {
-    if (!user || isLocalMode) return;
-    
-    // Assets subscription
-    const qAssets = query(collection(db, 'users', user.uid, 'assets'));
-    const unsubAssets = onSnapshot(qAssets, (snapshot) => {
-      const assetsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Asset[];
-      setAssets(assetsData);
-    });
-
-    // History subscription
-    const qHistory = query(collection(db, 'users', user.uid, 'history'));
-    const unsubHistory = onSnapshot(qHistory, (snapshot) => {
-      const historyData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as HistoryPoint[];
-      
-      // Deduplicate by date to ensure "1 value per day" as requested
-      const seen = new Set();
-      const uniqueHistory = historyData
-        .sort((a, b) => a.date.localeCompare(b.date))
-        .filter(p => {
-          if (seen.has(p.date)) return false;
-          seen.add(p.date);
-          return true;
-        });
-
-      setHistory(uniqueHistory);
-    });
-
-    return () => {
-      unsubAssets();
-      unsubHistory();
-    };
-  }, [user, isLocalMode]);
-
   const removeAsset = async (id: string) => {
-    if (isLocalMode) {
-      setAssets(prev => prev.filter(a => a.id !== id));
-      return;
-    }
-    if (!user) return;
     try {
-      const { deleteDoc, doc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'users', user.uid, 'assets', id));
+      const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
+      setAssets(list);
+      portfolioMutationEpochRef.current += 1;
     } catch (err) {
-      console.error("Failed to remove position:", err);
-      handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/assets/${id}`);
+      console.error('Failed to remove position:', err);
     }
   };
 
@@ -290,9 +525,15 @@ export default function App() {
     return acc;
   }, { totalValue: 0, totalCost: 0, totalGain: 0, totalGainPercent: 0, dailyChange: 0, dailyChangePercent: 0 });
 
+  const cashSafe = cashLineEur;
+  stats.totalValue += cashSafe;
+  stats.totalCost += cashSafe;
+
   stats.totalGain = stats.totalValue - stats.totalCost;
   stats.totalGainPercent = stats.totalCost > 0 ? (stats.totalGain / stats.totalCost) * 100 : 0;
-  
+
+  statsTotalValueRef.current = stats.totalValue;
+
   // Real daily change calculation based on history
   const yesterday = history.length > 1 ? history[history.length - 2] : null;
   if (yesterday) {
@@ -303,103 +544,334 @@ export default function App() {
     stats.dailyChangePercent = 0;
   }
 
-  const [isVizSettingsOpen, setIsVizSettingsOpen] = useState(false);
-  const [vizSettings, setVizSettings] = useState(() => {
-    const saved = localStorage.getItem('alpha_os_viz_settings');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Failed to parse viz settings", e);
-      }
+  const allocationSlices = useMemo(() => {
+    const assetRows = assets.map((a) => {
+      const val =
+        a.quantity * (marketPrices[a.symbol] || a.averagePrice) * (exchangeRates[a.currency] || 1);
+      return { key: a.id || a.symbol, name: a.name, value: val };
+    });
+    const c = cashLineEur;
+    const assetSum = assetRows.reduce((s, r) => s + r.value, 0);
+    const t = assetSum + c;
+    if (t <= 0) return [];
+    const rows = assetRows
+      .map((r) => ({ ...r, percent: (r.value / t) * 100 }))
+      .sort((a, b) => b.value - a.value);
+    if (c > 0) {
+      rows.push({ key: 'cash', name: 'Cash', value: c, percent: (c / t) * 100 });
+      rows.sort((a, b) => b.value - a.value);
     }
-    return {
-      outerRadius: 85,
-      labelRadius: 25,
-      minPercent: 0.8,
-      fontSize: 10,
-      innerRadius: 45,
-      labelStagger: 18,
-      chartPadding: 40
+    return rows;
+  }, [assets, marketPrices, exchangeRates, cashLineEur]);
+
+  const PIE_COLORS = ['#002159', '#003a94', '#0055d4', '#1a75ff', '#66a3ff', '#aaccff', '#e0e9ff'];
+  const PIE_COLOR_CASH = '#16a34a';
+  const slicePieColor = (key: string, index: number) =>
+    key === 'cash' ? PIE_COLOR_CASH : PIE_COLORS[index % 7];
+
+  const allocationPieWrapRef = useRef<HTMLDivElement>(null);
+  const [allocationPieBox, setAllocationPieBox] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const el = allocationPieWrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      let width = Math.round(rect.width) || el.clientWidth || 0;
+      let height = Math.round(rect.height) || el.clientHeight || 0;
+      if (width < 32) width = 320;
+      if (height < 32) height = 300;
+      setAllocationPieBox((prev) =>
+        prev.width === width && prev.height === height ? prev : { width, height }
+      );
     };
-  });
 
-  // Persist viz settings
+    measure();
+    const raf = requestAnimationFrame(measure);
+
+    const ro = new ResizeObserver(() => measure());
+    try {
+      ro.observe(el, { box: 'border-box' });
+    } catch {
+      ro.observe(el);
+    }
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, []);
+
+  const [allocChrome, setAllocChrome] = useState<AllocationChromePrefs>(() => loadAllocationChromePrefs());
+
   useEffect(() => {
-    localStorage.setItem('alpha_os_viz_settings', JSON.stringify(vizSettings));
-  }, [vizSettings]);
+    saveAllocationChromePrefs(allocChrome);
+  }, [allocChrome]);
 
-  // Persistence logic for history
+  const allocChartMargins = useMemo(
+    () =>
+      allocationPieMarginsWithNudge(
+        ALLOCATION_PIE_CHART_MARGIN,
+        allocChrome.pieNudgeX,
+        allocChrome.pieNudgeY
+      ),
+    [allocChrome.pieNudgeX, allocChrome.pieNudgeY]
+  );
+
+  const allocationPieCalloutMap = useMemo(
+    () =>
+      buildAllocationPieCalloutMap(
+        allocationPieBox.width,
+        allocationPieBox.height,
+        allocationSlices,
+        allocChartMargins
+      ),
+    [allocationPieBox.width, allocationPieBox.height, allocationSlices, allocChartMargins]
+  );
+
+  const [allocLabelOffsets, setAllocLabelOffsets] = useState<
+    Record<string, AllocationLabelOffset>
+  >(() => loadAllocationLabelOffsets());
+  const allocLabelOffsetsRef = useRef(allocLabelOffsets);
+  allocLabelOffsetsRef.current = allocLabelOffsets;
+
+  const [allocLabelDragging, setAllocLabelDragging] = useState<string | null>(null);
+  const [allocPieMenuOpen, setAllocPieMenuOpen] = useState(false);
+  const allocPieMenuRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const clearHistory = async () => {
-      // One-time sweep to clear old history and restart with dummy data as requested
-      if (localStorage.getItem('alpha_os_fresh_sweep_v4')) return;
-      
-      const yesterdayDate = new Date();
-      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-      const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
-      const dummyPoint = { date: yesterdayStr, value: 98000 };
+    if (!allocPieMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const el = allocPieMenuRef.current;
+      if (el && !el.contains(e.target as Node)) setAllocPieMenuOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [allocPieMenuOpen]);
 
-      if (isLocalMode) {
-        localStorage.setItem('alpha_os_history', JSON.stringify([dummyPoint]));
-        setHistory([dummyPoint]);
-      } else if (user) {
-        try {
-          const { getDocs, deleteDoc, doc, collection: fsColl, addDoc } = await import('firebase/firestore');
-          const snap = await getDocs(fsColl(db, 'users', user.uid, 'history'));
-          const deletes = snap.docs.map(d => deleteDoc(doc(db, 'users', user.uid, 'history', d.id)));
-          await Promise.all(deletes);
-          await addDoc(fsColl(db, 'users', user.uid, 'history'), dummyPoint);
-          setHistory([dummyPoint]);
-        } catch (e) { 
-          console.error("Failed to clear Firebase history", e); 
+  useEffect(() => {
+    saveAllocationLabelOffsets(allocLabelOffsets);
+  }, [allocLabelOffsets]);
+
+  useEffect(() => {
+    if (allocationSlices.length === 0) return;
+    const keep = new Set(allocationSlices.map((s) => s.key));
+    setAllocLabelOffsets((prev) => {
+      const next: Record<string, AllocationLabelOffset> = { ...prev };
+      let changed = false;
+      for (const k of Object.keys(next)) {
+        if (!keep.has(k)) {
+          delete next[k];
+          changed = true;
         }
       }
-      localStorage.setItem('alpha_os_fresh_sweep_v4', 'true');
-    };
-    
-    if (user || isLocalMode) {
-      clearHistory();
+      return changed ? next : prev;
+    });
+  }, [allocationSlices]);
+
+  const onAllocCalloutPointerDown = useCallback((sliceKey: string, e: React.PointerEvent<SVGGElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget;
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
     }
-  }, [user, isLocalMode]);
+    const cur = allocLabelOffsetsRef.current[sliceKey] ?? { dx: 0, dy: 0 };
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    setAllocLabelDragging(sliceKey);
+
+    const move = (ev: PointerEvent) => {
+      setAllocLabelOffsets((prev) => ({
+        ...prev,
+        [sliceKey]: {
+          dx: cur.dx + ev.clientX - x0,
+          dy: cur.dy + ev.clientY - y0,
+        },
+      }));
+    };
+    const up = () => {
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setAllocLabelDragging(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }, []);
+
+  const allocationPieLabelRenderer = useCallback(
+    (p: Parameters<typeof renderAllocationPieCalloutFromLayout>[0]) =>
+      renderAllocationPieCalloutFromLayout(p, allocationPieCalloutMap, allocLabelOffsets, {
+        draggingKey: allocLabelDragging,
+        onPointerDown: onAllocCalloutPointerDown,
+        labelFontPx: allocChrome.labelFontPx,
+      }),
+    [
+      allocationPieCalloutMap,
+      allocLabelOffsets,
+      allocLabelDragging,
+      onAllocCalloutPointerDown,
+      allocChrome.labelFontPx,
+    ]
+  );
+
+  const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
   useEffect(() => {
     if (stats.totalValue <= 0 || loading) return;
-    
+
     const today = new Date().toISOString().split('T')[0];
-    const hasToday = history.some(p => p.date === today);
-    
-    // Take exactly one value per day (the first one recorded in the session)
+    const hasToday = history.some((p) => p.date === today);
+
     if (!hasToday && recordAttemptedRef.current !== today) {
       const recordPoint = async () => {
-        // Double check hasToday inside the async call in case history updated
-        if (history.some(p => p.date === today)) return;
-        
+        if (history.some((p) => p.date === today)) return;
+
         recordAttemptedRef.current = today;
-        const point = { date: today, value: stats.totalValue };
-        if (isLocalMode) {
-          const next = [...history, point];
-          setHistory(next);
-          localStorage.setItem('alpha_os_history', JSON.stringify(next));
-        } else if (user) {
-          try {
-            const { collection: fsColl, addDoc } = await import('firebase/firestore');
-            await addDoc(fsColl(db, 'users', user.uid, 'history'), point);
-          } catch (e) {
-            console.error("History sync failed", e);
-          }
+        try {
+          const res = await fetch('/api/portfolio/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: today, value: statsTotalValueRef.current }),
+          });
+          if (!res.ok) throw new Error('History write failed');
+          const list: HistoryPoint[] = await fetch('/api/portfolio/history').then((r) => r.json());
+          setHistory(dedupeHistoryByDate(list));
+          portfolioMutationEpochRef.current += 1;
+        } catch (e) {
+          console.error('History sync failed', e);
         }
       };
       const timeout = setTimeout(recordPoint, 5000);
       return () => clearTimeout(timeout);
     }
-  }, [stats.totalValue, history, isLocalMode, user, loading]);
+  }, [stats.totalValue, history, loading]);
+
+  const exportPortfolioBackup = async () => {
+    try {
+      const res = await fetch('/api/portfolio/export');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bors-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Export failed', e);
+    }
+  };
+
+  const importPortfolioBackup = async (file: File) => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as { assets?: Asset[]; history?: HistoryPoint[]; cashEur?: number };
+      const payload: {
+        assets: Asset[];
+        history: HistoryPoint[];
+        cashEur?: number;
+      } = {
+        assets: data.assets ?? [],
+        history: data.history ?? [],
+      };
+      if (data.cashEur !== undefined && data.cashEur !== null && Number.isFinite(data.cashEur)) {
+        payload.cashEur = Math.max(0, data.cashEur);
+      }
+      await fetch('/api/portfolio/import?mode=merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const pf = { cache: 'no-store' as RequestCache };
+      const [a, h, cashRes] = await Promise.all([
+        fetch('/api/portfolio/assets', pf).then((r) => r.json()),
+        fetch('/api/portfolio/history', pf).then((r) => r.json()),
+        fetch('/api/portfolio/cash', pf).then((r) => (r.ok ? r.json() : { amountEur: 0 })),
+      ]);
+      setAssets(a);
+      setHistory(dedupeHistoryByDate(h));
+      const cv = normalizeCashAmountEur(cashRes.amountEur) ?? 0;
+      setCashEur(Number(cv));
+      setCashInput(cv === 0 ? '' : String(cv));
+      portfolioMutationEpochRef.current += 1;
+    } catch (e) {
+      console.error('Import failed', e);
+    } finally {
+      if (importBackupRef.current) importBackupRef.current.value = '';
+    }
+  };
+
+  const saveCash = async () => {
+    const parsed = parseFloat(String(cashInput).replace(',', '.'));
+    const amount = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    const prevEur = cashEur;
+    const prevInput = cashInput;
+    setCashEur(Number(amount));
+    setCashInput(amount === 0 ? '' : String(amount));
+    setCashSaving(true);
+    try {
+      const res = await fetch('/api/portfolio/cash', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountEur: amount }),
+        cache: 'no-store',
+      });
+      if (!res.ok) throw new Error('Save failed');
+      const j = (await res.json()) as { amountEur?: unknown };
+      const v = normalizeCashAmountEur(j.amountEur) ?? amount;
+      setCashEur(Number(v));
+      setCashInput(v === 0 ? '' : String(v));
+      portfolioMutationEpochRef.current += 1;
+    } catch (e) {
+      console.error('Cash save failed', e);
+      setCashEur(prevEur);
+      setCashInput(prevInput);
+    } finally {
+      setCashSaving(false);
+    }
+  };
+
+  const persistAsset = async (asset: Asset, isEdit: boolean) => {
+    if (isEdit && asset.id) {
+      const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(asset.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(asset),
+      });
+      if (!res.ok) throw new Error('Update failed');
+    } else {
+      const res = await fetch('/api/portfolio/assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(asset),
+      });
+      if (!res.ok) throw new Error('Create failed');
+    }
+    const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
+    setAssets(list);
+    portfolioMutationEpochRef.current += 1;
+  };
+
+  const reloadHistory = async () => {
+    const list: HistoryPoint[] = await fetch('/api/portfolio/history').then((r) => r.json());
+    setHistory(dedupeHistoryByDate(list));
+    portfolioMutationEpochRef.current += 1;
+  };
 
   if (loading) return <LoadingScreen />;
 
   return (
     <div className="flex flex-col h-screen bg-bg overflow-hidden font-sans selection:bg-accent/30">
-      <Header isLocalMode={isLocalMode} apiStatus={apiStatus} />
+      <Header apiStatus={apiStatus} feedDetail={feedDetail} />
       
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-20 min-w-[80px] border-r border-border bg-card flex flex-col items-center py-8 gap-8 z-10 shadow-2xl">
@@ -427,6 +899,12 @@ export default function App() {
             icon={<Activity className="w-5 h-5" />} 
             label="Recap" 
           />
+          <NavButton 
+            active={activeView === View.OPTIONS} 
+            onClick={() => setActiveView(View.OPTIONS)} 
+            icon={<Settings className="w-5 h-5" />} 
+            label="Options" 
+          />
         </aside>
 
         <main className="flex-1 overflow-y-auto technical-grid p-6">
@@ -437,11 +915,91 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4"
+                className="dashboard-view max-w-[1400px] mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4"
               >
                 {/* Main Portfolio Performance */}
                 <div className="lg:col-span-2 lg:row-span-2 glass-panel p-8 flex flex-col group h-full">
-                  <h3 className="card-title">Portfolio Capital</h3>
+                  <div className="flex items-center justify-between mb-2 gap-2">
+                    <h3 className="card-title mb-0">Portfolio Capital</h3>
+                    <button
+                      type="button"
+                      title="Portfolio history"
+                      onClick={() => setIsHistoryPanelOpen(!isHistoryPanelOpen)}
+                      className={`shrink-0 p-1.5 rounded-lg transition-all ${isHistoryPanelOpen ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'bg-white/5 text-text-s hover:bg-white/10'}`}
+                    >
+                      <History className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <AnimatePresence>
+                    {isHistoryPanelOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mb-4 overflow-hidden"
+                      >
+                        <div className="p-4 bg-white/5 rounded-xl border border-border/50 space-y-3">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <p className="text-[9px] text-text-s font-bold uppercase tracking-widest leading-relaxed">
+                              Daily total value (EUR) in SQLite. Edit a row or add a past date you missed.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setHistoryModal({ type: 'add' })}
+                              className="shrink-0 px-3 py-2 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 flex items-center justify-center gap-1.5 self-start"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Add entry
+                            </button>
+                          </div>
+                          <div className="overflow-x-auto overflow-y-auto max-h-[min(40vh,280px)] rounded-lg border border-border/40">
+                            <table className="w-full text-left text-xs">
+                              <thead className="sticky top-0 z-[1] bg-[#121214]/95 backdrop-blur-sm">
+                                <tr className="text-[8px] font-bold text-text-s uppercase tracking-widest border-b border-border/60">
+                                  <th className="px-3 py-2 text-left">Date</th>
+                                  <th className="px-3 py-2 text-left">Total (EUR)</th>
+                                  <th className="px-3 py-2 text-right w-16">Edit</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {[...history]
+                                  .sort((a, b) => b.date.localeCompare(a.date))
+                                  .map((row) => (
+                                    <tr key={row.date} className="border-b border-border/30 hover:bg-white/[0.03]">
+                                      <td className="px-3 py-2 font-mono text-text-p tabular-nums">{row.date}</td>
+                                      <td className="px-3 py-2 font-mono font-bold text-text-p tabular-nums">
+                                        {formatCurrency(row.value, 'EUR')}
+                                      </td>
+                                      <td className="px-3 py-2 text-right">
+                                        <button
+                                          type="button"
+                                          onClick={() => setHistoryModal({ type: 'edit', point: row })}
+                                          className="p-1.5 rounded-md text-text-s hover:text-accent hover:bg-white/5 transition-colors inline-flex"
+                                          title="Edit"
+                                        >
+                                          <Pencil className="w-3.5 h-3.5" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                {history.length === 0 && (
+                                  <tr>
+                                    <td
+                                      colSpan={3}
+                                      className="px-3 py-8 text-center text-text-s text-[10px] uppercase tracking-widest"
+                                    >
+                                      No rows yet. They record automatically with a positive total, or use Add entry.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
                   <div className="stat-value text-6xl mb-2 flex items-baseline gap-2 tabular-nums">
                     {formatCurrency(stats.totalValue, 'EUR')}
                   </div>
@@ -485,7 +1043,7 @@ export default function App() {
                           <Tooltip 
                             formatter={(value: number) => [formatCurrency(value, 'EUR'), '']}
                             separator=""
-                            labelStyle={{ color: 'var(--color-text-s)', fontSize: '10px', marginBottom: '4px', textTransform: 'uppercase', fontWeight: 'bold', opacity: 0.5 }}
+                            labelStyle={{ color: 'var(--color-text-s)', fontSize: '11px', marginBottom: '4px', textTransform: 'uppercase', fontWeight: 'bold', opacity: 0.5 }}
                             contentStyle={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: '12px', padding: '12px' }}
                             itemStyle={{ color: 'var(--color-accent)', fontWeight: '900', fontSize: '14px' }}
                             cursor={{ stroke: 'var(--color-accent)', strokeWidth: 1, strokeDasharray: '4 4' }}
@@ -497,182 +1055,165 @@ export default function App() {
                 </div>
 
                 <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4">
-                  <div className="glass-panel p-6 flex flex-col flex-1 aspect-square lg:aspect-auto min-h-[720px] relative">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="card-title">Allocation</h3>
-                      <button 
-                        onClick={() => setIsVizSettingsOpen(!isVizSettingsOpen)}
-                        className={`p-1.5 rounded-lg transition-all ${isVizSettingsOpen ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'bg-white/5 text-text-s hover:bg-white/10'}`}
-                      >
-                        <Settings2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <AnimatePresence>
-                      {isVizSettingsOpen && (
-                        <motion.div 
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="mb-4 overflow-hidden"
+                  <div className="glass-panel !overflow-visible p-6 flex flex-col flex-1 min-h-[480px] lg:min-h-[520px]">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="card-title mb-0">Allocation</h3>
+                      <div className="relative shrink-0" ref={allocPieMenuRef}>
+                        <button
+                          type="button"
+                          title="Chart options"
+                          aria-expanded={allocPieMenuOpen}
+                          aria-haspopup="true"
+                          onClick={() => setAllocPieMenuOpen((o) => !o)}
+                          className={`p-2 rounded-lg border transition-colors ${
+                            allocPieMenuOpen
+                              ? 'bg-accent text-white border-accent shadow-lg shadow-accent/20'
+                              : 'bg-white/5 text-text-s border-border/60 hover:bg-white/10'
+                          }`}
                         >
-                          <div className="p-4 bg-white/5 rounded-xl border border-border/50 grid grid-cols-2 gap-4">
-                            <div className="space-y-1">
-                              <label className="text-[8px] font-bold text-text-s uppercase tracking-widest block">Radius: {vizSettings.outerRadius}%</label>
-                              <input 
-                                type="range" min="30" max="100" step="1"
-                                value={vizSettings.outerRadius}
-                                onChange={e => setVizSettings({...vizSettings, outerRadius: parseInt(e.target.value)})}
-                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent"
-                              />
+                          <MoreVertical className="w-4 h-4" aria-hidden />
+                        </button>
+                        {allocPieMenuOpen && (
+                          <div
+                            className="absolute right-0 top-full mt-2 w-[min(calc(100vw-3rem),18rem)] rounded-xl border border-border bg-card shadow-2xl z-[80] p-3 space-y-3"
+                            style={{ backgroundColor: 'var(--color-card)' }}
+                            role="menu"
+                          >
+                            <div className="space-y-3 text-[10px] text-text-s">
+                              <label className="flex flex-col gap-1.5 min-w-0">
+                                <span className="uppercase tracking-widest font-bold opacity-50">
+                                  Pie horizontal
+                                </span>
+                                <input
+                                  type="range"
+                                  min={-80}
+                                  max={80}
+                                  step={2}
+                                  value={allocChrome.pieNudgeX}
+                                  onChange={(e) =>
+                                    setAllocChrome((c) => ({ ...c, pieNudgeX: Number(e.target.value) }))
+                                  }
+                                  className="w-full h-1.5"
+                                  style={{ accentColor: 'var(--color-accent)' }}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1.5 min-w-0">
+                                <span className="uppercase tracking-widest font-bold opacity-50">
+                                  Pie vertical
+                                </span>
+                                <input
+                                  type="range"
+                                  min={-80}
+                                  max={80}
+                                  step={2}
+                                  value={allocChrome.pieNudgeY}
+                                  onChange={(e) =>
+                                    setAllocChrome((c) => ({ ...c, pieNudgeY: Number(e.target.value) }))
+                                  }
+                                  className="w-full h-1.5"
+                                  style={{ accentColor: 'var(--color-accent)' }}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1.5 min-w-0">
+                                <span className="uppercase tracking-widest font-bold opacity-50">
+                                  Label size
+                                </span>
+                                <input
+                                  type="range"
+                                  min={8}
+                                  max={18}
+                                  step={1}
+                                  value={allocChrome.labelFontPx}
+                                  onChange={(e) =>
+                                    setAllocChrome((c) => ({ ...c, labelFontPx: Number(e.target.value) }))
+                                  }
+                                  className="w-full h-1.5"
+                                  style={{ accentColor: 'var(--color-accent)' }}
+                                />
+                              </label>
                             </div>
-                            <div className="space-y-1">
-                              <label className="text-[8px] font-bold text-text-s uppercase tracking-widest block">Size (Padding): {vizSettings.chartPadding}px</label>
-                              <input 
-                                type="range" min="0" max="150" step="5"
-                                value={vizSettings.chartPadding}
-                                onChange={e => setVizSettings({...vizSettings, chartPadding: parseInt(e.target.value)})}
-                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[8px] font-bold text-text-s uppercase tracking-widest block">Label Gap: {vizSettings.labelRadius}px</label>
-                              <input 
-                                type="range" min="0" max="100" step="1"
-                                value={vizSettings.labelRadius}
-                                onChange={e => setVizSettings({...vizSettings, labelRadius: parseInt(e.target.value)})}
-                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[8px] font-bold text-text-s uppercase tracking-widest block">Stagger: {vizSettings.labelStagger}px</label>
-                              <input 
-                                type="range" min="0" max="40" step="1"
-                                value={vizSettings.labelStagger}
-                                onChange={e => setVizSettings({...vizSettings, labelStagger: parseInt(e.target.value)})}
-                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[8px] font-bold text-text-s uppercase tracking-widest block">Min %: {vizSettings.minPercent}%</label>
-                              <input 
-                                type="range" min="0.1" max="5" step="0.1"
-                                value={vizSettings.minPercent}
-                                onChange={e => setVizSettings({...vizSettings, minPercent: parseFloat(e.target.value)})}
-                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[8px] font-bold text-text-s uppercase tracking-widest block">Text: {vizSettings.fontSize}px</label>
-                              <input 
-                                type="range" min="6" max="14" step="1"
-                                value={vizSettings.fontSize}
-                                onChange={e => setVizSettings({...vizSettings, fontSize: parseInt(e.target.value)})}
-                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent"
-                              />
-                            </div>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setAllocLabelOffsets({});
+                                saveAllocationLabelOffsets({});
+                                const defaults: AllocationChromePrefs = {
+                                  pieNudgeX: 0,
+                                  pieNudgeY: 0,
+                                  labelFontPx: 11,
+                                };
+                                setAllocChrome(defaults);
+                                saveAllocationChromePrefs(defaults);
+                                setAllocPieMenuOpen(false);
+                              }}
+                              className="w-full px-2 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest text-text-s hover:text-accent hover:bg-white/5 border border-border/60 transition-colors"
+                            >
+                              Reset layout
+                            </button>
                           </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    <div className="flex-1 mt-4">
+                        )}
+                      </div>
+                    </div>
+                    <div ref={allocationPieWrapRef} className="flex-1 w-full min-h-[300px] min-w-0">
                       <ResponsiveContainer width="100%" height="100%">
-                        <PieChart margin={{ 
-                          top: vizSettings.chartPadding, 
-                          right: vizSettings.chartPadding, 
-                          bottom: vizSettings.chartPadding, 
-                          left: vizSettings.chartPadding 
-                        }}>
+                        <PieChart margin={{ ...allocChartMargins }}>
                           <Pie
-                            data={assets.length > 0 ? assets.map(a => {
-                              const val = (a.quantity * (marketPrices[a.symbol] || a.averagePrice)) * (exchangeRates[a.currency] || 1);
-                              return {
-                                name: a.name,
-                                value: val,
-                                percent: (val / stats.totalValue) * 100
-                              };
-                            }).sort((a, b) => b.value - a.value) : [{ name: 'Empty', value: 1, percent: 0 }]}
+                            key={
+                              allocationSlices.length > 0
+                                ? allocationSlices.map((r) => `${r.key}:${r.value}`).join('|')
+                                : 'empty-allocation'
+                            }
+                            data={
+                              allocationSlices.length > 0
+                                ? allocationSlices
+                                : [{ key: 'empty', name: 'No holdings', value: 1, percent: 0 }]
+                            }
                             cx="50%"
                             cy="50%"
-                            innerRadius={`${vizSettings.innerRadius}%`}
-                            outerRadius={`${vizSettings.outerRadius}%`}
+                            innerRadius={0}
+                            outerRadius="58%"
                             dataKey="value"
+                            nameKey="name"
                             startAngle={90}
                             endAngle={-270}
-                            paddingAngle={1}
-                            stroke="rgba(0,0,0,0.1)"
+                            paddingAngle={0.6}
+                            stroke="rgba(0,0,0,0.14)"
+                            strokeWidth={0.5}
                             isAnimationActive={false}
+                            label={
+                              allocationSlices.length > 0 ? allocationPieLabelRenderer : false
+                            }
                             labelLine={false}
-                            label={({ cx, cy, midAngle, outerRadius, name, percent, index }) => {
-                              const RADIAN = Math.PI / 180;
-                              const sin = Math.sin(-midAngle * RADIAN);
-                              const cos = Math.cos(-midAngle * RADIAN);
-                              
-                              // Stagger vertical position for small slices
-                              const yStagger = (index % 4 - 1.5) * vizSettings.labelStagger;
-                              
-                              const sx = cx + (outerRadius as number) * cos;
-                              const sy = cy + (outerRadius as number) * sin;
-                              const mx = cx + ((outerRadius as number) + vizSettings.labelRadius) * cos;
-                              const my = cy + ((outerRadius as number) + vizSettings.labelRadius) * sin + yStagger;
-                              const ex = mx + (cos >= 0 ? 1 : -1) * 22;
-                              const ey = my;
-                              const textAnchor = cos >= 0 ? 'start' : 'end';
-
-                              if (percent < vizSettings.minPercent) return null;
-
+                          >
+                            {allocationSlices.length > 0 ? (
+                              allocationSlices.map((row, index) => (
+                                <Cell key={row.key} fill={slicePieColor(row.key, index)} strokeWidth={0} />
+                              ))
+                            ) : (
+                              <Cell fill="var(--color-border)" stroke="none" />
+                            )}
+                          </Pie>
+                          <Tooltip
+                            cursor={{ fill: 'rgba(255,255,255,0.06)' }}
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null;
+                              const row = payload[0].payload as {
+                                name: string;
+                                value: number;
+                              };
                               return (
-                                <g>
-                                  <path d={`M${sx},${sy}L${mx},${my}L${ex},${ey}`} stroke="var(--color-text-s)" fill="none" opacity={0.2} />
-                                  <circle cx={sx} cy={sy} r={2} fill="var(--color-text-s)" opacity={0.5} />
-                                  <text 
-                                    x={ex + (cos >= 0 ? 1 : -1) * 12} 
-                                    y={ey - (vizSettings.fontSize / 2 + 1)} 
-                                    fill="var(--color-text-p)"
-                                    textAnchor={textAnchor}
-                                    dominantBaseline="central"
-                                    style={{ fontSize: `${vizSettings.fontSize + 1}px` }}
-                                    className="font-black tracking-tight uppercase"
-                                  >
-                                    {name.length > 20 ? name.substring(0, 18) + '...' : name}
-                                  </text>
-                                  <text
-                                    x={ex + (cos >= 0 ? 1 : -1) * 12}
-                                    y={ey + (vizSettings.fontSize / 2 + 3)}
-                                    fill="var(--color-text-s)"
-                                    textAnchor={textAnchor}
-                                    dominantBaseline="central"
-                                    style={{ fontSize: `${vizSettings.fontSize}px` }}
-                                    className="font-mono opacity-80 font-bold"
-                                  >
-                                    {percent.toFixed(2)}%
-                                  </text>
-                                </g>
+                                <div
+                                  className="rounded-xl border border-border px-3 py-2.5 shadow-xl max-w-[min(100vw-24px,280px)]"
+                                  style={{ backgroundColor: 'var(--color-card)' }}
+                                >
+                                  <div className="text-sm font-semibold text-text-p leading-snug">{row.name}</div>
+                                  <div className="text-xs font-mono font-bold text-accent mt-1.5 tabular-nums">
+                                    {formatCurrency(row.value, 'EUR')}
+                                  </div>
+                                </div>
                               );
                             }}
-                          >
-                            {assets.length > 0 ? assets.map((_, index) => (
-                              <Cell 
-                                key={`cell-${index}`} 
-                                fill={[
-                                  '#002159', // Darkest (Largest holding)
-                                  '#003a94', 
-                                  '#0055d4', 
-                                  '#1a75ff', 
-                                  '#66a3ff', 
-                                  '#aaccff',
-                                  '#e0e9ff'  // Lightest (Smallest holding)
-                                ][index % 7]} 
-                                strokeWidth={0}
-                              />
-                            )) : <Cell fill="var(--color-border)" stroke="none" />}
-                          </Pie>
-                          <Tooltip 
-                            formatter={(value: number) => [formatCurrency(value, 'EUR'), '']}
-                            separator=""
-                            contentStyle={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: '12px' }}
-                            itemStyle={{ color: 'var(--color-text-p)' }}
                           />
                         </PieChart>
                       </ResponsiveContainer>
@@ -685,7 +1226,7 @@ export default function App() {
                 <div className="lg:col-span-4 glass-panel p-8 bg-[#0e0e10]/80">
                   <div className="flex items-center justify-between mb-2">
                     <div>
-                      <h3 className="text-xl font-black tracking-tight text-white uppercase">Holdings</h3>
+                      <h3 className="card-title mb-2">Holdings</h3>
                     </div>
                     <button 
                       onClick={() => {
@@ -788,33 +1329,41 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+
+                  <div className="mt-8 pt-8 border-t border-border/50">
+                    <h3 className="card-title mb-3">Cash (EUR)</h3>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="flex-1 min-w-[140px] max-w-[240px] bg-bg/50 border border-border rounded-xl px-4 py-2.5 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
+                        placeholder="0"
+                        value={cashInput}
+                        onChange={(e) => setCashInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        disabled={cashSaving}
+                        onClick={() => void saveCash()}
+                        className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-border/60 text-[10px] font-black uppercase tracking-widest text-text-p disabled:opacity-50"
+                      >
+                        {cashSaving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </motion.div>
             )}
 
             {activeView === View.DIVIDENDS && (
-              <motion.div 
+              <motion.div
                 key="dividends"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto p-8 glass-panel h-full"
+                className="max-w-[1400px] mx-auto w-full dashboard-view h-full overflow-y-auto"
               >
-                <div className="mb-8">
-                  <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dividends Engine</h2>
-                  <p className="text-[10px] text-text-s font-bold uppercase tracking-[0.2em]">Projected Yield & Payout Schedules</p>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-[calc(100%-100px)]">
-                  <div className="bg-bg/40 rounded-2xl border border-border/50 p-12 flex flex-col items-center justify-center text-center">
-                    <Coins className="w-12 h-12 text-accent mb-4 opacity-30" />
-                    <p className="text-text-s text-sm mb-2 uppercase font-bold tracking-widest">Expected Annual Yield</p>
-                    <div className="text-6xl font-black text-text-p tabular-nums">{formatCurrency(stats.totalValue * 0.032, 'EUR')}</div>
-                    <p className="text-[10px] text-accent mt-4 font-mono">ESTIMATED 3.2% AVG YIELD</p>
-                  </div>
-                  <div className="bg-bg/40 rounded-2xl border border-border/50 p-12 flex items-center justify-center">
-                    <p className="text-text-s text-xs font-mono uppercase tracking-widest opacity-40">Monthly payout visualization loading...</p>
-                  </div>
-                </div>
+                <DividendsEngine assets={assets} marketPrices={marketPrices} exchangeRates={exchangeRates} />
               </motion.div>
             )}
 
@@ -833,7 +1382,7 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                   <div className="bg-bg/40 rounded-2xl border border-border/50 p-8">
                     <p className="text-[10px] text-text-s uppercase font-bold mb-1">Independence Goal</p>
-                    <div className="text-3xl font-black text-text-p">€750,000</div>
+                    <div className="text-3xl font-black text-text-p">{formatCurrency(750000, 'EUR')}</div>
                     <div className="h-1 bg-border rounded-full mt-4 overflow-hidden">
                       <div className="h-full bg-accent" style={{ width: `${Math.min((stats.totalValue / 750000) * 100, 100)}%` }}></div>
                     </div>
@@ -924,6 +1473,71 @@ export default function App() {
                 </div>
               </motion.div>
             )}
+
+            {activeView === View.OPTIONS && (
+              <motion.div
+                key="options"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="max-w-2xl mx-auto w-full"
+              >
+                <div className="glass-panel p-8">
+                  <h2 className="text-2xl font-black tracking-tight text-white uppercase mb-2">Options</h2>
+                  <p className="text-[10px] text-text-s font-bold uppercase tracking-widest mb-8 opacity-80">
+                    Data & backup
+                  </p>
+
+                  <div className="space-y-6">
+                    <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
+                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
+                        Portfolio data (SQLite)
+                      </h3>
+                      <p className="text-xs text-text-s leading-relaxed mb-3">
+                        Holdings, history, and related totals are stored locally. Copy the database file while the server is stopped,
+                        or use JSON export/import to move data between machines.
+                      </p>
+                      {dataStoreHint && (
+                        <p className="text-[10px] font-mono text-accent/90 break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
+                          {dataStoreHint}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
+                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-4">
+                        Portfolio backup
+                      </h3>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          onClick={() => exportPortfolioBackup()}
+                          className="flex items-center gap-2 px-4 py-3 rounded-xl bg-accent text-white hover:bg-accent/90 text-[10px] font-black uppercase tracking-widest shadow-lg shadow-accent/20"
+                        >
+                          <Download className="w-4 h-4" /> Export JSON
+                        </button>
+                        <label className="flex items-center gap-2 px-4 py-3 rounded-xl bg-white/10 hover:bg-white/15 text-[10px] font-black uppercase tracking-widest text-text-p cursor-pointer border border-border/50">
+                          <Upload className="w-4 h-4" /> Import JSON
+                          <input
+                            ref={importBackupRef}
+                            type="file"
+                            accept="application/json,.json"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) importPortfolioBackup(f);
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <p className="text-[9px] text-text-s mt-4 uppercase tracking-widest opacity-60 leading-relaxed">
+                        Import merges with existing data unless you replace from a full backup file.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </main>
       </div>
@@ -931,19 +1545,23 @@ export default function App() {
       <AnimatePresence>
         {isModalOpen && (
           <AddAssetModal 
+            key="asset-modal"
             onClose={() => {
               setIsModalOpen(false);
               setEditingAsset(null);
             }} 
-            user={user} 
-            isLocalMode={isLocalMode}
             editAsset={editingAsset || undefined}
-            onLocalSave={(asset) => {
-              if (editingAsset) {
-                setAssets(prev => prev.map(a => a.id === asset.id ? asset : a));
-              } else {
-                setAssets(prev => [...prev, asset]);
-              }
+            onPersist={persistAsset}
+          />
+        )}
+        {historyModal && (
+          <HistoryPointModal
+            key="history-modal"
+            modal={historyModal}
+            onClose={() => setHistoryModal(null)}
+            onSaved={async () => {
+              await reloadHistory();
+              setHistoryModal(null);
             }}
           />
         )}
@@ -1009,27 +1627,33 @@ const CustomTreemapContent = (props: any) => {
 const MarketAISummary = () => {
   const [summary, setSummary] = useState('');
   const [loading, setLoading] = useState(true);
+  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY);
 
   useEffect(() => {
+    if (!hasGeminiKey) {
+      setSummary(
+        'Running in **local-only** mode: portfolio and history live in SQLite on this computer. Quotes use the bundled Yahoo proxy when you are online. To enable this AI panel, add `GEMINI_API_KEY` to `.env.local` and restart the dev server.'
+      );
+      setLoading(false);
+      return;
+    }
+
     const generateSummary = async () => {
       try {
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
         const response = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
           contents: "Why are the global stock markets moving the way they are today? Provide a brief, professional summary of today's key market drivers, economic reports, and geopolitical factors. Focus on S&P 500 and Nordic markets.",
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
         });
         setSummary(response.text || 'Market intelligence feed currently being processed. Re-evaluating drivers...');
       } catch (e) {
-        setSummary('Connection to ALPHA-OS Intelligence failed. Retrying market synthesis...');
+        setSummary('Could not reach the AI service. Check your API key and network, or use the app without AI (local portfolio still works).');
       } finally {
         setLoading(false);
       }
     };
     generateSummary();
-  }, []);
+  }, [hasGeminiKey]);
 
   return (
     <div className="glass-panel p-8 h-full flex flex-col border-accent/20">
@@ -1039,7 +1663,9 @@ const MarketAISummary = () => {
         </div>
         <div>
           <h3 className="card-title leading-none">AI Market Summary</h3>
-          <p className="text-[9px] text-text-s uppercase font-mono tracking-widest mt-1">Grounding: Google Search</p>
+          <p className="text-[9px] text-text-s uppercase font-mono tracking-widest mt-1">
+            {hasGeminiKey ? 'Optional: Google Gemini' : 'Disabled (no API key)'}
+          </p>
         </div>
       </div>
       
@@ -1086,11 +1712,9 @@ const NavButton = ({ active, onClick, icon, label }: {
   </button>
 );
 
-const AddAssetModal = ({ onClose, user, isLocalMode, onLocalSave, editAsset }: { 
+const AddAssetModal = ({ onClose, onPersist, editAsset }: { 
   onClose: () => void, 
-  user: User | null, 
-  isLocalMode: boolean,
-  onLocalSave: (asset: Asset) => void,
+  onPersist: (asset: Asset, isEdit: boolean) => Promise<void>,
   editAsset?: Asset
 }) => {
   const [formData, setFormData] = useState({
@@ -1157,41 +1781,21 @@ const AddAssetModal = ({ onClose, user, isLocalMode, onLocalSave, editAsset }: {
     console.log("Submit triggered for symbol:", formData.symbol);
     
     const newAsset: Asset = {
-      id: editAsset?.id || (isLocalMode ? `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` : ''),
+      ...(editAsset?.id ? { id: editAsset.id } : {}),
       ...formData,
       quantity: Number(formData.quantity),
       averagePrice: Number(formData.averagePrice),
       updatedAt: new Date().toISOString()
     } as Asset;
 
-    if (isLocalMode) {
-      onLocalSave(newAsset);
-      onClose();
-      return;
-    }
-
-    if (!user) {
-      setError("Secure session not established. Retrying gateway...");
-      return;
-    }
-    
     setIsSubmitting(true);
     setError(null);
-    const path = `users/${user.uid}/assets`;
-    
     try {
-      if (editAsset?.id) {
-        const { updateDoc, doc } = await import('firebase/firestore');
-        await updateDoc(doc(db, path, editAsset.id), newAsset as any);
-      } else {
-        await addDoc(collection(db, path), newAsset);
-      }
-      console.log("Node successfully saved in ALPHA-OS.");
+      await onPersist(newAsset, Boolean(editAsset?.id));
       onClose();
     } catch (err) {
       console.error("Submission failed:", err);
-      setError("Cloud synchronization failed. Switch to local-only mode by reloading.");
-      handleFirestoreError(err, OperationType.WRITE, path);
+      setError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setIsSubmitting(false);
     }
@@ -1271,22 +1875,45 @@ const AddAssetModal = ({ onClose, user, isLocalMode, onLocalSave, editAsset }: {
                     key={result.symbol + i}
                     type="button"
                     onClick={() => selectAsset(result)}
-                    className="w-full px-5 py-3 text-left hover:bg-white/5 transition-colors group flex items-start justify-between"
+                    className="w-full px-5 py-3 text-left hover:bg-white/5 transition-colors group flex items-start justify-between gap-3"
                   >
-                    <div>
-                      <div className="text-text-p text-xs font-bold">{result.shortName || result.longName}</div>
-                      <div className="text-[10px] font-mono text-text-s group-hover:text-accent transition-colors">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-text-p text-xs font-bold truncate">{result.shortName || result.longName}</div>
+                      <div className="text-[10px] font-mono text-text-s group-hover:text-accent transition-colors truncate">
                         {result.symbol}
                         {result.price && (
                           <span className="ml-2 font-sans opacity-40 group-hover:opacity-100 transition-opacity">
-                            • {result.price.toFixed(2)} {result.currency}
+                            •{' '}
+                            {result.currency === 'EUR'
+                              ? formatCurrency(result.price, 'EUR')
+                              : `${result.price.toFixed(2)} ${result.currency}`}
                           </span>
                         )}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-[9px] font-bold text-text-s opacity-40 uppercase tracking-widest">{result.exchange}</div>
-                      {result.typeDisp && <div className="text-[8px] text-text-s font-sans opacity-20 uppercase tracking-tighter">{result.typeDisp}</div>}
+                    <div className="text-right shrink-0 flex flex-col items-end gap-0.5">
+                      {typeof result.dividendYieldPercent === 'number' &&
+                      Number.isFinite(result.dividendYieldPercent) &&
+                      result.dividendYieldPercent > 0 ? (
+                        <div
+                          className="text-[10px] font-mono font-bold text-emerald-400/95 tabular-nums tracking-tight"
+                          title="Trailing / indicated dividend yield (Yahoo)"
+                        >
+                          Div {result.dividendYieldPercent.toFixed(2)}%
+                        </div>
+                      ) : (
+                        <div className="text-[9px] font-mono text-text-s/35 uppercase tracking-widest" title="No yield from Yahoo for this listing">
+                          Div —
+                        </div>
+                      )}
+                      <div className="text-[9px] font-bold text-text-s opacity-40 uppercase tracking-widest">
+                        {result.exchange}
+                      </div>
+                      {result.typeDisp && (
+                        <div className="text-[8px] text-text-s font-sans opacity-20 uppercase tracking-tighter max-w-[7rem] truncate">
+                          {result.typeDisp}
+                        </div>
+                      )}
                     </div>
                   </button>
                 ))}

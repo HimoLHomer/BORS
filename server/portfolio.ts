@@ -1,0 +1,285 @@
+import type { Express, Request, Response } from "express";
+import { registerDividendRoutes } from "./dividends";
+import fs from "fs";
+import path from "path";
+import Database from "better-sqlite3";
+import type { Asset, HistoryPoint } from "../src/types";
+
+let db: Database.Database | null = null;
+
+function getDbPath(): string {
+  const override = process.env.BORS_DB_PATH;
+  if (override) return path.resolve(override);
+  const dataDir = path.join(process.cwd(), "data");
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "portfolio.db");
+}
+
+export function getPortfolioDb(): Database.Database {
+  if (db) return db;
+  const file = getDbPath();
+  db = new Database(file);
+  db.pragma("journal_mode = WAL");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS assets (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      value REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS portfolio_cash (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      amount_eur REAL NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO portfolio_cash (id, amount_eur) VALUES (1, 0);
+  `);
+  console.log(`[portfolio] SQLite database: ${file}`);
+  return db;
+}
+
+function rowToAsset(row: { id: string; payload: string }): Asset {
+  const a = JSON.parse(row.payload) as Asset;
+  return { ...a, id: row.id };
+}
+
+function getCashAmountEur(): number {
+  const row = getPortfolioDb()
+    .prepare("SELECT amount_eur FROM portfolio_cash WHERE id = 1")
+    .get() as { amount_eur: unknown } | undefined;
+  const raw = row?.amount_eur;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? parseFloat(raw) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void {
+  getPortfolioDb();
+
+  app.get("/api/portfolio/status", (_req: Request, res: Response) => {
+    const payload: { storage: string; dbPath?: string } = { storage: "sqlite" };
+    if (process.env.NODE_ENV !== "production") {
+      payload.dbPath = getDbPath();
+    }
+    res.json(payload);
+  });
+
+  app.get("/api/portfolio/cash", (_req: Request, res: Response) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json({ amountEur: getCashAmountEur() });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to read cash" });
+    }
+  });
+
+  app.put("/api/portfolio/cash", (req: Request, res: Response) => {
+    try {
+      const raw = (req.body as { amountEur?: unknown }).amountEur;
+      const amount = typeof raw === "number" ? raw : parseFloat(String(raw));
+      if (!Number.isFinite(amount) || amount < 0) {
+        return res.status(400).json({ error: "amountEur must be a non-negative number" });
+      }
+      getPortfolioDb()
+        .prepare("UPDATE portfolio_cash SET amount_eur = ? WHERE id = 1")
+        .run(amount);
+      res.set("Cache-Control", "no-store");
+      res.json({ amountEur: getCashAmountEur() });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to save cash" });
+    }
+  });
+
+  app.get("/api/portfolio/assets", (_req: Request, res: Response) => {
+    try {
+      const rows = getPortfolioDb()
+        .prepare("SELECT id, payload FROM assets ORDER BY json_extract(payload, '$.symbol')")
+        .all() as { id: string; payload: string }[];
+      res.set("Cache-Control", "no-store");
+      res.json(rows.map(rowToAsset));
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to read assets" });
+    }
+  });
+
+  app.post("/api/portfolio/assets", (req: Request, res: Response) => {
+    try {
+      const body = req.body as Asset;
+      const id = body.id || crypto.randomUUID();
+      const { id: _omit, ...rest } = body;
+      const asset: Asset = { ...rest, id, updatedAt: rest.updatedAt || new Date().toISOString() };
+      const payload = JSON.stringify(asset);
+      getPortfolioDb().prepare("INSERT INTO assets (id, payload) VALUES (?, ?)").run(id, payload);
+      res.status(201).json(asset);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to create asset" });
+    }
+  });
+
+  app.patch("/api/portfolio/assets/:id", (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const row = getPortfolioDb()
+        .prepare("SELECT id, payload FROM assets WHERE id = ?")
+        .get(id) as { id: string; payload: string } | undefined;
+      if (!row) return res.status(404).json({ error: "Asset not found" });
+      const prev = JSON.parse(row.payload) as Asset;
+      const patch = req.body as Partial<Asset>;
+      const next: Asset = {
+        ...prev,
+        ...patch,
+        id,
+        updatedAt: new Date().toISOString(),
+      };
+      getPortfolioDb()
+        .prepare("UPDATE assets SET payload = ? WHERE id = ?")
+        .run(JSON.stringify(next), id);
+      res.json(next);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to update asset" });
+    }
+  });
+
+  app.delete("/api/portfolio/assets/:id", (req: Request, res: Response) => {
+    try {
+      const r = getPortfolioDb().prepare("DELETE FROM assets WHERE id = ?").run(req.params.id);
+      if (r.changes === 0) return res.status(404).json({ error: "Asset not found" });
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to delete asset" });
+    }
+  });
+
+  app.get("/api/portfolio/history", (_req: Request, res: Response) => {
+    try {
+      const rows = getPortfolioDb()
+        .prepare("SELECT id, date, value FROM history ORDER BY date ASC")
+        .all() as { id: number; date: string; value: number }[];
+      const points: HistoryPoint[] = rows.map((r) => ({
+        id: String(r.id),
+        date: r.date,
+        value: r.value,
+      }));
+      res.set("Cache-Control", "no-store");
+      res.json(points);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to read history" });
+    }
+  });
+
+  /** Upsert one history point by date (one value per day). */
+  app.post("/api/portfolio/history", (req: Request, res: Response) => {
+    try {
+      const { date, value } = req.body as { date: string; value: number };
+      if (!date || typeof value !== "number") {
+        return res.status(400).json({ error: "date and value required" });
+      }
+      getPortfolioDb()
+        .prepare(
+          `INSERT INTO history (date, value) VALUES (?, ?)
+           ON CONFLICT(date) DO UPDATE SET value = excluded.value`
+        )
+        .run(date, value);
+      const row = getPortfolioDb()
+        .prepare("SELECT id, date, value FROM history WHERE date = ?")
+        .get(date) as { id: number; date: string; value: number };
+      res.json({ id: String(row.id), date: row.date, value: row.value } as HistoryPoint);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to write history" });
+    }
+  });
+
+  app.delete("/api/portfolio/history/:date", (req: Request, res: Response) => {
+    try {
+      const date = decodeURIComponent(req.params.date);
+      const r = getPortfolioDb().prepare("DELETE FROM history WHERE date = ?").run(date);
+      if (r.changes === 0) return res.status(404).json({ error: "Not found" });
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to delete history" });
+    }
+  });
+
+  app.get("/api/portfolio/export", (_req: Request, res: Response) => {
+    try {
+      const assets = (getPortfolioDb().prepare("SELECT id, payload FROM assets").all() as { id: string; payload: string }[]).map(
+        rowToAsset
+      );
+      const history = (getPortfolioDb()
+        .prepare("SELECT id, date, value FROM history ORDER BY date ASC")
+        .all() as { id: number; date: string; value: number }[]).map((r) => ({
+        id: String(r.id),
+        date: r.date,
+        value: r.value,
+      }));
+      res.json({
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        assets,
+        history,
+        cashEur: getCashAmountEur(),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to export" });
+    }
+  });
+
+  app.post("/api/portfolio/import", (req: Request, res: Response) => {
+    try {
+      const mode = (req.query.mode as string) === "replace" ? "replace" : "merge";
+      const body = req.body as { assets?: Asset[]; history?: HistoryPoint[]; cashEur?: unknown };
+      const d = getPortfolioDb();
+      const importAssets = Array.isArray(body.assets) ? body.assets : [];
+      const importHistory = Array.isArray(body.history) ? body.history : [];
+
+      if (mode === "replace") {
+        d.prepare("DELETE FROM history").run();
+        d.prepare("DELETE FROM assets").run();
+        d.prepare("UPDATE portfolio_cash SET amount_eur = 0 WHERE id = 1").run();
+      }
+
+      const insertAsset = d.prepare("INSERT INTO assets (id, payload) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload");
+
+      for (const a of importAssets) {
+        const id = a.id || crypto.randomUUID();
+        const asset: Asset = { ...a, id, updatedAt: a.updatedAt || new Date().toISOString() };
+        insertAsset.run(id, JSON.stringify(asset));
+      }
+
+      const upsertHistory = d.prepare(
+        `INSERT INTO history (date, value) VALUES (?, ?)
+         ON CONFLICT(date) DO UPDATE SET value = excluded.value`
+      );
+      for (const h of importHistory) {
+        if (h.date && typeof h.value === "number") upsertHistory.run(h.date, h.value);
+      }
+
+      if (body.cashEur !== undefined && body.cashEur !== null) {
+        const c = typeof body.cashEur === "number" ? body.cashEur : parseFloat(String(body.cashEur));
+        if (Number.isFinite(c) && c >= 0) {
+          d.prepare("UPDATE portfolio_cash SET amount_eur = ? WHERE id = 1").run(c);
+        }
+      }
+
+      res.json({ ok: true, mode, assetsImported: importAssets.length, historyImported: importHistory.length });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to import" });
+    }
+  });
+
+  if (yahooFinance) {
+    registerDividendRoutes(app, yahooFinance);
+  }
+}

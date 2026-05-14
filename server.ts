@@ -1,29 +1,59 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import YahooFinance from 'yahoo-finance2';
+import { registerPortfolioRoutes } from "./server/portfolio";
+import {
+  dividendYieldPercentFromQuote,
+  dividendYieldPercentFromQuoteSummary,
+} from "./server/dividends";
 const yahooFinance = new YahooFinance();
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Add middleware to parse JSON
   app.use(express.json());
 
-  // Health check for Yahoo Finance connectivity
-  app.get("/api/health/yahoo", async (req, res) => {
-    try {
-      const btc: any = await yahooFinance.quote('BTC-USD');
-      if (btc && btc.regularMarketPrice) {
-        res.json({ status: "connected", symbol: "BTC-USD", price: btc.regularMarketPrice });
-      } else {
-        res.json({ status: "degraded", message: "Unexpected response format" });
-      }
-    } catch (error) {
-      console.error("Yahoo Finance health check failed:", error);
-      res.status(500).json({ status: "disconnected", error: error instanceof Error ? error.message : String(error) });
+  registerPortfolioRoutes(app, yahooFinance);
+
+  function pickQuotePrice(q: unknown): number | null {
+    if (!q || typeof q !== "object") return null;
+    const o = q as Record<string, unknown>;
+    const candidates = [
+      o.regularMarketPrice,
+      o.postMarketPrice,
+      o.preMarketPrice,
+      o.bid,
+      o.ask,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
     }
+    return null;
+  }
+
+  // Health check for Yahoo Finance connectivity (used by dashboard header).
+  app.get("/api/health/yahoo", async (req, res) => {
+    const probes = ["BTC-USD", "AAPL", "MSFT", "EURUSD=X"];
+    let lastErr = "Unknown error";
+    for (const symbol of probes) {
+      try {
+        const q: unknown = await yahooFinance.quote(symbol);
+        const price = pickQuotePrice(q);
+        if (price != null) {
+          res.json({ status: "connected", symbol, price });
+          return;
+        }
+        lastErr = `Yahoo returned no usable price for ${symbol}`;
+      } catch (error) {
+        lastErr = error instanceof Error ? error.message : String(error);
+        console.error(`Yahoo Finance health probe failed (${symbol}):`, error);
+      }
+    }
+    res.status(503).json({ status: "disconnected", error: lastErr });
   });
 
   // API route for Yahoo Finance quotes
@@ -108,13 +138,45 @@ async function startServer() {
             // Some results like news don't have symbols or prices
             if (!quote.symbol) return quote;
             
-            const detail: any = await yahooFinance.quote(quote.symbol);
+            const [detail, sumSnap] = await Promise.all([
+              yahooFinance.quote(quote.symbol).catch(() => ({})),
+              yahooFinance
+                .quoteSummary(quote.symbol, { modules: ["summaryDetail", "price"] }, { validateResult: false })
+                .catch(() => null),
+            ]);
+            const d: Record<string, unknown> =
+              detail && typeof detail === "object" ? (detail as Record<string, unknown>) : {};
+            const sum = sumSnap as {
+              summaryDetail?: object;
+              price?: {
+                regularMarketPrice?: number;
+                currency?: string;
+                shortName?: string;
+                longName?: string;
+              };
+            } | null;
+            const p = sum?.price;
+            const fromSummary = sum ? dividendYieldPercentFromQuoteSummary(sum) : null;
+            const fromQuote = dividendYieldPercentFromQuote({
+              trailingAnnualDividendYield: d.trailingAnnualDividendYield as number | undefined,
+              dividendYield: d.dividendYield as number | undefined,
+              trailingAnnualDividendRate: d.trailingAnnualDividendRate as number | undefined,
+              regularMarketPrice: d.regularMarketPrice as number | undefined,
+            });
+            const dividendYieldPercent = fromSummary ?? fromQuote;
+            const priceVal =
+              typeof p?.regularMarketPrice === "number" && Number.isFinite(p.regularMarketPrice)
+                ? p.regularMarketPrice
+                : typeof d.regularMarketPrice === "number" && Number.isFinite(d.regularMarketPrice)
+                  ? d.regularMarketPrice
+                  : undefined;
             return {
               ...quote,
-              shortName: detail.shortName || quote.shortName,
-              longName: detail.longName || quote.longName,
-              price: detail.regularMarketPrice,
-              currency: detail.currency
+              shortName: p?.shortName || (d.shortName as string) || quote.shortName,
+              longName: p?.longName || (d.longName as string) || quote.longName,
+              price: priceVal,
+              currency: p?.currency || (d.currency as string) || quote.currency,
+              dividendYieldPercent,
             };
           } catch (e) {
             return quote; // Fallback to basic info
