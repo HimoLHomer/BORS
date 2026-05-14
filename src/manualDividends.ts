@@ -5,6 +5,11 @@ export type ManualDividendPosition = {
   name: string;
   annualIncomeEur: number;
   notionalValueEur: number | null;
+  /**
+   * When set, yield % and (if units unset) annual/share use this dashboard holding’s
+   * quantity and market value (same math as the main portfolio list).
+   */
+  linkedSymbol: string | null;
   /** Shares / fund units — used to show annual dividend per share (EUR). */
   units: number | null;
   payoutFrequency: DividendPayoutFrequency;
@@ -61,6 +66,9 @@ export function loadManualDividendPositions(): ManualDividendPosition[] {
         const pad = o.payoutAnchorDate ?? o.nextPayoutDate;
         const payoutAnchorDate =
           typeof pad === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(pad.trim()) ? pad.trim() : null;
+        const ls = o.linkedSymbol ?? o.linkedAssetSymbol;
+        const linkedSymbol =
+          typeof ls === 'string' && ls.trim() ? ls.trim() : null;
         if (!name || !Number.isFinite(annual) || annual < 0) return null;
         return {
           id,
@@ -68,6 +76,7 @@ export function loadManualDividendPositions(): ManualDividendPosition[] {
           annualIncomeEur: annual,
           notionalValueEur:
             notional != null && Number.isFinite(notional) && notional > 0 ? notional : null,
+          linkedSymbol,
           units: unitsNorm,
           payoutFrequency,
           payoutAnchorDate,

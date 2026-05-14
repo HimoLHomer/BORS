@@ -58,16 +58,69 @@ function nextFeedPayoutDate(row: DividendRow): string | null {
   return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
 }
 
-function manualYieldPercent(m: ManualDividendPosition): number | null {
-  if (m.notionalValueEur != null && m.notionalValueEur > 0 && Number.isFinite(m.annualIncomeEur)) {
-    return (m.annualIncomeEur / m.notionalValueEur) * 100;
+function assetPositionValueEur(
+  a: Asset,
+  marketPrices: Record<string, number>,
+  exchangeRates: Record<string, number>
+): number {
+  const px = marketPrices[a.symbol] ?? a.averagePrice;
+  const fx = exchangeRates[a.currency] ?? 1;
+  const v = a.quantity * px * fx;
+  return Number.isFinite(v) && v >= 0 ? v : 0;
+}
+
+function assetsMatchingLink(assets: Asset[], linkedSymbol: string | null): Asset[] {
+  if (!linkedSymbol?.trim()) return [];
+  const t = linkedSymbol.trim().toUpperCase();
+  return assets.filter(
+    (a) =>
+      (a.symbol && a.symbol.toUpperCase() === t) ||
+      (a.displaySymbol != null && String(a.displaySymbol).toUpperCase() === t)
+  );
+}
+
+function effectiveManualDenominatorEur(
+  m: ManualDividendPosition,
+  assets: Asset[],
+  marketPrices: Record<string, number>,
+  exchangeRates: Record<string, number>
+): number | null {
+  const linked = assetsMatchingLink(assets, m.linkedSymbol);
+  if (linked.length) {
+    const v = linked.reduce((s, a) => s + assetPositionValueEur(a, marketPrices, exchangeRates), 0);
+    return v > 0 ? v : null;
+  }
+  if (m.notionalValueEur != null && m.notionalValueEur > 0) return m.notionalValueEur;
+  return null;
+}
+
+function effectiveManualUnits(m: ManualDividendPosition, assets: Asset[]): number | null {
+  if (m.units != null && m.units > 0) return m.units;
+  const linked = assetsMatchingLink(assets, m.linkedSymbol);
+  if (linked.length) {
+    const q = linked.reduce((s, a) => s + (Number.isFinite(a.quantity) ? a.quantity : 0), 0);
+    return q > 0 ? q : null;
   }
   return null;
 }
 
-function manualAnnualDividendPerShareEur(m: ManualDividendPosition): number | null {
-  if (m.units != null && m.units > 0 && Number.isFinite(m.annualIncomeEur)) {
-    return m.annualIncomeEur / m.units;
+function manualYieldPercent(
+  m: ManualDividendPosition,
+  assets: Asset[],
+  marketPrices: Record<string, number>,
+  exchangeRates: Record<string, number>
+): number | null {
+  const den = effectiveManualDenominatorEur(m, assets, marketPrices, exchangeRates);
+  if (den != null && den > 0 && Number.isFinite(m.annualIncomeEur)) {
+    return (m.annualIncomeEur / den) * 100;
+  }
+  return null;
+}
+
+function manualAnnualDividendPerShareEur(m: ManualDividendPosition, assets: Asset[]): number | null {
+  const u = effectiveManualUnits(m, assets);
+  if (u != null && u > 0 && Number.isFinite(m.annualIncomeEur)) {
+    return m.annualIncomeEur / u;
   }
   return null;
 }
@@ -99,6 +152,7 @@ export function DividendsEngine({
   const [draftName, setDraftName] = useState('');
   const [draftAnnual, setDraftAnnual] = useState('');
   const [draftNotional, setDraftNotional] = useState('');
+  const [draftLinkedSymbol, setDraftLinkedSymbol] = useState('');
   const [draftUnits, setDraftUnits] = useState('');
   const [draftFrequency, setDraftFrequency] = useState<DividendPayoutFrequency>('quarterly');
   const [draftPayoutDate, setDraftPayoutDate] = useState('');
@@ -211,22 +265,22 @@ export function DividendsEngine({
     () => manualRows.reduce((s, m) => s + (Number.isFinite(m.annualIncomeEur) ? m.annualIncomeEur : 0), 0),
     [manualRows]
   );
-  const manualNotionalSum = useMemo(
+  const manualDenominatorSum = useMemo(
     () =>
-      manualRows.reduce(
-        (s, m) => s + (m.notionalValueEur != null && Number.isFinite(m.notionalValueEur) ? m.notionalValueEur : 0),
-        0
-      ),
-    [manualRows]
+      manualRows.reduce((s, m) => {
+        const d = effectiveManualDenominatorEur(m, assets, marketPrices, exchangeRates);
+        return s + (d != null && Number.isFinite(d) ? d : 0);
+      }, 0),
+    [manualRows, assets, marketPrices, exchangeRates]
   );
 
   const displaySummary = useMemo(() => {
     const totalAnnualEur = Math.round((apiSummaryStats.totalAnnualEur + manualAnnualSum) * 100) / 100;
-    const denom = apiSummaryStats.totalValueEur + manualNotionalSum;
+    const denom = apiSummaryStats.totalValueEur + manualDenominatorSum;
     const avgYieldPercent =
       denom > 0 ? Math.round(((totalAnnualEur / denom) * 100) * 100) / 100 : apiSummaryStats.avgYieldPercent;
     return { totalAnnualEur, avgYieldPercent };
-  }, [apiSummaryStats, manualAnnualSum, manualNotionalSum]);
+  }, [apiSummaryStats, manualAnnualSum, manualDenominatorSum]);
 
   const barData = useMemo((): BarDatum[] => {
     const apiBars: BarDatum[] = dividendPayingRows.map(({ row, index }) => {
@@ -275,6 +329,7 @@ export function DividendsEngine({
     setDraftName('');
     setDraftAnnual('');
     setDraftNotional('');
+    setDraftLinkedSymbol('');
     setDraftUnits('');
     setDraftFrequency('quarterly');
     setDraftPayoutDate('');
@@ -293,6 +348,9 @@ export function DividendsEngine({
     setDraftName(m.name);
     setDraftAnnual(String(m.annualIncomeEur));
     setDraftNotional(m.notionalValueEur != null ? String(m.notionalValueEur) : '');
+    setDraftLinkedSymbol(
+      m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0]?.symbol ?? m.linkedSymbol : ''
+    );
     setDraftUnits(m.units != null ? String(m.units) : '');
     setDraftFrequency(m.payoutFrequency);
     setDraftPayoutDate(m.payoutAnchorDate ?? '');
@@ -313,12 +371,17 @@ export function DividendsEngine({
     const payoutAnchorDate =
       draftPayoutDate.trim() === '' ? null : draftPayoutDate.trim();
     if (payoutAnchorDate && !/^\d{4}-\d{2}-\d{2}$/.test(payoutAnchorDate)) return;
+    const linkTrim = draftLinkedSymbol.trim();
+    const matchedForSave = assetsMatchingLink(assets, linkTrim || null);
+    const linkedSymbol =
+      linkTrim === '' ? null : matchedForSave.length > 0 ? matchedForSave[0].symbol : linkTrim;
     const row: ManualDividendPosition = {
       id: editingManualId ?? crypto.randomUUID(),
       name,
       annualIncomeEur: annual,
       notionalValueEur:
         notional != null && Number.isFinite(notional) && notional > 0 ? notional : null,
+      linkedSymbol,
       units,
       payoutFrequency: draftFrequency,
       payoutAnchorDate,
@@ -337,6 +400,24 @@ export function DividendsEngine({
 
   const hasAnyDividendDisplay = dividendPayingRows.length > 0 || manualRows.length > 0;
   const manualCalendarReady = manualRows.some((m) => m.payoutAnchorDate);
+
+  const draftLinkHint = useMemo(() => {
+    const sym = draftLinkedSymbol.trim();
+    if (!sym) return null;
+    const matched = assetsMatchingLink(assets, sym);
+    if (!matched.length) {
+      return {
+        kind: 'missing' as const,
+        text: 'No dashboard holding uses this symbol — add it on the Dashboard or clear the link.',
+      };
+    }
+    const valueEur = matched.reduce((s, a) => s + assetPositionValueEur(a, marketPrices, exchangeRates), 0);
+    const quantity = matched.reduce((s, a) => s + (Number.isFinite(a.quantity) ? a.quantity : 0), 0);
+    return {
+      kind: 'ok' as const,
+      text: `Yield % uses ~${formatCurrency(valueEur, 'EUR')} position value (${quantity} sh., live price × FX). Clear “Units” to use this quantity for annual/share.`,
+    };
+  }, [draftLinkedSymbol, assets, marketPrices, exchangeRates]);
 
   return (
     <div className="space-y-4">
@@ -561,8 +642,8 @@ export function DividendsEngine({
                     </tr>
                   ))}
                   {manualRows.map((m) => {
-                    const yld = manualYieldPercent(m);
-                    const perShareEur = manualAnnualDividendPerShareEur(m);
+                    const yld = manualYieldPercent(m, assets, marketPrices, exchangeRates);
+                    const perShareEur = manualAnnualDividendPerShareEur(m, assets);
                     return (
                       <tr
                         key={m.id}
@@ -576,6 +657,14 @@ export function DividendsEngine({
                             <span className="shrink-0 text-[8px] font-black uppercase tracking-widest text-green px-1.5 py-0.5 rounded bg-green/10">
                               Manual
                             </span>
+                            {m.linkedSymbol ? (
+                              <span
+                                className="shrink-0 text-[8px] font-black uppercase tracking-widest text-accent px-1.5 py-0.5 rounded bg-accent/10"
+                                title={`Yield & units from portfolio: ${m.linkedSymbol}`}
+                              >
+                                Portfolio
+                              </span>
+                            ) : null}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums text-text-p">
@@ -665,6 +754,44 @@ export function DividendsEngine({
                 placeholder="e.g. Vanguard USD Corporate Bond"
               />
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
+                Dashboard holding (optional)
+              </label>
+              <select
+                value={draftLinkedSymbol}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraftLinkedSymbol(v);
+                  if (v) {
+                    const matched = assetsMatchingLink(assets, v);
+                    const q = matched.reduce((s, a) => s + (Number.isFinite(a.quantity) ? a.quantity : 0), 0);
+                    setDraftUnits(q > 0 ? String(q) : '');
+                  }
+                }}
+                className="w-full mb-2 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm text-text-p focus:outline-none focus:border-accent/50"
+              >
+                <option value="">— None —</option>
+                {assets.map((a) => (
+                  <option key={a.id ?? `${a.symbol}-${a.name}`} value={a.symbol}>
+                    {a.name} ({a.displaySymbol ?? a.symbol}) · qty {a.quantity}
+                  </option>
+                ))}
+              </select>
+              {draftLinkHint ? (
+                <p
+                  className={`text-[10px] font-mono font-bold leading-relaxed mb-5 ${
+                    draftLinkHint.kind === 'missing' ? 'text-red-200/90' : 'text-text-s/75'
+                  }`}
+                >
+                  {draftLinkHint.text}
+                </p>
+              ) : (
+                <p className="text-[10px] font-mono text-text-s/55 mb-5 leading-relaxed">
+                  {assets.length === 0
+                    ? 'Add positions on the Dashboard to link yield % and annual/share to live quantity and value.'
+                    : 'Link the same symbol as on the Dashboard to reuse quantity × price × FX for yield % (and quantity for annual/share when units are left blank).'}
+                </p>
+              )}
+              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
                 Annual dividend income (EUR)
               </label>
               <input
@@ -681,9 +808,12 @@ export function DividendsEngine({
                 value={draftUnits}
                 onChange={(e) => setDraftUnits(e.target.value)}
                 inputMode="decimal"
-                className="w-full mb-5 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
-                placeholder="For annual / share (EUR)"
+                className="w-full mb-2 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
+                placeholder={draftLinkedSymbol.trim() ? 'Leave blank to use linked holding quantity' : 'For annual dividend per share (EUR)'}
               />
+              <p className="text-[9px] font-mono text-text-s/50 mb-5 leading-relaxed">
+                Annual/share = annual income ÷ units. When linked, clearing this field uses the holding quantity.
+              </p>
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
                 Payout frequency
               </label>
@@ -705,16 +835,27 @@ export function DividendsEngine({
                 onChange={(e) => setDraftPayoutDate(e.target.value)}
                 className="w-full mb-5 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
               />
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
-                Notional EUR (optional, yield %)
-              </label>
-              <input
-                value={draftNotional}
-                onChange={(e) => setDraftNotional(e.target.value)}
-                inputMode="decimal"
-                className="w-full mb-6 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
-                placeholder="0"
-              />
+              {!draftLinkedSymbol.trim() ? (
+                <>
+                  <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
+                    Position value for yield % (EUR, optional)
+                  </label>
+                  <input
+                    value={draftNotional}
+                    onChange={(e) => setDraftNotional(e.target.value)}
+                    inputMode="decimal"
+                    className="w-full mb-2 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
+                    placeholder="0"
+                  />
+                  <p className="text-[9px] font-mono text-text-s/50 mb-6 leading-relaxed">
+                    Yield % = annual dividend ÷ this EUR amount. Use when this income is not tied to a Dashboard holding, or pick a holding above instead.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[9px] font-mono text-text-s/55 mb-6 leading-relaxed">
+                  Yield % uses the linked holding’s market value in EUR (same as the Dashboard). Clear the link to type a EUR amount by hand.
+                </p>
+              )}
               <div className="flex flex-wrap justify-end gap-3">
                 <button
                   type="button"
