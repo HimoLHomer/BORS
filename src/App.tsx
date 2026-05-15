@@ -53,6 +53,10 @@ import { AssetNameCell } from './AssetNameCell';
 import { displayTickerForAsset } from './assetLogo';
 import { MarketIntelligence } from './MarketIntelligence';
 import { fetchJson } from './apiFetch';
+import {
+  applyClientSettingsToLocalStorage,
+  collectClientSettingsFromLocalStorage,
+} from './clientSettings';
 
 // --- Types & Enums ---
 
@@ -563,6 +567,28 @@ export default function App() {
           } catch (e) {
             if (!isAbortError(e)) console.warn('UI prefs load failed:', e);
           }
+          try {
+            const csr = await fetch('/api/portfolio/client-settings', pf);
+            if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
+            if (csr.ok) {
+              const snap = (await csr.json()) as Record<string, unknown>;
+              if (Object.keys(snap).length > 0) {
+                applyClientSettingsToLocalStorage(snap);
+              } else {
+                const local = collectClientSettingsFromLocalStorage();
+                if (Object.keys(local).length > 0) {
+                  await fetch('/api/portfolio/client-settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(local),
+                    ...pf,
+                  });
+                }
+              }
+            }
+          } catch (e) {
+            if (!isAbortError(e)) console.warn('Client settings sync failed:', e);
+          }
         }
       } catch (e) {
         if (isAbortError(e)) return;
@@ -582,6 +608,30 @@ export default function App() {
       portfolioBootstrapGenerationRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    const push = () => {
+      const snap = collectClientSettingsFromLocalStorage();
+      if (Object.keys(snap).length === 0) return;
+      void fetch('/api/portfolio/client-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snap),
+        cache: 'no-store',
+      });
+    };
+    const id = window.setInterval(push, 45_000);
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') push();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+      push();
+    };
+  }, [loading]);
 
   // Real-time market data: Integrated Yahoo Finance Backend
   useEffect(() => {
@@ -1007,6 +1057,14 @@ export default function App() {
 
   const exportPortfolioBackup = async () => {
     try {
+      const snap = collectClientSettingsFromLocalStorage();
+      if (Object.keys(snap).length > 0) {
+        await fetch('/api/portfolio/client-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(snap),
+        });
+      }
       const res = await fetch('/api/portfolio/export');
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -1028,12 +1086,14 @@ export default function App() {
         history?: HistoryPoint[];
         cashEur?: number;
         uiPrefs?: unknown;
+        clientSettings?: unknown;
       };
       const payload: {
         assets: Asset[];
         history: HistoryPoint[];
         cashEur?: number;
         uiPrefs?: unknown;
+        clientSettings?: unknown;
       } = {
         assets: data.assets ?? [],
         history: data.history ?? [],
@@ -1043,6 +1103,9 @@ export default function App() {
       }
       if (data.uiPrefs && typeof data.uiPrefs === 'object' && !Array.isArray(data.uiPrefs)) {
         payload.uiPrefs = data.uiPrefs;
+      }
+      if (data.clientSettings && typeof data.clientSettings === 'object' && !Array.isArray(data.clientSettings)) {
+        payload.clientSettings = data.clientSettings;
       }
       await fetch('/api/portfolio/import?mode=merge', {
         method: 'POST',
@@ -1065,6 +1128,12 @@ export default function App() {
       const lo = coerceRemoteLabelOffsets(ui.allocationLabelOffsets);
       if (lo) setAllocLabelOffsets(lo);
       setAllocChrome((c) => mergeAllocationChromeFromRemote(ui.allocationChrome, c));
+      const csRes = await fetch('/api/portfolio/client-settings', pf);
+      if (csRes.ok) {
+        applyClientSettingsToLocalStorage((await csRes.json()) as Record<string, unknown>);
+      } else if (data.clientSettings && typeof data.clientSettings === 'object') {
+        applyClientSettingsToLocalStorage(data.clientSettings as Record<string, unknown>);
+      }
       portfolioMutationEpochRef.current += 1;
     } catch (e) {
       console.error('Import failed', e);

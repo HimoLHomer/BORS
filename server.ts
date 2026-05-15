@@ -5,6 +5,10 @@ import path from "path";
 const projectRoot = process.cwd();
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local"), override: true });
+const userDataDir = process.env.BORS_USER_DATA?.trim();
+if (userDataDir) {
+  dotenv.config({ path: path.join(userDataDir, ".env.local"), override: true });
+}
 import { createServer as createViteServer } from "vite";
 import { registerPortfolioRoutes } from "./server/portfolio";
 import { yahooFinance } from "./server/yahooClient";

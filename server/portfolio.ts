@@ -78,15 +78,52 @@ function writeUiPrefsPayload(next: Record<string, unknown>): void {
     .run(JSON.stringify(next));
 }
 
+/** Dividend/FIRE/logo settings mirrored from browser localStorage. */
+export function readClientSettingsPayload(): Record<string, unknown> {
+  const prefs = readUiPrefsPayload();
+  const raw = prefs.clientSettings;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return raw as Record<string, unknown>;
+}
+
+export function writeClientSettingsPayload(next: Record<string, unknown>): void {
+  const prefs = readUiPrefsPayload();
+  prefs.clientSettings = next;
+  writeUiPrefsPayload(prefs);
+}
+
 export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void {
   getPortfolioDb();
 
   app.get("/api/portfolio/status", (_req: Request, res: Response) => {
     const payload: { storage: string; dbPath?: string } = { storage: "sqlite" };
-    if (process.env.NODE_ENV !== "production") {
-      payload.dbPath = getDbPath();
-    }
+    payload.dbPath = getDbPath();
     res.json(payload);
+  });
+
+  app.get("/api/portfolio/client-settings", (_req: Request, res: Response) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(readClientSettingsPayload());
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to read client settings" });
+    }
+  });
+
+  app.put("/api/portfolio/client-settings", (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return res.status(400).json({ error: "Body must be a JSON object" });
+      }
+      writeClientSettingsPayload(body);
+      res.set("Cache-Control", "no-store");
+      res.json(readClientSettingsPayload());
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to save client settings" });
+    }
   });
 
   app.get("/api/portfolio/cash", (_req: Request, res: Response) => {
@@ -271,13 +308,16 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         date: r.date,
         value: r.value,
       }));
+      const uiPrefs = readUiPrefsPayload();
+      const clientSettings = readClientSettingsPayload();
       res.json({
-        version: 1,
+        version: 2,
         exportedAt: new Date().toISOString(),
         assets,
         history,
         cashEur: getCashAmountEur(),
-        uiPrefs: readUiPrefsPayload(),
+        uiPrefs,
+        clientSettings,
       });
     } catch (e) {
       console.error(e);
@@ -293,6 +333,7 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         history?: HistoryPoint[];
         cashEur?: unknown;
         uiPrefs?: unknown;
+        clientSettings?: unknown;
       };
       const d = getPortfolioDb();
       const importAssets = Array.isArray(body.assets) ? body.assets : [];
@@ -328,7 +369,17 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       }
 
       if (body.uiPrefs && typeof body.uiPrefs === "object" && !Array.isArray(body.uiPrefs)) {
-        writeUiPrefsPayload(body.uiPrefs as Record<string, unknown>);
+        const incoming = body.uiPrefs as Record<string, unknown>;
+        if (body.clientSettings && typeof body.clientSettings === "object" && !Array.isArray(body.clientSettings)) {
+          incoming.clientSettings = body.clientSettings as Record<string, unknown>;
+        }
+        writeUiPrefsPayload(incoming);
+      } else if (
+        body.clientSettings &&
+        typeof body.clientSettings === "object" &&
+        !Array.isArray(body.clientSettings)
+      ) {
+        writeClientSettingsPayload(body.clientSettings as Record<string, unknown>);
       }
 
       res.json({ ok: true, mode, assetsImported: importAssets.length, historyImported: importHistory.length });
