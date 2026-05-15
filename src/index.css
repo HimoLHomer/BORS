@@ -91,3 +91,13 @@
   filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.45));
 }
 
+/* Scrollable regions without visible scrollbar */
+.scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+

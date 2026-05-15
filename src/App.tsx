@@ -44,6 +44,7 @@ import Markdown from 'react-markdown';
 import { formatCurrency, fxToEur, holdingQuoteFxToEur } from './formatCurrency';
 import { formatDateFi, formatShortMonthDayFi, formatTimeFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
+import { FireProjection } from './FireProjection';
 
 // --- Types & Enums ---
 
@@ -1002,7 +1003,7 @@ export default function App() {
             active={activeView === View.DIVIDENDS} 
             onClick={() => setActiveView(View.DIVIDENDS)} 
             icon={<Coins className="w-5 h-5" />} 
-            label="Dividends" 
+            label="Dividend engine" 
           />
           <NavButton 
             active={activeView === View.FIRE} 
@@ -1024,7 +1025,7 @@ export default function App() {
           />
         </aside>
 
-        <main className="flex-1 overflow-y-auto technical-grid p-6">
+        <main className="flex-1 overflow-y-auto scrollbar-hidden technical-grid p-6">
           <AnimatePresence mode="wait">
             {activeView === View.DASHBOARD && (
               <motion.div 
@@ -1034,6 +1035,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="dashboard-view max-w-[1400px] mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4"
               >
+                <div className="col-span-full mb-2">
+                  <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dashboard</h2>
+                </div>
                 {/* Main Portfolio Performance */}
                 <div className="lg:col-span-2 lg:row-span-2 glass-panel p-8 flex flex-col group h-full">
                   <div className="flex items-center justify-between mb-2 gap-2">
@@ -1543,33 +1547,20 @@ export default function App() {
             )}
 
             {activeView === View.FIRE && (
-              <motion.div 
+              <motion.div
                 key="fire"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto p-8 glass-panel h-full"
+                className="max-w-[1400px] mx-auto w-full min-h-full"
               >
-                <div className="mb-8">
-                  <h2 className="text-2xl font-black tracking-tight text-white uppercase">FIRE Projection</h2>
-                  <p className="text-[10px] text-text-s font-bold uppercase tracking-[0.2em]">Financial Independence Exit Strategy</p>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  <div className="bg-bg/40 rounded-2xl border border-border/50 p-8">
-                    <p className="text-[10px] text-text-s uppercase font-bold mb-1">Independence Goal</p>
-                    <div className="text-3xl font-black text-text-p">{formatCurrency(750000, 'EUR')}</div>
-                    <div className="h-1 bg-border rounded-full mt-4 overflow-hidden">
-                      <div className="h-full bg-accent" style={{ width: `${Math.min((stats.totalValue / 750000) * 100, 100)}%` }}></div>
-                    </div>
-                    <p className="text-[9px] text-accent mt-2 font-mono">{(stats.totalValue / 750000 * 100).toFixed(2)}% ACHIEVED</p>
-                  </div>
-                  <div className="md:col-span-2 bg-bg/40 rounded-2xl border border-border/50 p-8 flex items-center justify-center">
-                    <div className="text-center">
-                      <Flame className="w-12 h-12 text-red/40 mx-auto mb-4" />
-                      <p className="text-text-s text-xs font-mono uppercase tracking-widest opacity-60">Retirement timeline simulation in process...</p>
-                    </div>
-                  </div>
-                </div>
+                <FireProjection
+                  currentPortfolioEur={stats.totalValue}
+                  assets={assets}
+                  marketPrices={marketPrices}
+                  exchangeRates={exchangeRates}
+                  quoteCurrencies={quoteCurrencies}
+                />
               </motion.div>
             )}
 

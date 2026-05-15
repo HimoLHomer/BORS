@@ -5,6 +5,8 @@ import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
 import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
+import { computeBlendedYieldSummary } from './blendedYieldSummary';
+import { saveBlendedYieldCache } from './blendedYieldCache';
 import {
   type ManualDividendPosition,
   type DividendPayoutFrequency,
@@ -307,49 +309,26 @@ export function DividendsEngine({
     return [...api, ...manual].sort((a, b) => b.income - a.income);
   }, [dividendPayingRows, sortedManualRows]);
 
-  const apiSummaryStats = useMemo(() => {
-    if (!dividendPayingRows.length) {
-      return { totalAnnualEur: 0, totalValueEur: 0, avgYieldPercent: 0 };
-    }
-    let totalAnnualEur = 0;
-    let totalValueEur = 0;
-    for (const { row, index } of dividendPayingRows) {
-      totalAnnualEur += row.estimatedAnnualIncomeEur;
-      const a = assets[index];
-      if (a) {
-        const px = marketPrices[a.symbol] ?? a.averagePrice;
-        const fx = fxToEur(a.currency, exchangeRates);
-        totalValueEur += a.quantity * px * fx;
-      }
-    }
-    const avgYieldPercent = totalValueEur > 0 ? (totalAnnualEur / totalValueEur) * 100 : 0;
-    return {
-      totalAnnualEur: Math.round(totalAnnualEur * 100) / 100,
-      totalValueEur: Math.round(totalValueEur * 100) / 100,
-      avgYieldPercent: Math.round(avgYieldPercent * 100) / 100,
-    };
-  }, [dividendPayingRows, assets, marketPrices, exchangeRates]);
-
-  const manualAnnualSum = useMemo(
-    () => manualRows.reduce((s, m) => s + (Number.isFinite(m.annualIncomeEur) ? m.annualIncomeEur : 0), 0),
-    [manualRows]
-  );
-  const manualDenominatorSum = useMemo(
-    () =>
-      manualRows.reduce((s, m) => {
-        const d = effectiveManualDenominatorEur(m, assets, marketPrices, exchangeRates);
-        return s + (d != null && Number.isFinite(d) ? d : 0);
-      }, 0),
-    [manualRows, assets, marketPrices, exchangeRates]
-  );
-
   const displaySummary = useMemo(() => {
-    const totalAnnualEur = Math.round((apiSummaryStats.totalAnnualEur + manualAnnualSum) * 100) / 100;
-    const denom = apiSummaryStats.totalValueEur + manualDenominatorSum;
-    const avgYieldPercent =
-      denom > 0 ? Math.round(((totalAnnualEur / denom) * 100) * 100) / 100 : apiSummaryStats.avgYieldPercent;
-    return { totalAnnualEur, avgYieldPercent };
-  }, [apiSummaryStats, manualAnnualSum, manualDenominatorSum]);
+    if (!data?.rows?.length) {
+      return { totalAnnualEur: 0, avgYieldPercent: 0 };
+    }
+    const rates = {
+      EUR: 1,
+      ...exchangeRates,
+      ...((data as { rates?: Record<string, number> }).rates ?? {}),
+    };
+    return computeBlendedYieldSummary(assets, data.rows, manualRows, marketPrices, rates);
+  }, [data, assets, manualRows, marketPrices, exchangeRates]);
+
+  useEffect(() => {
+    if (displaySummary.avgYieldPercent > 0) {
+      saveBlendedYieldCache({
+        avgYieldPercent: displaySummary.avgYieldPercent,
+        totalAnnualEur: displaySummary.totalAnnualEur,
+      });
+    }
+  }, [displaySummary]);
 
   const barData = useMemo((): BarDatum[] => {
     const apiBars: BarDatum[] = dividendPayingRows.map(({ row, index }) => {
@@ -483,6 +462,9 @@ export function DividendsEngine({
 
   return (
     <div className="space-y-4">
+      <div className="mb-2">
+        <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dividend engine</h2>
+      </div>
       {err && (
         <div className="rounded-xl border border-red/40 bg-red/10 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-200">
           {err}
