@@ -24,6 +24,18 @@ export function formatDateFi(isoDate: string | null | undefined): string {
   }).format(d);
 }
 
+/** Finnish month+year from stored `YYYY-MM` (e.g. `5.2026`). */
+export function formatMonthYearFi(monthKey: string): string {
+  const m = /^(\d{4})-(\d{1,2})$/.exec(monthKey.trim());
+  if (!m) return monthKey;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  if (mo < 1 || mo > 12 || !Number.isFinite(y)) return monthKey;
+  return new Intl.DateTimeFormat('fi-FI', { month: 'numeric', year: 'numeric' }).format(
+    new Date(y, mo - 1, 1)
+  );
+}
+
 /** Short label for charts (Finnish month + day). */
 export function formatShortMonthDayFi(isoDate: string): string {
   const d = parseIsoDateOnly(isoDate);

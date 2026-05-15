@@ -3,6 +3,7 @@ import {
   type FireCapitalInputs,
   type FireExpenseLine,
 } from './fireProjectionEngine';
+import { formatMonthYearFi } from './formatDate';
 
 export const FIRE_STORAGE_KEY = 'bors_fire_inputs_v1';
 
@@ -47,7 +48,7 @@ export function parseMonthKey(raw: string): string | null {
     const m = Number(iso[2]);
     if (m >= 1 && m <= 12) return `${y}-${String(m).padStart(2, '0')}`;
   }
-  const slash = /^(\d{1,2})[./](\d{4})$/.exec(t);
+  const slash = /^(\d{1,2})\s*[./]\s*(\d{4})$/.exec(t);
   if (slash) {
     const m = Number(slash[1]);
     const y = Number(slash[2]);
@@ -57,9 +58,7 @@ export function parseMonthKey(raw: string): string | null {
 }
 
 export function formatMonthDisplay(monthKey: string): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(monthKey);
-  if (!m) return monthKey;
-  return `${m[2]}/${m[1]}`;
+  return formatMonthYearFi(monthKey);
 }
 
 export function currentMonthKey(): string {

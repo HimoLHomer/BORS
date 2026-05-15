@@ -65,8 +65,8 @@
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    rgba(59, 130, 246, 0.22) 0%,
-    rgba(59, 130, 246, 0.08) 42%,
+    rgba(59, 130, 246, 0.14) 0%,
+    rgba(59, 130, 246, 0.05) 42%,
     transparent 68%
   );
   pointer-events: none;
@@ -88,7 +88,7 @@
 }
 
 .allocation-pie-callout path[stroke]:not([stroke='rgba(255,255,255,0.012)']) {
-  filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.45));
+  filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.28));
 }
 
 /* Scrollable regions without visible scrollbar */

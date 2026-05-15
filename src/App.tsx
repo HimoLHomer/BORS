@@ -42,9 +42,13 @@ import {
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
 import { formatCurrency, fxToEur, holdingQuoteFxToEur } from './formatCurrency';
+import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
 import { formatDateFi, formatShortMonthDayFi, formatTimeFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
+import { DataListTable } from './DataListTable';
+import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
+import { EurAmountInput } from './EurAmountField';
 
 // --- Types & Enums ---
 
@@ -71,7 +75,7 @@ function normalizeCashAmountEur(raw: unknown): number | null {
   if (raw == null) return null;
   if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, raw);
   if (typeof raw === 'string') {
-    const n = parseFloat(raw.replace(',', '.'));
+    const n = parseDecimalInput(raw, NaN);
     if (Number.isFinite(n) && n >= 0) return n;
   }
   return null;
@@ -79,15 +83,14 @@ function normalizeCashAmountEur(raw: unknown): number | null {
 
 /** Parses the cash text field (comma or dot decimals). */
 function parseCashInputEur(raw: string): number | null {
-  const t = raw.trim().replace(',', '.');
-  if (t === '') return null;
-  const n = parseFloat(t);
+  if (raw.trim() === '') return null;
+  const n = parseDecimalInput(raw, NaN);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
 }
 
 function formatCashEurTwoDecimals(n: number): string {
-  return n.toFixed(2);
+  return formatDecimalFi(n, 2);
 }
 
 function isAbortError(e: unknown): boolean {
@@ -141,13 +144,13 @@ const HistoryPointModal = ({
     modal.type === 'edit' ? modal.point.date : todayIsoDateHelsinki()
   );
   const [valueStr, setValueStr] = useState(
-    modal.type === 'edit' ? String(modal.point.value) : ''
+    modal.type === 'edit' ? formatDecimalFi(modal.point.value, 2) : ''
   );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const save = async () => {
-    const val = parseFloat(valueStr.replace(',', '.'));
+    const val = parseDecimalInput(valueStr, NaN);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       setErr('Use date format YYYY-MM-DD');
       return;
@@ -234,13 +237,11 @@ const HistoryPointModal = ({
             <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">
               Total portfolio value (EUR)
             </label>
-            <input
-              type="text"
-              inputMode="decimal"
-              className="w-full bg-bg/50 border border-border rounded-xl px-4 py-3 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
-              placeholder="e.g. 125000.50"
+            <EurAmountInput
+              placeholder="esim. 125 000,50"
               value={valueStr}
               onChange={(e) => setValueStr(e.target.value)}
+              onBlur={() => setValueStr((v) => formatDecimalInputFi(v, 2))}
             />
           </div>
           {err && (
@@ -484,12 +485,12 @@ export default function App() {
             if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
             const loadedCash = normalizeCashAmountEur(cashData.amountEur) ?? 0;
             setCashEur(Number(loadedCash));
-            setCashInput(loadedCash === 0 ? '0.00' : formatCashEurTwoDecimals(loadedCash));
+            setCashInput(formatCashEurTwoDecimals(loadedCash));
           } catch (e) {
             if (isAbortError(e)) return;
             if (!cancelled && portfolioBootstrapGenerationRef.current === gen) {
               setCashEur(0);
-              setCashInput('0.00');
+              setCashInput(formatCashEurTwoDecimals(0));
             }
           }
           try {
@@ -618,6 +619,21 @@ export default function App() {
     stats.dailyChange = 0;
     stats.dailyChangePercent = 0;
   }
+
+  const portfolioTodayGain = useMemo(() => {
+    let todayGainEur = 0;
+    let portfolioValueEur = cashLineEur;
+    for (const asset of assets) {
+      const livePrice = marketPrices[asset.symbol] || asset.averagePrice;
+      const priceFx = holdingQuoteFxToEur(asset.symbol, asset.currency, quoteCurrencies, exchangeRates);
+      const valInEur = asset.quantity * livePrice * priceFx;
+      portfolioValueEur += valInEur;
+      todayGainEur += todayGainEurFromChange(valInEur, marketChanges[asset.symbol] || 0);
+    }
+    const priorValueEur = portfolioValueEur - todayGainEur;
+    const todayGainPercent = priorValueEur > 0 ? (todayGainEur / priorValueEur) * 100 : 0;
+    return { todayGainEur, todayGainPercent };
+  }, [assets, marketPrices, quoteCurrencies, exchangeRates, marketChanges, cashLineEur]);
 
   const allocationSlices = useMemo(() => {
     const assetRows = assets.map((a) => {
@@ -915,7 +931,7 @@ export default function App() {
       setHistory(dedupeHistoryByDate(h));
       const cv = normalizeCashAmountEur(cashRes.amountEur) ?? 0;
       setCashEur(Number(cv));
-      setCashInput(cv === 0 ? '0.00' : formatCashEurTwoDecimals(cv));
+      setCashInput(formatCashEurTwoDecimals(cv));
       const ui = uiRes as Record<string, unknown>;
       const lo = coerceRemoteLabelOffsets(ui.allocationLabelOffsets);
       if (lo) setAllocLabelOffsets(lo);
@@ -929,12 +945,12 @@ export default function App() {
   };
 
   const saveCash = async () => {
-    const parsed = parseFloat(String(cashInput).replace(',', '.'));
-    const amount = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    const parsed = parseCashInputEur(String(cashInput));
+    const amount = parsed != null && parsed >= 0 ? parsed : 0;
     const prevEur = cashEur;
     const prevInput = cashInput;
     setCashEur(Number(amount));
-    setCashInput(amount === 0 ? '0.00' : formatCashEurTwoDecimals(amount));
+    setCashInput(formatCashEurTwoDecimals(amount));
     setCashSaving(true);
     try {
       const res = await fetch('/api/portfolio/cash', {
@@ -947,7 +963,7 @@ export default function App() {
       const j = (await res.json()) as { amountEur?: unknown };
       const v = normalizeCashAmountEur(j.amountEur) ?? amount;
       setCashEur(Number(v));
-      setCashInput(v === 0 ? '0.00' : formatCashEurTwoDecimals(v));
+      setCashInput(formatCashEurTwoDecimals(v));
       portfolioMutationEpochRef.current += 1;
     } catch (e) {
       console.error('Cash save failed', e);
@@ -1033,11 +1049,12 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="dashboard-view max-w-[1400px] mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4"
+                className="max-w-[1400px] mx-auto w-full dashboard-view space-y-4 pb-8"
               >
-                <div className="col-span-full mb-2">
+                <div>
                   <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dashboard</h2>
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4">
                 {/* Main Portfolio Performance */}
                 <div className="lg:col-span-2 lg:row-span-2 glass-panel p-8 flex flex-col group h-full">
                   <div className="flex items-center justify-between mb-2 gap-2">
@@ -1129,14 +1146,25 @@ export default function App() {
                     )}
                   </AnimatePresence>
 
-                  <div className="stat-value text-6xl mb-2 flex items-baseline gap-2 tabular-nums">
+                  <div className="stat-value text-6xl mb-4 flex items-baseline gap-2 tabular-nums">
                     {formatCurrency(stats.totalValue, 'EUR')}
                   </div>
-                  <div className={`flex items-center gap-2 text-sm font-bold ${stats.totalGain >= 0 ? 'text-green' : 'text-red'}`}>
-                    <div className={`p-1 rounded-md ${stats.totalGain >= 0 ? 'bg-green/10' : 'bg-red/10'}`}>
-                      {stats.totalGain >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                  <div className="flex flex-wrap gap-x-8 gap-y-3">
+                    <div>
+                      <p className="text-[9px] font-bold text-text-s uppercase tracking-widest opacity-60 mb-1">
+                        Today
+                      </p>
+                      <GainDisplay
+                        amountEur={portfolioTodayGain.todayGainEur}
+                        percent={portfolioTodayGain.todayGainPercent}
+                      />
                     </div>
-                    {Math.abs(stats.totalGainPercent).toFixed(2)}% 
+                    <div>
+                      <p className="text-[9px] font-bold text-text-s uppercase tracking-widest opacity-60 mb-1">
+                        Total gain
+                      </p>
+                      <GainDisplay amountEur={stats.totalGain} percent={stats.totalGainPercent} />
+                    </div>
                   </div>
 
                   <div className="flex-1 mt-8 min-h-[160px]">
@@ -1384,138 +1412,116 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto -mx-2 px-2">
-                    <table className="w-full min-w-[920px] table-fixed text-left border-separate border-spacing-y-2 border-spacing-x-1">
-                      <colgroup>
-                        <col className="w-[26%]" />
-                        <col className="w-[8%]" />
-                        <col className="w-[12%]" />
-                        <col className="w-[14%]" />
-                        <col className="w-[14%]" />
-                        <col className="w-[13%]" />
-                        <col className="w-[8%]" />
-                        <col className="w-[96px]" />
-                      </colgroup>
-                      <thead>
-                        <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.25em] opacity-50">
-                          <th className="pl-5 pr-6 py-2">Asset</th>
-                          <th className="px-5 py-2 text-right">Shares</th>
-                          <th className="pl-8 pr-5 py-2 text-right">Share price</th>
-                          <th className="px-6 py-2 text-right">Total value</th>
-                          <th className="px-6 py-2 text-right">Cost basis</th>
-                          <th className="px-5 py-2 text-right">Total gain</th>
-                          <th className="px-5 py-2 text-right">24h</th>
-                          <th className="w-24 min-w-[96px] px-2 py-2" aria-hidden />
-                        </tr>
-                      </thead>
-                      <tbody className="text-xs font-mono font-bold">
-                        {[...assets].sort((a, b) => {
-                          const valA =
-                            a.quantity *
-                            (marketPrices[a.symbol] || a.averagePrice) *
-                            holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
-                          const valB =
-                            b.quantity *
-                            (marketPrices[b.symbol] || b.averagePrice) *
-                            holdingQuoteFxToEur(b.symbol, b.currency, quoteCurrencies, exchangeRates);
-                          return valB - valA;
-                        }).map((item, index) => {
-                          const price = marketPrices[item.symbol] || item.averagePrice;
-                          const priceFx = holdingQuoteFxToEur(
-                            item.symbol,
-                            item.currency,
-                            quoteCurrencies,
-                            exchangeRates
-                          );
-                          const costFx = fxToEur(item.currency, exchangeRates) || 1;
-                          const priceInEur = price * priceFx;
-                          const costBasisInEur = item.quantity * item.averagePrice * costFx;
-                          const totalValue = item.quantity * priceInEur;
-                          const totalGainInEur = totalValue - costBasisInEur;
-                          const totalGainPercent = costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
-                          const change = marketChanges[item.symbol] || 0;
-                          
-                          return (
-                            <tr key={item.id || `row-${index}`} className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl">
-                              <td className="pl-5 pr-6 py-3 rounded-l-2xl">
-                                <div className="min-w-0">
-                                  <div className="text-text-p text-sm font-sans truncate">{item.name}</div>
-                                  <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest">
-                                    {item.displaySymbol || (item.symbol.includes('.') ? item.symbol.split('.')[0] : item.symbol)}
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-5 py-3 text-right text-text-p tabular-nums whitespace-nowrap">{item.quantity}</td>
-                              <td className="pl-8 pr-5 py-3 text-right text-text-p tabular-nums whitespace-nowrap">
-                                {formatCurrency(priceInEur, 'EUR')}
-                              </td>
-                              <td className="px-6 py-3 text-right text-text-p tabular-nums whitespace-nowrap">{formatCurrency(totalValue, 'EUR')}</td>
-                              <td className="px-6 py-3 text-right text-text-s/40 tabular-nums whitespace-nowrap">{formatCurrency(costBasisInEur, 'EUR')}</td>
-                              <td className="px-5 py-3 text-right tabular-nums whitespace-nowrap">
-                                <div className={`inline-block text-right ${totalGainInEur >= 0 ? 'text-green' : 'text-red'}`}>
-                                  <div className="text-[11px] font-sans font-bold tabular-nums">
-                                    {formatCurrency(totalGainInEur, 'EUR')}
-                                  </div>
-                                  <div className="text-xs opacity-60 font-bold">
-                                    {totalGainPercent >= 0 ? '+' : ''}
-                                    {totalGainPercent.toFixed(2)}%
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-5 pr-3 py-3 text-right tabular-nums whitespace-nowrap">
-                                <span className={`inline-flex items-center justify-end gap-1 ${change >= 0 ? 'text-green' : 'text-red'}`}>
-                                  {change >= 0 ? <TrendingUp className="w-3 h-3 shrink-0" /> : <TrendingDown className="w-3 h-3 shrink-0" />}
-                                  {Math.abs(change).toFixed(2)}%
-                                </span>
-                              </td>
-                              <td className="w-24 min-w-[96px] px-2 py-3 text-right rounded-r-2xl">
-                                <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setEditingAsset(item);
-                                      setIsModalOpen(true);
-                                    }}
-                                    className="p-2 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
-                                    aria-label="Edit holding"
-                                  >
-                                    <Pencil className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeAsset(item.id!)}
-                                    className="p-2 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
-                                    aria-label="Remove holding"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {assets.length === 0 && (
-                          <tr className="bg-bg/40 opacity-20">
-                            <td colSpan={8} className="px-6 py-20 text-center rounded-2xl">
-                              <div className="flex flex-col items-center gap-4">
-                                <Wallet className="w-12 h-12" />
-                                <p className="text-[10px] uppercase font-bold tracking-widest">No Holdings Registered</p>
+                  <DataListTable
+                    minWidth={960}
+                    columns={[
+                      { key: 'asset', label: 'Asset' },
+                      { key: 'shares', label: 'Shares', align: 'right' },
+                      { key: 'price', label: 'Share price', align: 'right' },
+                      { key: 'value', label: 'Total value', align: 'right' },
+                      { key: 'cost', label: 'Cost basis', align: 'right' },
+                      { key: 'gain', label: 'Total gain', align: 'right' },
+                      { key: 'today', label: 'Today Gain', align: 'right' },
+                      {
+                        key: 'actions',
+                        label: '',
+                        align: 'right',
+                        headerClassName: 'w-16',
+                        cellClassName: 'px-3 py-2 text-right',
+                      },
+                    ]}
+                    rows={[...assets]
+                      .sort((a, b) => {
+                        const valA =
+                          a.quantity *
+                          (marketPrices[a.symbol] || a.averagePrice) *
+                          holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
+                        const valB =
+                          b.quantity *
+                          (marketPrices[b.symbol] || b.averagePrice) *
+                          holdingQuoteFxToEur(b.symbol, b.currency, quoteCurrencies, exchangeRates);
+                        return valB - valA;
+                      })
+                      .map((item) => {
+                        const price = marketPrices[item.symbol] || item.averagePrice;
+                        const priceFx = holdingQuoteFxToEur(
+                          item.symbol,
+                          item.currency,
+                          quoteCurrencies,
+                          exchangeRates
+                        );
+                        const costFx = fxToEur(item.currency, exchangeRates) || 1;
+                        const priceInEur = price * priceFx;
+                        const costBasisInEur = item.quantity * item.averagePrice * costFx;
+                        const totalValue = item.quantity * priceInEur;
+                        const totalGainInEur = totalValue - costBasisInEur;
+                        const totalGainPercent =
+                          costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
+                        const change = marketChanges[item.symbol] || 0;
+                        const todayGainEur = todayGainEurFromChange(totalValue, change);
+                        const ticker =
+                          item.displaySymbol ||
+                          (item.symbol.includes('.') ? item.symbol.split('.')[0] : item.symbol);
+
+                        return {
+                          asset: (
+                            <div className="min-w-0">
+                              <div className="text-text-p text-sm font-sans truncate">{item.name}</div>
+                              <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest">
+                                {ticker}
                               </div>
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                            </div>
+                          ),
+                          shares: item.quantity,
+                          price: formatCurrency(priceInEur, 'EUR'),
+                          value: formatCurrency(totalValue, 'EUR'),
+                          cost: (
+                            <span className="text-text-s/50">{formatCurrency(costBasisInEur, 'EUR')}</span>
+                          ),
+                          gain: (
+                            <GainDisplay amountEur={totalGainInEur} percent={totalGainPercent} />
+                          ),
+                          today: <GainDisplay amountEur={todayGainEur} percent={change} />,
+                          actions: (
+                            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingAsset(item);
+                                  setIsModalOpen(true);
+                                }}
+                                className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
+                                aria-label="Edit holding"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeAsset(item.id!)}
+                                className="p-1.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
+                                aria-label="Remove holding"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ),
+                        };
+                      })}
+                    emptyState={
+                      <div className="flex flex-col items-center gap-4 opacity-50 py-8">
+                        <Wallet className="w-12 h-12" />
+                        <p className="text-[10px] uppercase font-bold tracking-widest">No Holdings Registered</p>
+                      </div>
+                    }
+                  />
 
                   <div className="mt-8 pt-8 border-t border-border/50">
                     <h3 className="card-title mb-3">Cash (EUR)</h3>
                     <div className="flex flex-wrap items-end gap-2">
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        className="flex-1 min-w-[140px] max-w-[240px] bg-bg/50 border border-border rounded-xl px-4 py-2.5 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums"
-                        placeholder="0.00"
+                      <EurAmountInput
+                        wrapperClassName="flex-1 min-w-[140px] max-w-[240px]"
+                        className="py-2.5 text-sm"
+                        placeholder="0,00"
                         value={cashInput}
                         onChange={(e) => setCashInput(e.target.value)}
                         onBlur={() => normalizeCashInputOnBlur()}
@@ -1531,6 +1537,7 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                </div>
               </motion.div>
             )}
 
@@ -1540,7 +1547,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto w-full dashboard-view h-full overflow-y-auto"
+                className="max-w-[1400px] mx-auto w-full dashboard-view pb-8"
               >
                 <DividendsEngine assets={assets} marketPrices={marketPrices} exchangeRates={exchangeRates} />
               </motion.div>
@@ -1552,7 +1559,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto w-full min-h-full"
+                className="max-w-[1400px] mx-auto w-full dashboard-view pb-8"
               >
                 <FireProjection
                   currentPortfolioEur={stats.totalValue}
@@ -1782,7 +1789,7 @@ const CustomTreemapContent = (props: any) => {
             opacity={0.8}
             fontWeight="bold"
           >
-            {change >= 0 ? '+' : ''}{change.toFixed(2)}%
+            {formatPercentFi(change, 2, { showPlus: true })}
           </text>
         </>
       )}
@@ -1888,8 +1895,10 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
     displaySymbol: editAsset?.displaySymbol || '',
     name: editAsset?.name || '',
     type: editAsset?.type || 'etf',
-    quantity: editAsset?.quantity?.toString() || '',
-    averagePrice: editAsset?.averagePrice?.toString() || '',
+    quantity:
+      editAsset?.quantity != null ? formatDecimalFi(editAsset.quantity, 2) : '',
+    averagePrice:
+      editAsset?.averagePrice != null ? formatDecimalFi(editAsset.averagePrice, 2) : '',
     currency: editAsset?.currency || 'EUR'
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1956,8 +1965,8 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
     const newAsset: Asset = {
       ...(editAsset?.id ? { id: editAsset.id } : {}),
       ...formData,
-      quantity: Number(formData.quantity),
-      averagePrice: Number(formData.averagePrice),
+      quantity: parseDecimalInput(formData.quantity, 0),
+      averagePrice: parseDecimalInput(formData.averagePrice, 0),
       updatedAt: new Date().toISOString()
     } as Asset;
 
@@ -2061,7 +2070,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
                             •{' '}
                             {result.currency === 'EUR'
                               ? formatCurrency(result.price, 'EUR')
-                              : `${result.price.toFixed(2)} ${result.currency}`}
+                              : formatCurrency(result.price, result.currency)}
                           </span>
                         )}
                       </div>
@@ -2074,7 +2083,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
                           className="text-[10px] font-mono font-bold text-emerald-400/95 tabular-nums tracking-tight"
                           title="Trailing / indicated dividend yield (Yahoo)"
                         >
-                          Div {result.dividendYieldPercent.toFixed(2)}%
+                          Div {formatPercentFi(result.dividendYieldPercent, 2)}
                         </div>
                       ) : (
                         <div className="text-[9px] font-mono text-text-s/35 uppercase tracking-widest" title="No yield from Yahoo for this listing">
@@ -2159,24 +2168,34 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Quantity (Units)</label>
               <input 
                 required
-                type="number"
-                step="any"
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                placeholder="0.00"
+                type="text"
+                inputMode="decimal"
+                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                placeholder="0,00"
                 value={formData.quantity}
                 onChange={e => setFormData({ ...formData, quantity: e.target.value })}
+                onBlur={() =>
+                  setFormData((f) => ({
+                    ...f,
+                    quantity: formatDecimalInputFi(f.quantity, 2),
+                  }))
+                }
               />
             </div>
             <div className="space-y-2">
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Cost Per Unit</label>
-              <input 
+              <EurAmountInput
                 required
-                type="number"
-                step="any"
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                placeholder="0.00"
+                className="py-4 text-sm transition-all placeholder:opacity-20"
+                placeholder="0,00"
                 value={formData.averagePrice}
-                onChange={e => setFormData({ ...formData, averagePrice: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, averagePrice: e.target.value })}
+                onBlur={() =>
+                  setFormData((f) => ({
+                    ...f,
+                    averagePrice: formatDecimalInputFi(f.averagePrice, 2),
+                  }))
+                }
               />
             </div>
           </div>

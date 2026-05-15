@@ -1,3 +1,5 @@
+import { FI_LOCALE } from './formatNumber';
+
 /** FX rate to EUR (Yahoo `USDEUR=X` style: multiply amount in `currency` to get EUR). */
 export function fxToEur(currency: string | undefined, exchangeRates: Record<string, number>): number {
   const c = (currency || 'EUR').toUpperCase();
@@ -19,20 +21,20 @@ export function holdingQuoteFxToEur(
   return aFx > 0 ? aFx : 1;
 }
 
-/** Same rules as the dashboard: EUR uses custom grouping; other CCYs use Intl. */
+/** Finnish currency display (e.g. `1 234,56 €`). */
 export function formatCurrency(value: number, currency: string = 'EUR'): string {
-  if (!Number.isFinite(value)) return '€0.00';
-  if (currency !== 'EUR') {
-    return new Intl.NumberFormat('en-IE', {
+  if (!Number.isFinite(value)) {
+    return new Intl.NumberFormat(FI_LOCALE, {
       style: 'currency',
-      currency,
+      currency: currency.toUpperCase(),
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(value);
+    }).format(0);
   }
-  const sign = value < 0 ? '-' : '';
-  const abs = Math.abs(value);
-  const [intRaw, dec] = abs.toFixed(2).split('.');
-  const intPart = intRaw.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${sign}€${intPart}.${dec}`;
+  return new Intl.NumberFormat(FI_LOCALE, {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }

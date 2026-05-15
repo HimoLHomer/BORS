@@ -4,8 +4,11 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
+import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
+import { EurAmountInput } from './EurAmountField';
 import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
 import { computeBlendedYieldSummary } from './blendedYieldSummary';
+import { DataListTable } from './DataListTable';
 import { saveBlendedYieldCache } from './blendedYieldCache';
 import {
   type ManualDividendPosition,
@@ -13,8 +16,6 @@ import {
   loadManualDividendPositions,
   saveManualDividendPositions,
   frequencyLabel,
-  perPaymentAmountEur,
-  averageMonthlyIncomeEur,
   manualPositionPayoutEvents,
 } from './manualDividends';
 
@@ -193,9 +194,8 @@ type BarDatum = {
   label: string;
   /** Full holding / row name for tooltip */
   fullName: string;
-  monthlyEur: number;
+  annualEur: number;
   source: 'api' | 'manual';
-  tooltipDetail?: string;
 };
 
 export function DividendsEngine({
@@ -335,14 +335,12 @@ export function DividendsEngine({
       const a = assets[index];
       const fullName = row.name || a?.name || 'Holding';
       const label = displayTickerForAsset(a);
-      const monthlyEur = averageMonthlyIncomeEur(row.estimatedAnnualIncomeEur);
       return {
         key: `api-${index}-${row.symbol}`,
         label,
         fullName,
-        monthlyEur,
+        annualEur: row.estimatedAnnualIncomeEur,
         source: 'api',
-        tooltipDetail: 'Average monthly (annual ÷ 12)',
       };
     });
     const manualBars: BarDatum[] = manualRows.map((m) => {
@@ -350,18 +348,15 @@ export function DividendsEngine({
       const a = linked[0];
       const fullName = a?.name ?? m.name;
       const label = a ? displayTickerForAsset(a) : shortYahooSymbol(m.linkedSymbol);
-      const monthlyEur = averageMonthlyIncomeEur(m.annualIncomeEur);
-      const perPay = perPaymentAmountEur(m.annualIncomeEur, m.payoutFrequency);
       return {
         key: `manual-${m.id}`,
         label,
         fullName,
-        monthlyEur,
+        annualEur: m.annualIncomeEur,
         source: 'manual',
-        tooltipDetail: `Avg monthly (annual ÷ 12) · ~${formatCurrency(perPay, 'EUR')} per ${frequencyLabel(m.payoutFrequency).toLowerCase()} payment`,
       };
     });
-    return [...apiBars, ...manualBars].sort((a, b) => b.monthlyEur - a.monthlyEur);
+    return [...apiBars, ...manualBars].sort((a, b) => b.annualEur - a.annualEur);
   }, [dividendPayingRows, assets, manualRows]);
 
   const payoutEvents = useMemo(() => {
@@ -409,20 +404,20 @@ export function DividendsEngine({
 
   const openEditManual = (m: ManualDividendPosition) => {
     setEditingManualId(m.id);
-    setDraftAnnual(String(m.annualIncomeEur));
+    setDraftAnnual(formatDecimalFi(m.annualIncomeEur, 2));
     setDraftLinkedSymbol(
       m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0]?.symbol ?? m.linkedSymbol : ''
     );
-    setDraftUnits(m.units != null ? String(m.units) : '');
+    setDraftUnits(m.units != null ? formatDecimalFi(m.units, 2) : '');
     setDraftFrequency(m.payoutFrequency);
     setDraftPayoutDate(m.payoutAnchorDate ?? '');
     setManualModalOpen(true);
   };
 
   const saveManual = () => {
-    const annual = parseFloat(draftAnnual.replace(',', '.'));
+    const annual = parseDecimalInput(draftAnnual, 0);
     const unitsRaw = draftUnits.trim();
-    const unitsParsed = unitsRaw === '' ? null : parseFloat(unitsRaw.replace(',', '.'));
+    const unitsParsed = unitsRaw === '' ? null : parseDecimalInput(unitsRaw, NaN);
     const units =
       unitsParsed != null && Number.isFinite(unitsParsed) && unitsParsed > 0 ? unitsParsed : null;
     if (!Number.isFinite(annual) || annual < 0) return;
@@ -460,9 +455,164 @@ export function DividendsEngine({
   const hasAnyDividendDisplay = dividendPayingRows.length > 0 || manualRows.length > 0;
   const manualCalendarReady = manualRows.some((m) => m.payoutAnchorDate);
 
+  const holdingsDetailEmptyState = useMemo(() => {
+    if (loading && !data) {
+      return (
+        <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
+          Loading dividend data…
+        </p>
+      );
+    }
+    if (!data && assets.length > 0) {
+      return (
+        <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">No data.</p>
+      );
+    }
+    if (!hasAnyDividendDisplay && !loading) {
+      return (
+        <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
+          {assets.length === 0 && manualRows.length === 0
+            ? 'No holdings or manual rows.'
+            : 'No feed dividend data — add an estimate from your Dashboard holdings via the menu.'}
+        </p>
+      );
+    }
+    return null;
+  }, [loading, data, assets.length, hasAnyDividendDisplay, manualRows.length]);
+
+  const holdingsDetailTableRows = useMemo(() => {
+    if (holdingsDetailEmptyState != null) return [];
+    return holdingsDetailRows.map((entry) => {
+      if (entry.kind === 'api') {
+        const { row, index } = entry;
+        const a = assets[index];
+        const tick = a ? displayTickerForAsset(a) : null;
+        const feedYld = feedYieldPercent(row, a, marketPrices, exchangeRates);
+        const annualShareEur = feedAnnualPerShareEur(row, exchangeRates);
+        return {
+          asset: (
+            <div className="min-w-0">
+              <div className="text-text-p text-sm font-sans truncate" title={row.name}>
+                {row.name}
+              </div>
+              {tick ? (
+                <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
+                  {tick}
+                </div>
+              ) : null}
+            </div>
+          ),
+          yield: feedYld != null ? formatPercentFi(feedYld, 2) : '—',
+          annualShare:
+            annualShareEur != null ? (
+              <span className="text-text-s/50">{formatCurrency(annualShareEur, 'EUR')}</span>
+            ) : (
+              '—'
+            ),
+          income: formatCurrency(row.estimatedAnnualIncomeEur, 'EUR'),
+          freq: (
+            <span className="text-text-s/50 text-[11px] uppercase tracking-wider">
+              {row.payoutFrequency ? frequencyLabel(row.payoutFrequency) : '—'}
+            </span>
+          ),
+          next: (
+            <span className="text-text-s/80 text-[11px]">{formatDateFi(nextFeedPayoutDate(row))}</span>
+          ),
+          actions: '',
+        };
+      }
+
+      const m = entry.m;
+      const yld = manualYieldPercent(m, assets, marketPrices, exchangeRates);
+      const perShareEur = manualAnnualDividendPerShareEur(m, assets);
+      const linkedAs = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0] : undefined;
+      const title = linkedAs?.name ?? m.name;
+      return {
+        asset: (
+          <div className="min-w-0">
+            <div className="text-text-p text-sm font-sans truncate" title={title}>
+              {title}
+            </div>
+            {linkedAs ? (
+              <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
+                {displayTickerForAsset(linkedAs)}
+              </div>
+            ) : (
+              <div className="mt-0.5 text-[9px] text-text-s/50 font-mono uppercase tracking-widest">
+                Link holding on edit
+              </div>
+            )}
+          </div>
+        ),
+        yield: yld != null ? formatPercentFi(yld, 2) : '—',
+        annualShare:
+          perShareEur != null ? (
+            <span className="text-text-s/50">{formatCurrency(perShareEur, 'EUR')}</span>
+          ) : (
+            '—'
+          ),
+        income: formatCurrency(m.annualIncomeEur, 'EUR'),
+        freq: (
+          <span className="text-text-s/50 text-[11px] uppercase tracking-wider">
+            {frequencyLabel(m.payoutFrequency)}
+          </span>
+        ),
+        next: <span className="text-text-s/80 text-[11px]">{formatDateFi(m.payoutAnchorDate)}</span>,
+        actions: (
+          <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              onClick={() => openEditManual(m)}
+              className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
+              aria-label="Edit manual position"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => removeManual(m.id)}
+              className="p-1.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
+              aria-label="Remove manual position"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ),
+      };
+    });
+  }, [
+    holdingsDetailEmptyState,
+    holdingsDetailRows,
+    assets,
+    marketPrices,
+    exchangeRates,
+  ]);
+
+  const payoutTableRows = useMemo(
+    () =>
+      payoutEvents.map((e) => ({
+        asset: (
+          <div className="text-text-p text-sm font-sans truncate" title={e.name}>
+            {e.name}
+          </div>
+        ),
+        date: (
+          <span className="whitespace-nowrap">
+            {formatDateFi(e.date)}
+            {e.estimated ? (
+              <span className="ml-2 text-[9px] text-text-s/45 font-mono uppercase tracking-widest">
+                est.
+              </span>
+            ) : null}
+          </span>
+        ),
+      })),
+    [payoutEvents]
+  );
+
   return (
     <div className="space-y-4">
-      <div className="mb-2">
+      <div>
         <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dividend engine</h2>
       </div>
       {err && (
@@ -481,7 +631,7 @@ export function DividendsEngine({
         <div className={`${PANEL} flex flex-col`}>
           <h3 className="card-title mb-0">Average yield (blended)</h3>
           <div className="stat-value text-6xl font-black tracking-tighter text-accent tabular-nums mt-2">
-            {displaySummary.avgYieldPercent.toFixed(2)}%
+            {formatPercentFi(displaySummary.avgYieldPercent, 2)}
           </div>
         </div>
       </div>
@@ -489,7 +639,7 @@ export function DividendsEngine({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className={`${PANEL} min-h-[360px] flex flex-col`}>
           <div className={SECTION_HEAD}>
-            <h3 className="card-title mb-0">Monthly dividend income (by holding)</h3>
+            <h3 className="card-title mb-0">Annual dividend income (by holding)</h3>
           </div>
           {assets.length === 0 && manualRows.length === 0 ? (
             <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
@@ -527,18 +677,12 @@ export function DividendsEngine({
                       padding: 12,
                     }}
                     itemStyle={{ color: 'var(--color-accent)', fontWeight: 900, fontSize: 14 }}
-                    formatter={(value: number | undefined, _name: string, item: { payload?: BarDatum }) => {
-                      const detail = item?.payload?.tooltipDetail;
-                      const main = formatCurrency(Number(value), 'EUR');
-                      return [detail ? `${main} (${detail})` : main, 'Avg monthly (est.)'];
-                    }}
-                    labelStyle={{ color: 'var(--color-text-s)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}
-                    labelFormatter={(_label, payload) => {
-                      const p = payload?.[0]?.payload as BarDatum | undefined;
-                      return p?.fullName ?? String(_label);
-                    }}
+                    formatter={(value: number | undefined) => [
+                      formatCurrency(Number(value), 'EUR'),
+                    ]}
+                    labelFormatter={() => ''}
                   />
-                  <Bar dataKey="monthlyEur" radius={[6, 6, 0, 0]} fill={BAR_COLOR} fillOpacity={0.9} />
+                  <Bar dataKey="annualEur" radius={[6, 6, 0, 0]} fill={BAR_COLOR} fillOpacity={0.9} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -560,35 +704,15 @@ export function DividendsEngine({
                     : 'No payout dates yet.'}
             </p>
           ) : (
-            <div className="overflow-x-auto -mx-2 px-2 flex-1 min-h-0 max-h-[300px] overflow-y-auto">
-              <table className="w-full border-separate border-spacing-y-2">
-                <thead>
-                  <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.25em] opacity-50">
-                    <th className="pl-5 pr-6 py-2">Asset</th>
-                    <th className="px-5 py-2 text-right">Payout date</th>
-                  </tr>
-                </thead>
-                <tbody className="text-xs font-mono font-bold">
-                  {payoutEvents.map((e, i) => (
-                    <tr
-                      key={`${e.name}-${e.date}-${i}-${e.estimated ? 'e' : 'a'}`}
-                      className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
-                    >
-                      <td className="pl-5 pr-6 py-3 rounded-l-2xl">
-                        <div className="text-text-p text-sm font-sans truncate" title={e.name}>
-                          {e.name}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3 text-right rounded-r-2xl whitespace-nowrap tabular-nums text-text-p">
-                        {formatDateFi(e.date)}
-                        {e.estimated ? (
-                          <span className="ml-2 text-[9px] text-text-s/45 font-mono uppercase tracking-widest">est.</span>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex-1 min-h-0 max-h-[300px] overflow-y-auto scrollbar-hidden">
+              <DataListTable
+                minWidth={360}
+                columns={[
+                  { key: 'asset', label: 'Asset' },
+                  { key: 'date', label: 'Payout date', align: 'right' },
+                ]}
+                rows={payoutTableRows}
+              />
             </div>
           )}
         </div>
@@ -606,164 +730,26 @@ export function DividendsEngine({
             <Plus className="w-3.5 h-3.5" /> Add dividend estimate
           </button>
         </div>
-        <div className="overflow-x-auto -mx-2 px-2">
-          <table className="w-full min-w-[880px] table-fixed text-left border-separate border-spacing-y-2 border-spacing-x-1">
-            <colgroup>
-              <col className="w-[28%]" />
-              <col className="w-[10%]" />
-              <col className="w-[14%]" />
-              <col className="w-[16%]" />
-              <col className="w-[12%]" />
-              <col className="w-[12%]" />
-              <col className="w-[96px]" />
-            </colgroup>
-            <thead>
-              <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.25em] opacity-50">
-                <th className="pl-5 pr-6 py-2">Asset</th>
-                <th className="px-5 py-2 text-right">Yield %</th>
-                <th className="px-6 py-2 text-right">Annual / share</th>
-                <th className="px-6 py-2 text-right">Est. annual income</th>
-                <th className="px-5 py-2 text-right whitespace-nowrap">Pay freq.</th>
-                <th className="px-5 py-2 text-right whitespace-nowrap">Next / anchor</th>
-                <th className="w-24 min-w-[96px] px-2 py-2" aria-hidden />
-              </tr>
-            </thead>
-            <tbody className="text-xs font-mono font-bold">
-              {loading && !data ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-16 text-center text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
-                    Loading dividend data…
-                  </td>
-                </tr>
-              ) : !data && assets.length > 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-16 text-center text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
-                    No data.
-                  </td>
-                </tr>
-              ) : !hasAnyDividendDisplay && !loading ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-16 text-center text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
-                    {assets.length === 0 && manualRows.length === 0
-                      ? 'No holdings or manual rows.'
-                      : 'No feed dividend data — add an estimate from your Dashboard holdings via the menu.'}
-                  </td>
-                </tr>
-              ) : (
-                <>
-                  {holdingsDetailRows.map((entry) => {
-                    if (entry.kind === 'api') {
-                      const { row, index } = entry;
-                      const a = assets[index];
-                      const tick = a ? displayTickerForAsset(a) : null;
-                      const feedYld = feedYieldPercent(row, a, marketPrices, exchangeRates);
-                      const annualShareEur = feedAnnualPerShareEur(row, exchangeRates);
-                      return (
-                        <tr
-                          key={`api-${index}-${row.symbol}`}
-                          className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
-                        >
-                          <td className="pl-5 pr-6 py-3 rounded-l-2xl">
-                            <div className="min-w-0">
-                              <div className="text-text-p text-sm font-sans truncate" title={row.name}>
-                                {row.name}
-                              </div>
-                              {tick ? (
-                                <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
-                                  {tick}
-                                </div>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td className="px-5 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
-                            {feedYld != null ? `${feedYld.toFixed(2)}%` : '—'}
-                          </td>
-                          <td className="px-6 py-3 text-right tabular-nums text-text-s/60 whitespace-nowrap">
-                            {annualShareEur != null ? formatCurrency(annualShareEur, 'EUR') : '—'}
-                          </td>
-                          <td className="px-6 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
-                            {formatCurrency(row.estimatedAnnualIncomeEur, 'EUR')}
-                          </td>
-                          <td className="px-5 py-3 text-right text-text-s/60 text-[11px] uppercase tracking-wider whitespace-nowrap">
-                            {row.payoutFrequency ? frequencyLabel(row.payoutFrequency) : '—'}
-                          </td>
-                          <td className="px-5 py-3 text-right tabular-nums text-text-s/80 text-[11px] whitespace-nowrap">
-                            {formatDateFi(nextFeedPayoutDate(row))}
-                          </td>
-                          <td className="w-24 min-w-[96px] px-2 py-3 text-right rounded-r-2xl" />
-                        </tr>
-                      );
-                    }
-
-                    const m = entry.m;
-                    const yld = manualYieldPercent(m, assets, marketPrices, exchangeRates);
-                    const perShareEur = manualAnnualDividendPerShareEur(m, assets);
-                    const linkedAs = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0] : undefined;
-                    const title = linkedAs?.name ?? m.name;
-                    return (
-                      <tr
-                        key={m.id}
-                        className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
-                      >
-                        <td className="pl-5 pr-6 py-3 rounded-l-2xl">
-                          <div className="min-w-0">
-                            <div className="text-text-p text-sm font-sans truncate" title={title}>
-                              {title}
-                            </div>
-                            {linkedAs ? (
-                              <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
-                                {displayTickerForAsset(linkedAs)}
-                              </div>
-                            ) : (
-                              <div className="mt-0.5 text-[9px] text-text-s/50 font-mono uppercase tracking-widest">
-                                Link holding on edit
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-5 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
-                          {yld != null ? `${yld.toFixed(2)}%` : '—'}
-                        </td>
-                        <td className="px-6 py-3 text-right tabular-nums text-text-s/60 whitespace-nowrap">
-                          {perShareEur != null ? formatCurrency(perShareEur, 'EUR') : '—'}
-                        </td>
-                        <td className="px-6 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
-                          {formatCurrency(m.annualIncomeEur, 'EUR')}
-                        </td>
-                        <td className="px-5 py-3 text-right text-text-s/60 text-[11px] uppercase tracking-wider whitespace-nowrap">
-                          {frequencyLabel(m.payoutFrequency)}
-                        </td>
-                        <td className="px-5 py-3 text-right tabular-nums text-text-s/80 text-[11px] whitespace-nowrap">
-                          {formatDateFi(m.payoutAnchorDate)}
-                        </td>
-                        <td className="w-24 min-w-[96px] px-2 py-3 text-right rounded-r-2xl">
-                          <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              type="button"
-                              onClick={() => openEditManual(m)}
-                              className="p-2 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
-                              aria-label="Edit manual position"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeManual(m.id)}
-                              className="p-2 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
-                              aria-label="Remove manual position"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataListTable
+          minWidth={880}
+          columns={[
+            { key: 'asset', label: 'Asset' },
+            { key: 'yield', label: 'Yield %', align: 'right' },
+            { key: 'annualShare', label: 'Annual / share', align: 'right' },
+            { key: 'income', label: 'Est. annual income', align: 'right' },
+            { key: 'freq', label: 'Pay freq.', align: 'right' },
+            { key: 'next', label: 'Next / anchor', align: 'right' },
+            {
+              key: 'actions',
+              label: '',
+              align: 'right',
+              headerClassName: 'w-16',
+              cellClassName: 'px-3 py-2 text-right',
+            },
+          ]}
+          rows={holdingsDetailTableRows}
+          emptyState={holdingsDetailEmptyState ?? undefined}
+        />
       </div>
 
       <AnimatePresence>
@@ -811,7 +797,7 @@ export function DividendsEngine({
                   if (v) {
                     const matched = assetsMatchingLink(assets, v);
                     const q = matched.reduce((s, a) => s + (Number.isFinite(a.quantity) ? a.quantity : 0), 0);
-                    setDraftUnits(q > 0 ? String(q) : '');
+                    setDraftUnits(q > 0 ? formatDecimalFi(q, 2) : '');
                   } else {
                     setDraftUnits('');
                   }
@@ -832,12 +818,13 @@ export function DividendsEngine({
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
                 Annual dividend income (EUR)
               </label>
-              <input
+              <EurAmountInput
+                wrapperClassName="mb-5"
                 value={draftAnnual}
                 onChange={(e) => setDraftAnnual(e.target.value)}
-                inputMode="decimal"
-                className="w-full mb-5 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
-                placeholder="0"
+                onBlur={() => setDraftAnnual((v) => formatDecimalInputFi(v, 2))}
+                className="py-3 text-sm"
+                placeholder="0,00"
               />
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
                 Units / shares (optional)
@@ -845,6 +832,7 @@ export function DividendsEngine({
               <input
                 value={draftUnits}
                 onChange={(e) => setDraftUnits(e.target.value)}
+                onBlur={() => setDraftUnits((v) => (v.trim() === '' ? '' : formatDecimalInputFi(v, 2)))}
                 inputMode="decimal"
                 className="w-full mb-2 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
                 placeholder={draftLinkedSymbol.trim() ? 'Leave blank to use holding quantity' : 'Optional override'}

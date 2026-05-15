@@ -57,11 +57,11 @@ export function AllocationPieDefs() {
   return (
     <defs>
       <filter id="allocationPieGlow" x="-40%" y="-40%" width="180%" height="180%">
-        <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+        <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
         <feColorMatrix
           in="blur"
           type="matrix"
-          values="0 0 0 0 0.18  0 0 0 0 0.38  0 0 0 0 0.82  0 0 0 0.45 0"
+          values="0 0 0 0 0.18  0 0 0 0 0.38  0 0 0 0 0.82  0 0 0 0.28 0"
           result="glow"
         />
         <feMerge>

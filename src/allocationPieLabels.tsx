@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { PieLabelRenderProps } from 'recharts';
+import { formatPercentFi } from './formatNumber';
 
 /** Must match default <PieChart margin> for the allocation card (before pie nudge). */
 export const ALLOCATION_PIE_CHART_MARGIN = { top: 28, right: 48, bottom: 28, left: 48 } as const;
@@ -304,7 +305,7 @@ export function buildAllocationPieCalloutMap(
       sign,
       pJoint,
       displayName: truncateName(sl.name),
-      pctLine: `${sl.percent.toFixed(1)}%`,
+      pctLine: formatPercentFi(sl.percent, 1),
     });
   }
 
@@ -357,7 +358,7 @@ export function allocationCalloutFromLabelProps(props: PieLabelRenderProps): All
         ? percent * 100
         : 0;
   const displayName = truncateName(String(pl?.name ?? name ?? '—'));
-  const pctLine = `${pct.toFixed(1)}%`;
+  const pctLine = formatPercentFi(pct, 1);
 
   const pEdge = polar(cx, cy, outerRadius, midAngle);
   const pKink = polar(cx, cy, outerRadius + RADIAL_STUB, midAngle);
