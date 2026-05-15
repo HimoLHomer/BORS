@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { AnimatePresence, motion } from 'motion/react';
-import { MoreVertical, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
 import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
@@ -47,7 +47,10 @@ type DividendsPayload = {
   averagePortfolioYieldPercent: number;
 };
 
-const BAR_COLOR = '#3b82f6';
+const BAR_COLOR = 'var(--color-accent)';
+
+const PANEL = 'glass-panel p-8 bg-[#0e0e10]/80';
+const SECTION_HEAD = 'flex items-center justify-between mb-2 gap-2';
 
 /** Same idea as the Dashboard holdings table: display symbol, else short Yahoo symbol. */
 function displayTickerForAsset(a: Asset | undefined): string {
@@ -206,7 +209,6 @@ export function DividendsEngine({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [manualRows, setManualRows] = useState<ManualDividendPosition[]>(() => loadManualDividendPositions());
-  const [holdingsMenuOpen, setHoldingsMenuOpen] = useState(false);
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [editingManualId, setEditingManualId] = useState<string | null>(null);
   const [draftAnnual, setDraftAnnual] = useState('');
@@ -214,22 +216,9 @@ export function DividendsEngine({
   const [draftUnits, setDraftUnits] = useState('');
   const [draftFrequency, setDraftFrequency] = useState<DividendPayoutFrequency>('quarterly');
   const [draftPayoutDate, setDraftPayoutDate] = useState('');
-  const holdingsMenuRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     saveManualDividendPositions(manualRows);
   }, [manualRows]);
-
-  useEffect(() => {
-    if (!holdingsMenuOpen) return;
-    const close = (e: MouseEvent) => {
-      if (holdingsMenuRef.current && !holdingsMenuRef.current.contains(e.target as Node)) {
-        setHoldingsMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [holdingsMenuOpen]);
 
   const load = useCallback(async () => {
     if (assets.length === 0) {
@@ -294,8 +283,29 @@ export function DividendsEngine({
     if (!data?.rows.length) return [] as { row: DividendRow; index: number }[];
     return data.rows
       .map((row, index) => ({ row, index }))
-      .filter(({ row }) => isDividendPayer(row));
+      .filter(({ row }) => isDividendPayer(row))
+      .sort((a, b) => b.row.estimatedAnnualIncomeEur - a.row.estimatedAnnualIncomeEur);
   }, [data]);
+
+  const sortedManualRows = useMemo(
+    () => [...manualRows].sort((a, b) => b.annualIncomeEur - a.annualIncomeEur),
+    [manualRows]
+  );
+
+  const holdingsDetailRows = useMemo(() => {
+    const api = dividendPayingRows.map(({ row, index }) => ({
+      kind: 'api' as const,
+      income: row.estimatedAnnualIncomeEur,
+      row,
+      index,
+    }));
+    const manual = sortedManualRows.map((m) => ({
+      kind: 'manual' as const,
+      income: m.annualIncomeEur,
+      m,
+    }));
+    return [...api, ...manual].sort((a, b) => b.income - a.income);
+  }, [dividendPayingRows, sortedManualRows]);
 
   const apiSummaryStats = useMemo(() => {
     if (!dividendPayingRows.length) {
@@ -414,13 +424,11 @@ export function DividendsEngine({
 
   const openManualModal = () => {
     if (assets.length === 0) return;
-    setHoldingsMenuOpen(false);
     resetDrafts();
     setManualModalOpen(true);
   };
 
   const openEditManual = (m: ManualDividendPosition) => {
-    setHoldingsMenuOpen(false);
     setEditingManualId(m.id);
     setDraftAnnual(String(m.annualIncomeEur));
     setDraftLinkedSymbol(
@@ -475,8 +483,6 @@ export function DividendsEngine({
 
   return (
     <div className="space-y-4">
-      <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dividends Engine</h2>
-
       {err && (
         <div className="rounded-xl border border-red/40 bg-red/10 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-200">
           {err}
@@ -484,29 +490,31 @@ export function DividendsEngine({
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="glass-panel p-8 flex flex-col justify-center min-h-[140px]">
+        <div className={`${PANEL} flex flex-col`}>
           <h3 className="card-title mb-0">Total annual dividend income</h3>
-          <div className="stat-value text-5xl font-black tracking-tighter text-text-p tabular-nums">
+          <div className="stat-value text-6xl font-black tracking-tighter tabular-nums mt-2">
             {formatCurrency(displaySummary.totalAnnualEur, 'EUR')}
           </div>
         </div>
-        <div className="glass-panel p-8 flex flex-col justify-center min-h-[140px]">
+        <div className={`${PANEL} flex flex-col`}>
           <h3 className="card-title mb-0">Average yield (blended)</h3>
-          <div className="stat-value text-5xl font-black tracking-tighter text-accent tabular-nums">
+          <div className="stat-value text-6xl font-black tracking-tighter text-accent tabular-nums mt-2">
             {displaySummary.avgYieldPercent.toFixed(2)}%
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="glass-panel p-6 min-h-[320px] flex flex-col">
-          <h3 className="card-title mb-4">Monthly dividend income (by holding)</h3>
+        <div className={`${PANEL} min-h-[360px] flex flex-col`}>
+          <div className={SECTION_HEAD}>
+            <h3 className="card-title mb-0">Monthly dividend income (by holding)</h3>
+          </div>
           {assets.length === 0 && manualRows.length === 0 ? (
-            <p className="text-text-s text-sm py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px]">
+            <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
               Add holdings on the Dashboard, then add a per-holding dividend estimate here if needed.
             </p>
           ) : barData.length === 0 ? (
-            <p className="text-text-s text-sm py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px]">
+            <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
               {loading ? 'Loading…' : 'No dividend-paying holdings (or estimates are all zero).'}
             </p>
           ) : (
@@ -534,8 +542,9 @@ export function DividendsEngine({
                       backgroundColor: 'var(--color-card)',
                       border: '1px solid var(--color-border)',
                       borderRadius: 12,
-                      fontSize: 12,
+                      padding: 12,
                     }}
+                    itemStyle={{ color: 'var(--color-accent)', fontWeight: 900, fontSize: 14 }}
                     formatter={(value: number | undefined, _name: string, item: { payload?: BarDatum }) => {
                       const detail = item?.payload?.tooltipDetail;
                       const main = formatCurrency(Number(value), 'EUR');
@@ -554,10 +563,12 @@ export function DividendsEngine({
           )}
         </div>
 
-        <div className="glass-panel p-6 min-h-[320px] flex flex-col">
-          <h3 className="card-title mb-4">Upcoming payout calendar</h3>
+        <div className={`${PANEL} min-h-[360px] flex flex-col`}>
+          <div className={SECTION_HEAD}>
+            <h3 className="card-title mb-0">Upcoming payouts</h3>
+          </div>
           {payoutEvents.length === 0 ? (
-            <p className="text-text-s text-sm py-8 text-center opacity-50 font-mono uppercase tracking-widest text-[10px]">
+            <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
               {assets.length === 0 && manualRows.length === 0
                 ? 'No holdings.'
                 : loading
@@ -567,66 +578,72 @@ export function DividendsEngine({
                     : 'No payout dates yet.'}
             </p>
           ) : (
-            <ul className="space-y-2 max-h-[280px] overflow-y-auto pr-1 flex-1 min-h-0">
-              {payoutEvents.map((e, i) => (
-                <li
-                  key={`${e.name}-${e.date}-${i}-${e.estimated ? 'e' : 'a'}`}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-bg/40 outline outline-1 outline-border/50 px-4 py-3 text-xs font-mono font-bold"
-                >
-                  <span className="text-text-p text-sm font-sans font-bold max-w-[55%] truncate" title={e.name}>
-                    {e.name}
-                  </span>
-                  <span className="flex items-center gap-2 shrink-0 tabular-nums text-xs text-text-s/80">
-                    {formatDateFi(e.date)}
-                    {e.estimated ? (
-                      <span className="text-[9px] text-text-s/45 font-mono uppercase tracking-widest">est.</span>
-                    ) : null}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className="overflow-x-auto -mx-2 px-2 flex-1 min-h-0 max-h-[300px] overflow-y-auto">
+              <table className="w-full border-separate border-spacing-y-2">
+                <thead>
+                  <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.25em] opacity-50">
+                    <th className="pl-5 pr-6 py-2">Asset</th>
+                    <th className="px-5 py-2 text-right">Payout date</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs font-mono font-bold">
+                  {payoutEvents.map((e, i) => (
+                    <tr
+                      key={`${e.name}-${e.date}-${i}-${e.estimated ? 'e' : 'a'}`}
+                      className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
+                    >
+                      <td className="pl-5 pr-6 py-3 rounded-l-2xl">
+                        <div className="text-text-p text-sm font-sans truncate" title={e.name}>
+                          {e.name}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-right rounded-r-2xl whitespace-nowrap tabular-nums text-text-p">
+                        {formatDateFi(e.date)}
+                        {e.estimated ? (
+                          <span className="ml-2 text-[9px] text-text-s/45 font-mono uppercase tracking-widest">est.</span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>
 
-      <div className="glass-panel p-8 bg-[#0e0e10]/80">
-        <div className="flex items-center justify-between mb-2">
+      <div className={PANEL}>
+        <div className={SECTION_HEAD}>
           <h3 className="card-title mb-0">Holdings detail</h3>
-          <div className="relative shrink-0" ref={holdingsMenuRef}>
-            <button
-              type="button"
-              onClick={() => setHoldingsMenuOpen((o) => !o)}
-              className="p-2.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all border border-transparent hover:border-border/50"
-              aria-label="Holdings detail menu"
-            >
-              <MoreVertical className="w-4 h-4" />
-            </button>
-            {holdingsMenuOpen && (
-              <div className="absolute right-0 top-full mt-2 z-50 min-w-[200px] rounded-xl border border-border bg-card shadow-2xl py-1">
-                <button
-                  type="button"
-                  onClick={openManualModal}
-                  disabled={assets.length === 0}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-text-p hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none"
-                >
-                  <Plus className="w-3.5 h-3.5 text-accent" />
-                  Add dividend estimate
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={openManualModal}
+            disabled={assets.length === 0}
+            className="px-3 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 active:scale-[0.98] transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add dividend estimate
+          </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-separate border-spacing-y-2">
+        <div className="overflow-x-auto -mx-2 px-2">
+          <table className="w-full min-w-[880px] table-fixed text-left border-separate border-spacing-y-2 border-spacing-x-1">
+            <colgroup>
+              <col className="w-[28%]" />
+              <col className="w-[10%]" />
+              <col className="w-[14%]" />
+              <col className="w-[16%]" />
+              <col className="w-[12%]" />
+              <col className="w-[12%]" />
+              <col className="w-[96px]" />
+            </colgroup>
             <thead>
               <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.25em] opacity-50">
-                <th className="px-4 py-2">Name</th>
-                <th className="px-4 py-2 text-right">Yield %</th>
-                <th className="px-4 py-2 text-right">Annual / share</th>
-                <th className="px-4 py-2 text-right">Est. annual income</th>
-                <th className="px-4 py-2 text-right whitespace-nowrap">Pay freq.</th>
-                <th className="px-4 py-2 text-right whitespace-nowrap">Next / anchor</th>
-                <th className="px-4 py-2 text-right w-24" />
+                <th className="pl-5 pr-6 py-2">Asset</th>
+                <th className="px-5 py-2 text-right">Yield %</th>
+                <th className="px-6 py-2 text-right">Annual / share</th>
+                <th className="px-6 py-2 text-right">Est. annual income</th>
+                <th className="px-5 py-2 text-right whitespace-nowrap">Pay freq.</th>
+                <th className="px-5 py-2 text-right whitespace-nowrap">Next / anchor</th>
+                <th className="w-24 min-w-[96px] px-2 py-2" aria-hidden />
               </tr>
             </thead>
             <tbody className="text-xs font-mono font-bold">
@@ -652,46 +669,51 @@ export function DividendsEngine({
                 </tr>
               ) : (
                 <>
-                  {dividendPayingRows.map(({ row, index }) => {
-                    const a = assets[index];
-                    const tick = a ? displayTickerForAsset(a) : null;
-                    const feedYld = feedYieldPercent(row, a, marketPrices, exchangeRates);
-                    const annualShareEur = feedAnnualPerShareEur(row, exchangeRates);
-                    return (
-                    <tr
-                      key={`api-${index}-${row.symbol}`}
-                      className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
-                    >
-                      <td className="px-4 py-3 rounded-l-2xl max-w-[220px]">
-                        <div className="text-text-p text-sm font-sans font-bold truncate" title={row.name}>
-                          {row.name}
-                        </div>
-                        {tick ? (
-                          <div className="text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
-                            {tick}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums text-text-p">
-                        {feedYld != null ? `${feedYld.toFixed(2)}%` : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums text-text-s/60">
-                        {annualShareEur != null ? formatCurrency(annualShareEur, 'EUR') : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums text-text-p tracking-tighter">
-                        {formatCurrency(row.estimatedAnnualIncomeEur, 'EUR')}
-                      </td>
-                      <td className="px-4 py-3 text-right text-text-s/60 text-[11px] uppercase tracking-wider">
-                        {row.payoutFrequency ? frequencyLabel(row.payoutFrequency) : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums text-text-s/80 text-[11px]">
-                        {formatDateFi(nextFeedPayoutDate(row))}
-                      </td>
-                      <td className="px-4 py-3 text-right rounded-r-2xl" />
-                    </tr>
-                  );
-                  })}
-                  {manualRows.map((m) => {
+                  {holdingsDetailRows.map((entry) => {
+                    if (entry.kind === 'api') {
+                      const { row, index } = entry;
+                      const a = assets[index];
+                      const tick = a ? displayTickerForAsset(a) : null;
+                      const feedYld = feedYieldPercent(row, a, marketPrices, exchangeRates);
+                      const annualShareEur = feedAnnualPerShareEur(row, exchangeRates);
+                      return (
+                        <tr
+                          key={`api-${index}-${row.symbol}`}
+                          className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
+                        >
+                          <td className="pl-5 pr-6 py-3 rounded-l-2xl">
+                            <div className="min-w-0">
+                              <div className="text-text-p text-sm font-sans truncate" title={row.name}>
+                                {row.name}
+                              </div>
+                              {tick ? (
+                                <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
+                                  {tick}
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
+                            {feedYld != null ? `${feedYld.toFixed(2)}%` : '—'}
+                          </td>
+                          <td className="px-6 py-3 text-right tabular-nums text-text-s/60 whitespace-nowrap">
+                            {annualShareEur != null ? formatCurrency(annualShareEur, 'EUR') : '—'}
+                          </td>
+                          <td className="px-6 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
+                            {formatCurrency(row.estimatedAnnualIncomeEur, 'EUR')}
+                          </td>
+                          <td className="px-5 py-3 text-right text-text-s/60 text-[11px] uppercase tracking-wider whitespace-nowrap">
+                            {row.payoutFrequency ? frequencyLabel(row.payoutFrequency) : '—'}
+                          </td>
+                          <td className="px-5 py-3 text-right tabular-nums text-text-s/80 text-[11px] whitespace-nowrap">
+                            {formatDateFi(nextFeedPayoutDate(row))}
+                          </td>
+                          <td className="w-24 min-w-[96px] px-2 py-3 text-right rounded-r-2xl" />
+                        </tr>
+                      );
+                    }
+
+                    const m = entry.m;
                     const yld = manualYieldPercent(m, assets, marketPrices, exchangeRates);
                     const perShareEur = manualAnnualDividendPerShareEur(m, assets);
                     const linkedAs = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0] : undefined;
@@ -701,52 +723,54 @@ export function DividendsEngine({
                         key={m.id}
                         className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl"
                       >
-                        <td className="px-4 py-3 rounded-l-2xl max-w-[220px]">
-                          <div className="text-text-p text-sm font-sans font-bold truncate" title={title}>
-                            {title}
+                        <td className="pl-5 pr-6 py-3 rounded-l-2xl">
+                          <div className="min-w-0">
+                            <div className="text-text-p text-sm font-sans truncate" title={title}>
+                              {title}
+                            </div>
+                            {linkedAs ? (
+                              <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
+                                {displayTickerForAsset(linkedAs)}
+                              </div>
+                            ) : (
+                              <div className="mt-0.5 text-[9px] text-text-s/50 font-mono uppercase tracking-widest">
+                                Link holding on edit
+                              </div>
+                            )}
                           </div>
-                          {linkedAs ? (
-                            <div className="text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
-                              {displayTickerForAsset(linkedAs)}
-                            </div>
-                          ) : (
-                            <div className="text-[9px] text-text-s/50 font-mono uppercase tracking-widest">
-                              Link holding on edit
-                            </div>
-                          )}
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-text-p">
+                        <td className="px-5 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
                           {yld != null ? `${yld.toFixed(2)}%` : '—'}
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-text-s/60">
+                        <td className="px-6 py-3 text-right tabular-nums text-text-s/60 whitespace-nowrap">
                           {perShareEur != null ? formatCurrency(perShareEur, 'EUR') : '—'}
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-text-p tracking-tighter">
+                        <td className="px-6 py-3 text-right tabular-nums text-text-p whitespace-nowrap">
                           {formatCurrency(m.annualIncomeEur, 'EUR')}
                         </td>
-                        <td className="px-4 py-3 text-right text-text-s/60 text-[11px] uppercase tracking-wider">
+                        <td className="px-5 py-3 text-right text-text-s/60 text-[11px] uppercase tracking-wider whitespace-nowrap">
                           {frequencyLabel(m.payoutFrequency)}
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-text-s/80 text-[11px]">
+                        <td className="px-5 py-3 text-right tabular-nums text-text-s/80 text-[11px] whitespace-nowrap">
                           {formatDateFi(m.payoutAnchorDate)}
                         </td>
-                        <td className="px-4 py-3 text-right rounded-r-2xl">
-                          <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <td className="w-24 min-w-[96px] px-2 py-3 text-right rounded-r-2xl">
+                          <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
                               type="button"
                               onClick={() => openEditManual(m)}
-                              className="p-2.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all"
+                              className="p-2 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
                               aria-label="Edit manual position"
                             >
-                              <Pencil className="w-4 h-4" />
+                              <Pencil className="w-3.5 h-3.5" />
                             </button>
                             <button
                               type="button"
                               onClick={() => removeManual(m.id)}
-                              className="p-2.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all"
+                              className="p-2 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
                               aria-label="Remove manual position"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </td>

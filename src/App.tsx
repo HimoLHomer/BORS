@@ -34,13 +34,14 @@ import {
   type AllocationLabelOffset,
   type AllocationChromePrefs,
 } from './allocationPieLabels';
+import { AllocationPieDefs, allocationPieSliceChrome } from './allocationPieChrome';
 import { 
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Treemap,
 } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
-import { formatCurrency } from './formatCurrency';
+import { formatCurrency, fxToEur, holdingQuoteFxToEur } from './formatCurrency';
 import { formatDateFi, formatShortMonthDayFi, formatTimeFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 
@@ -334,6 +335,7 @@ export default function App() {
   >(null);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
+  const [quoteCurrencies, setQuoteCurrencies] = useState<Record<string, string>>({});
   const [marketChanges, setMarketChanges] = useState<Record<string, number>>({});
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ 'EUR': 1 });
   const [apiStatus, setApiStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
@@ -533,15 +535,18 @@ export default function App() {
         });
         const data = await res.json();
         const newPrices: Record<string, number> = {};
+        const newQuoteCurrencies: Record<string, string> = {};
         const newChanges: Record<string, number> = {};
         if (data.quotes) {
           data.quotes.forEach((item: any) => {
             if (item.price) newPrices[item.symbol] = item.price;
+            if (item.currency) newQuoteCurrencies[item.symbol] = String(item.currency).toUpperCase();
             if (item.changePercent !== undefined) newChanges[item.symbol] = item.changePercent;
           });
         }
         if (data.rates) setExchangeRates(data.rates);
         setMarketPrices(prev => ({ ...prev, ...newPrices }));
+        setQuoteCurrencies(prev => ({ ...prev, ...newQuoteCurrencies }));
         setMarketChanges(prev => ({ ...prev, ...newChanges }));
       } catch (e) {
         console.warn("Backend feed connection limited. Using local simulation vectors.");
@@ -583,11 +588,11 @@ export default function App() {
 
   const stats: PortfolioStats = assets.reduce((acc, asset) => {
     const livePrice = marketPrices[asset.symbol] || asset.averagePrice;
-    const rate = exchangeRates[asset.currency] || 1;
-    
-    // Convert to EUR for total stats
-    const valInEur = (asset.quantity * livePrice) * rate;
-    const costInEur = (asset.quantity * asset.averagePrice) * rate;
+    const priceFx = holdingQuoteFxToEur(asset.symbol, asset.currency, quoteCurrencies, exchangeRates);
+    const costFx = fxToEur(asset.currency, exchangeRates) || 1;
+
+    const valInEur = asset.quantity * livePrice * priceFx;
+    const costInEur = asset.quantity * asset.averagePrice * costFx;
     
     acc.totalValue += valInEur;
     acc.totalCost += costInEur;
@@ -616,7 +621,9 @@ export default function App() {
   const allocationSlices = useMemo(() => {
     const assetRows = assets.map((a) => {
       const val =
-        a.quantity * (marketPrices[a.symbol] || a.averagePrice) * (exchangeRates[a.currency] || 1);
+        a.quantity *
+        (marketPrices[a.symbol] || a.averagePrice) *
+        holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
       return { key: a.id || a.symbol, name: a.name, value: val };
     });
     const c = cashLineEur;
@@ -631,12 +638,7 @@ export default function App() {
       rows.sort((a, b) => b.value - a.value);
     }
     return rows;
-  }, [assets, marketPrices, exchangeRates, cashLineEur]);
-
-  const PIE_COLORS = ['#002159', '#003a94', '#0055d4', '#1a75ff', '#66a3ff', '#aaccff', '#e0e9ff'];
-  const PIE_COLOR_CASH = '#16a34a';
-  const slicePieColor = (key: string, index: number) =>
-    key === 'cash' ? PIE_COLOR_CASH : PIE_COLORS[index % 7];
+  }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur]);
 
   const allocationPieWrapRef = useRef<HTMLDivElement>(null);
   const [allocationPieBox, setAllocationPieBox] = useState({ width: 0, height: 0 });
@@ -1278,9 +1280,13 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    <div ref={allocationPieWrapRef} className="flex-1 w-full min-h-[300px] min-w-0">
+                    <div
+                      ref={allocationPieWrapRef}
+                      className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0"
+                    >
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart margin={{ ...allocChartMargins }}>
+                          <AllocationPieDefs />
                           <Pie
                             key={
                               allocationSlices.length > 0
@@ -1294,15 +1300,15 @@ export default function App() {
                             }
                             cx="50%"
                             cy="50%"
-                            innerRadius={0}
+                            innerRadius="36%"
                             outerRadius="58%"
                             dataKey="value"
                             nameKey="name"
                             startAngle={90}
                             endAngle={-270}
-                            paddingAngle={0.6}
-                            stroke="rgba(0,0,0,0.14)"
-                            strokeWidth={0.5}
+                            paddingAngle={1.2}
+                            stroke="rgba(15, 23, 42, 0.85)"
+                            strokeWidth={1.5}
                             isAnimationActive={false}
                             label={
                               allocationSlices.length > 0 ? allocationPieLabelRenderer : false
@@ -1310,11 +1316,23 @@ export default function App() {
                             labelLine={false}
                           >
                             {allocationSlices.length > 0 ? (
-                              allocationSlices.map((row, index) => (
-                                <Cell key={row.key} fill={slicePieColor(row.key, index)} strokeWidth={0} />
-                              ))
+                              allocationSlices.map((row, index) => {
+                                const chrome = allocationPieSliceChrome(
+                                  row.key,
+                                  index,
+                                  allocationSlices.length
+                                );
+                                return (
+                                  <Cell
+                                    key={row.key}
+                                    fill={`url(#${chrome.gradientId})`}
+                                    stroke={chrome.stroke}
+                                    strokeWidth={2}
+                                  />
+                                );
+                              })
                             ) : (
-                              <Cell fill="var(--color-border)" stroke="none" />
+                              <Cell fill="rgba(39, 39, 42, 0.6)" stroke="rgba(59, 130, 246, 0.2)" />
                             )}
                           </Pie>
                           <Tooltip
@@ -1362,29 +1380,52 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-separate border-spacing-y-2">
+                  <div className="overflow-x-auto -mx-2 px-2">
+                    <table className="w-full min-w-[920px] table-fixed text-left border-separate border-spacing-y-2 border-spacing-x-1">
+                      <colgroup>
+                        <col className="w-[26%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[13%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[96px]" />
+                      </colgroup>
                       <thead>
                         <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.25em] opacity-50">
-                          <th className="px-4 py-2">Asset</th>
-                          <th className="px-4 py-2">Shares</th>
-                          <th className="px-4 py-2">Total Value</th>
-                          <th className="px-4 py-2">Cost Basis</th>
-                          <th className="px-4 py-2">Total Gain</th>
-                          <th className="px-4 py-2">24h Change</th>
-                          <th className="px-4 py-2 text-right"></th>
+                          <th className="pl-5 pr-6 py-2">Asset</th>
+                          <th className="px-5 py-2 text-right">Shares</th>
+                          <th className="pl-8 pr-5 py-2 text-right">Share price</th>
+                          <th className="px-6 py-2 text-right">Total value</th>
+                          <th className="px-6 py-2 text-right">Cost basis</th>
+                          <th className="px-5 py-2 text-right">Total gain</th>
+                          <th className="px-5 py-2 text-right">24h</th>
+                          <th className="w-24 min-w-[96px] px-2 py-2" aria-hidden />
                         </tr>
                       </thead>
                       <tbody className="text-xs font-mono font-bold">
                         {[...assets].sort((a, b) => {
-                          const valA = (a.quantity * (marketPrices[a.symbol] || a.averagePrice)) * (exchangeRates[a.currency] || 1);
-                          const valB = (b.quantity * (marketPrices[b.symbol] || b.averagePrice)) * (exchangeRates[b.currency] || 1);
+                          const valA =
+                            a.quantity *
+                            (marketPrices[a.symbol] || a.averagePrice) *
+                            holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
+                          const valB =
+                            b.quantity *
+                            (marketPrices[b.symbol] || b.averagePrice) *
+                            holdingQuoteFxToEur(b.symbol, b.currency, quoteCurrencies, exchangeRates);
                           return valB - valA;
                         }).map((item, index) => {
                           const price = marketPrices[item.symbol] || item.averagePrice;
-                          const rate = exchangeRates[item.currency] || 1;
-                          const priceInEur = price * rate;
-                          const costBasisInEur = (item.quantity * item.averagePrice) * rate;
+                          const priceFx = holdingQuoteFxToEur(
+                            item.symbol,
+                            item.currency,
+                            quoteCurrencies,
+                            exchangeRates
+                          );
+                          const costFx = fxToEur(item.currency, exchangeRates) || 1;
+                          const priceInEur = price * priceFx;
+                          const costBasisInEur = item.quantity * item.averagePrice * costFx;
                           const totalValue = item.quantity * priceInEur;
                           const totalGainInEur = totalValue - costBasisInEur;
                           const totalGainPercent = costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
@@ -1392,21 +1433,22 @@ export default function App() {
                           
                           return (
                             <tr key={item.id || `row-${index}`} className="group bg-bg/40 hover:bg-bg transition-all outline outline-1 outline-border/50 hover:outline-accent/30 rounded-2xl">
-                              <td className="px-4 py-3 rounded-l-2xl">
-                                <div className="flex items-center">
-                                  <div>
-                                    <div className="text-text-p text-sm font-sans">{item.name}</div>
-                                    <div className="text-[9px] text-text-s/60 font-mono uppercase tracking-widest">
-                                      {item.displaySymbol || (item.symbol.includes('.') ? item.symbol.split('.')[0] : item.symbol)}
-                                    </div>
+                              <td className="pl-5 pr-6 py-3 rounded-l-2xl">
+                                <div className="min-w-0">
+                                  <div className="text-text-p text-sm font-sans truncate">{item.name}</div>
+                                  <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest">
+                                    {item.displaySymbol || (item.symbol.includes('.') ? item.symbol.split('.')[0] : item.symbol)}
                                   </div>
                                 </div>
                               </td>
-                              <td className="px-4 py-3 text-text-p tabular-nums">{item.quantity}</td>
-                              <td className="px-4 py-3 text-text-p tabular-nums tracking-tighter">{formatCurrency(totalValue, 'EUR')}</td>
-                              <td className="px-4 py-3 text-text-s/40 tabular-nums">{formatCurrency(costBasisInEur, 'EUR')}</td>
-                              <td className="px-4 py-3 tabular-nums">
-                                <div className={totalGainInEur >= 0 ? 'text-green' : 'text-red'}>
+                              <td className="px-5 py-3 text-right text-text-p tabular-nums whitespace-nowrap">{item.quantity}</td>
+                              <td className="pl-8 pr-5 py-3 text-right text-text-p tabular-nums whitespace-nowrap">
+                                {formatCurrency(priceInEur, 'EUR')}
+                              </td>
+                              <td className="px-6 py-3 text-right text-text-p tabular-nums whitespace-nowrap">{formatCurrency(totalValue, 'EUR')}</td>
+                              <td className="px-6 py-3 text-right text-text-s/40 tabular-nums whitespace-nowrap">{formatCurrency(costBasisInEur, 'EUR')}</td>
+                              <td className="px-5 py-3 text-right tabular-nums whitespace-nowrap">
+                                <div className={`inline-block text-right ${totalGainInEur >= 0 ? 'text-green' : 'text-red'}`}>
                                   <div className="text-[11px] font-sans font-bold tabular-nums">
                                     {formatCurrency(totalGainInEur, 'EUR')}
                                   </div>
@@ -1416,28 +1458,32 @@ export default function App() {
                                   </div>
                                 </div>
                               </td>
-                              <td className="px-4 py-3 tabular-nums">
-                                <span className={`flex items-center gap-1 ${change >= 0 ? 'text-green' : 'text-red'}`}>
-                                  {change >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                              <td className="px-5 pr-3 py-3 text-right tabular-nums whitespace-nowrap">
+                                <span className={`inline-flex items-center justify-end gap-1 ${change >= 0 ? 'text-green' : 'text-red'}`}>
+                                  {change >= 0 ? <TrendingUp className="w-3 h-3 shrink-0" /> : <TrendingDown className="w-3 h-3 shrink-0" />}
                                   {Math.abs(change).toFixed(2)}%
                                 </span>
                               </td>
-                              <td className="px-4 py-3 text-right rounded-r-2xl">
-                                <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                                  <button 
+                              <td className="w-24 min-w-[96px] px-2 py-3 text-right rounded-r-2xl">
+                                <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    type="button"
                                     onClick={() => {
                                       setEditingAsset(item);
                                       setIsModalOpen(true);
                                     }}
-                                    className="p-2.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all"
+                                    className="p-2 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
+                                    aria-label="Edit holding"
                                   >
-                                    <Pencil className="w-4 h-4" />
+                                    <Pencil className="w-3.5 h-3.5" />
                                   </button>
-                                  <button 
+                                  <button
+                                    type="button"
                                     onClick={() => removeAsset(item.id!)}
-                                    className="p-2.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all"
+                                    className="p-2 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
+                                    aria-label="Remove holding"
                                   >
-                                    <Trash2 className="w-4 h-4" />
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               </td>
@@ -1446,7 +1492,7 @@ export default function App() {
                         })}
                         {assets.length === 0 && (
                           <tr className="bg-bg/40 opacity-20">
-                            <td colSpan={6} className="px-6 py-20 text-center rounded-2xl">
+                            <td colSpan={8} className="px-6 py-20 text-center rounded-2xl">
                               <div className="flex flex-col items-center gap-4">
                                 <Wallet className="w-12 h-12" />
                                 <p className="text-[10px] uppercase font-bold tracking-widest">No Holdings Registered</p>

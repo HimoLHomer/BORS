@@ -335,7 +335,7 @@ export function buildAllocationPieCalloutMap(
   return result;
 }
 
-const LINE_STROKE = 'rgba(255,255,255,0.42)';
+const LINE_STROKE = 'rgba(96, 165, 250, 0.72)';
 const HIT_STROKE = 'rgba(255,255,255,0.012)';
 
 export function allocationPieSliceKey(props: PieLabelRenderProps): string | null {
@@ -416,7 +416,7 @@ export function renderAllocationPieCalloutFromLayout(
         d={g.pathD}
         fill="none"
         stroke={LINE_STROKE}
-        strokeWidth={1}
+        strokeWidth={1.25}
         strokeLinecap="round"
         strokeLinejoin="miter"
         style={{ pointerEvents: 'none' }}
@@ -426,9 +426,9 @@ export function renderAllocationPieCalloutFromLayout(
         y={g.nameY}
         textAnchor={g.anchor}
         dominantBaseline="middle"
-        fill="#ffffff"
-        stroke="rgba(0, 17, 55, 0.5)"
-        strokeWidth={0.4}
+        fill="#f4f4f5"
+        stroke="rgba(29, 78, 216, 0.55)"
+        strokeWidth={0.5}
         paintOrder="stroke fill"
         style={{ fontSize: g.nameFont, fontWeight: 700, pointerEvents: 'none', userSelect: 'none' }}
       >
@@ -439,9 +439,9 @@ export function renderAllocationPieCalloutFromLayout(
         y={g.pctY}
         textAnchor={g.anchor}
         dominantBaseline="middle"
-        fill="rgba(255, 255, 255, 0.9)"
-        stroke="rgba(0, 17, 55, 0.45)"
-        strokeWidth={0.35}
+        fill="#60a5fa"
+        stroke="rgba(15, 23, 42, 0.65)"
+        strokeWidth={0.4}
         paintOrder="stroke fill"
         style={{
           fontSize: g.pctFont,
