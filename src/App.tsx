@@ -18,9 +18,10 @@ import {
   Download,
   Upload,
   History,
-  MoreVertical,
+  Copy,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { BorsMark } from './BorsMark';
 import { Asset, PortfolioStats, HistoryPoint } from './types';
 import {
   buildAllocationPieCalloutMap,
@@ -41,15 +42,46 @@ import {
 } from 'recharts';
 import { formatCurrency, fxToEur, holdingQuoteFxToEur } from './formatCurrency';
 import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
-import { formatDateFi, formatShortMonthDayFi, formatTimeFi, todayIsoDateHelsinki } from './formatDate';
+import { formatDateFi, formatShortMonthDayFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
 import { DataListTable } from './DataListTable';
+import { buildTableSkeletonRows } from './SkeletonPulse';
 import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
 import { EurAmountInput } from './EurAmountField';
+import { AssetNameCell } from './AssetNameCell';
+import { displayTickerForAsset } from './assetLogo';
 import { MarketIntelligence } from './MarketIntelligence';
+import { fetchJson } from './apiFetch';
 
 // --- Types & Enums ---
+
+const BROWSER_ASSETS_KEY = 'alpha_os_assets';
+const BROWSER_HISTORY_KEY = 'alpha_os_history';
+
+function readBrowserPortfolioBackup(): { assets: Asset[]; history: HistoryPoint[] } | null {
+  try {
+    const raw = localStorage.getItem(BROWSER_ASSETS_KEY);
+    const rawH = localStorage.getItem(BROWSER_HISTORY_KEY);
+    if (!raw && !rawH) return null;
+    const assets = raw ? (JSON.parse(raw) as Asset[]) : [];
+    const history = rawH ? (JSON.parse(rawH) as HistoryPoint[]) : [];
+    if (!Array.isArray(assets) || !Array.isArray(history)) return null;
+    return { assets, history };
+  } catch {
+    return null;
+  }
+}
+
+function shouldMigrateBrowserStorage(
+  sqliteAssetCount: number,
+  sqliteHistoryCount: number,
+  browser: { assets: Asset[]; history: HistoryPoint[] }
+): boolean {
+  if (browser.assets.length === 0 && browser.history.length === 0) return false;
+  if (sqliteAssetCount === 0 && sqliteHistoryCount === 0) return true;
+  return browser.assets.length > sqliteAssetCount || browser.history.length > sqliteHistoryCount;
+}
 
 enum View {
   DASHBOARD = 'DASHBOARD',
@@ -279,7 +311,10 @@ const LoadingScreen = () => (
   <div className="fixed inset-0 bg-bg flex items-center justify-center z-50">
     <div className="flex flex-col items-center gap-4">
       <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
-      <div className="font-black text-2xl tracking-tighter text-text-p uppercase">BÖRS</div>
+      <div className="flex items-center gap-2 leading-none">
+        <BorsMark className="w-7 h-7 shrink-0 opacity-90" />
+        <span className="font-black text-2xl tracking-tighter text-text-p uppercase">BÖRS</span>
+      </div>
       <p className="text-[10px] text-text-s font-mono uppercase tracking-widest animate-pulse">Initializing Market Feed</p>
     </div>
   </div>
@@ -293,10 +328,9 @@ const Header = ({
   feedDetail: string | null;
 }) => (
   <header className="border-b border-border bg-bg px-6 py-4 flex items-center justify-between">
-    <div className="flex items-center gap-2">
-      <div className="font-black text-xl tracking-tighter flex items-center gap-1 text-text-p uppercase">
-        BÖRS
-      </div>
+    <div className="flex items-center gap-2 leading-none">
+      <BorsMark className="w-6 h-6 shrink-0 opacity-90" />
+      <span className="font-black text-xl tracking-tighter text-text-p uppercase">BÖRS</span>
     </div>
     
     <div className="flex items-center gap-8">
@@ -304,9 +338,15 @@ const Header = ({
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             Feed: {apiStatus === 'connected' ? (
-              <span className="text-green flex items-center gap-1.5"><RefreshCcw className="w-3 h-3 animate-spin-slow" />Yahoo Live</span>
+              <span className="text-green flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-green shrink-0" aria-hidden />
+                Yahoo Live
+              </span>
             ) : apiStatus === 'connecting' ? (
-              <span className="text-text-s flex items-center gap-1.5 animate-pulse">Connecting...</span>
+              <span className="text-text-s flex items-center gap-1.5">
+                <RefreshCcw className="w-3 h-3 animate-spin shrink-0" aria-hidden />
+                Connecting…
+              </span>
             ) : (
               <span
                 className="text-red flex items-center gap-1.5 max-w-[min(420px,45vw)] truncate cursor-help"
@@ -317,7 +357,6 @@ const Header = ({
             )}
           </div>
         </div>
-        <div className="hidden lg:block border-l border-border pl-8">System Time: {formatTimeFi()}</div>
       </div>
     </div>
   </header>
@@ -328,6 +367,8 @@ const Header = ({
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [dataStoreHint, setDataStoreHint] = useState<string>('SQLite');
+  const [dataStorePath, setDataStorePath] = useState<string | null>(null);
+  const [dbPathCopied, setDbPathCopied] = useState(false);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -336,11 +377,14 @@ export default function App() {
   >(null);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
+  const [initialQuotesPending, setInitialQuotesPending] = useState(false);
   const [quoteCurrencies, setQuoteCurrencies] = useState<Record<string, string>>({});
   const [marketChanges, setMarketChanges] = useState<Record<string, number>>({});
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ 'EUR': 1 });
   const [apiStatus, setApiStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [feedDetail, setFeedDetail] = useState<string | null>(null);
+  const [portfolioLoadError, setPortfolioLoadError] = useState<string | null>(null);
+  const [browserRecoverMsg, setBrowserRecoverMsg] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
   const importBackupRef = useRef<HTMLInputElement>(null);
   /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
@@ -421,14 +465,21 @@ export default function App() {
     const pf = { signal, cache: 'no-store' as RequestCache };
     (async () => {
       try {
+        if (!cancelled) setPortfolioLoadError(null);
         const statusRes = await fetch('/api/portfolio/status', pf);
-        if (statusRes.ok) {
-          const s = await statusRes.json();
-          if (s.dbPath && typeof s.dbPath === 'string') {
-            const short = s.dbPath.replace(/\\/g, '/').split('/').slice(-2).join('/');
-            if (!cancelled) setDataStoreHint(`SQLite (${short})`);
-          }
+        if (!statusRes.ok) {
+          throw new Error(
+            `Portfolio API unavailable (HTTP ${statusRes.status}). Run npm run dev and open http://localhost:3000`
+          );
         }
+        const s = await statusRes.json();
+        if (s.dbPath && typeof s.dbPath === 'string') {
+            const short = s.dbPath.replace(/\\/g, '/').split('/').slice(-2).join('/');
+            if (!cancelled) {
+              setDataStoreHint(`SQLite (${short})`);
+              setDataStorePath(s.dbPath);
+            }
+          }
 
         let snapshot = portfolioMutationEpochRef.current;
         let assetsData: Asset[] = [];
@@ -436,24 +487,32 @@ export default function App() {
         let hydrated = false;
 
         for (let attempt = 0; attempt < 12 && !cancelled; attempt++) {
-          assetsData = await fetch('/api/portfolio/assets', pf).then((r) => r.json());
-          historyData = await fetch('/api/portfolio/history', pf).then((r) => r.json());
+          const assetsRes = await fetch('/api/portfolio/assets', pf);
+          const historyRes = await fetch('/api/portfolio/history', pf);
+          if (!assetsRes.ok || !historyRes.ok) {
+            throw new Error(
+              `Could not load portfolio (assets HTTP ${assetsRes.status}, history HTTP ${historyRes.status})`
+            );
+          }
+          assetsData = await fetchJson<Asset[]>(assetsRes);
+          historyData = await fetchJson<HistoryPoint[]>(historyRes);
 
-          if (assetsData.length === 0 && historyData.length === 0) {
-            const raw = localStorage.getItem('alpha_os_assets');
-            const rawH = localStorage.getItem('alpha_os_history');
-            if (raw || rawH) {
-              await fetch('/api/portfolio/import?mode=merge', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  assets: raw ? (JSON.parse(raw) as Asset[]) : [],
-                  history: rawH ? (JSON.parse(rawH) as HistoryPoint[]) : [],
-                }),
-                ...pf,
-              });
-              assetsData = await fetch('/api/portfolio/assets', pf).then((r) => r.json());
-              historyData = await fetch('/api/portfolio/history', pf).then((r) => r.json());
+          const browser = readBrowserPortfolioBackup();
+          if (browser && shouldMigrateBrowserStorage(assetsData.length, historyData.length, browser)) {
+            await fetch('/api/portfolio/import?mode=merge', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(browser),
+              ...pf,
+            });
+            const assetsRes2 = await fetch('/api/portfolio/assets', pf);
+            const historyRes2 = await fetch('/api/portfolio/history', pf);
+            assetsData = await fetchJson<Asset[]>(assetsRes2);
+            historyData = await fetchJson<HistoryPoint[]>(historyRes2);
+            if (!cancelled) {
+              setBrowserRecoverMsg(
+                `Imported ${browser.assets.length} holding(s) and ${browser.history.length} history point(s) from this browser’s saved copy.`
+              );
             }
           }
 
@@ -508,6 +567,8 @@ export default function App() {
       } catch (e) {
         if (isAbortError(e)) return;
         console.error('Portfolio load failed:', e);
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!cancelled) setPortfolioLoadError(msg);
       } finally {
         if (!cancelled && portfolioBootstrapGenerationRef.current === gen) {
           uiPrefsRemoteHydratedRef.current = true;
@@ -524,10 +585,14 @@ export default function App() {
 
   // Real-time market data: Integrated Yahoo Finance Backend
   useEffect(() => {
-    const fetchRealData = async () => {
+    const fetchRealData = async (isInitial: boolean) => {
       const symbols = assets.map(a => a.symbol);
-      if (symbols.length === 0) return;
+      if (symbols.length === 0) {
+        setInitialQuotesPending(false);
+        return;
+      }
 
+      if (isInitial) setInitialQuotesPending(true);
       try {
         const res = await fetch('/api/quotes', {
           method: 'POST',
@@ -551,29 +616,33 @@ export default function App() {
         setMarketChanges(prev => ({ ...prev, ...newChanges }));
       } catch (e) {
         console.warn("Backend feed connection limited. Using local simulation vectors.");
+      } finally {
+        if (isInitial) setInitialQuotesPending(false);
       }
     };
 
-    fetchRealData();
-    const dataInterval = setInterval(fetchRealData, 15000); // Fetch real data every 15s
-    
-    const heartbeatInterval = setInterval(() => {
-      setMarketPrices(prev => {
-        const next = { ...prev };
-        assets.forEach(asset => {
-          const base = prev[asset.symbol] || asset.averagePrice;
-          const volatility = 0.0003; // Extremely subtle heartbeat for professional feel
-          next[asset.symbol] = base * (1 + (Math.random() - 0.5) * volatility);
-        });
-        return next;
-      });
-    }, 5000); 
+    void fetchRealData(true);
+    const dataInterval = setInterval(() => void fetchRealData(false), 15000);
 
     return () => {
       clearInterval(dataInterval);
-      clearInterval(heartbeatInterval);
     };
   }, [assets]);
+
+  const holdingsTableSkeletonRows = useMemo(
+    () =>
+      buildTableSkeletonRows(Math.min(Math.max(assets.length, 4), 10), [
+        'asset',
+        'shares',
+        'price',
+        'value',
+        'cost',
+        'gain',
+        'today',
+        'actions',
+      ]),
+    [assets.length]
+  );
 
   const removeAsset = async (id: string) => {
     try {
@@ -618,6 +687,22 @@ export default function App() {
     stats.dailyChange = 0;
     stats.dailyChangePercent = 0;
   }
+
+  const portfolioChartData = useMemo(() => {
+    const todayStr = todayIsoDateHelsinki();
+    const baseData = history
+      .filter((p, i, self) => i === self.findIndex((t) => t.date === p.date))
+      .map((p) => ({
+        date: p.date,
+        name: formatShortMonthDayFi(p.date),
+        value: p.value,
+      }));
+    const hasStoredToday = history.some((p) => p.date === todayStr);
+    if (!hasStoredToday && stats.totalValue > 0) {
+      baseData.push({ date: todayStr, name: 'Today', value: stats.totalValue });
+    }
+    return baseData;
+  }, [history, stats.totalValue]);
 
   const portfolioTodayGain = useMemo(() => {
     let todayGainEur = 0;
@@ -875,6 +960,51 @@ export default function App() {
     return sorted;
   }, [history, stats.totalValue]);
 
+  const copyDbPath = async () => {
+    const path = dataStorePath ?? dataStoreHint;
+    if (!path) return;
+    try {
+      await navigator.clipboard.writeText(path);
+      setDbPathCopied(true);
+      window.setTimeout(() => setDbPathCopied(false), 2000);
+    } catch {
+      setDbPathCopied(false);
+    }
+  };
+
+  const recoverFromBrowserStorage = async () => {
+    const browser = readBrowserPortfolioBackup();
+    if (!browser || (browser.assets.length === 0 && browser.history.length === 0)) {
+      setBrowserRecoverMsg(
+        'No older portfolio found in this browser (keys alpha_os_assets / alpha_os_history). Try Import JSON or another browser profile.'
+      );
+      return;
+    }
+    try {
+      const res = await fetch('/api/portfolio/import?mode=merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(browser),
+      });
+      if (!res.ok) throw new Error(`Import failed (HTTP ${res.status})`);
+      const pf = { cache: 'no-store' as RequestCache };
+      const [a, h] = await Promise.all([
+        fetch('/api/portfolio/assets', pf).then((r) => fetchJson<Asset[]>(r)),
+        fetch('/api/portfolio/history', pf).then((r) => fetchJson<HistoryPoint[]>(r)),
+      ]);
+      setAssets(a);
+      setHistory(dedupeHistoryByDate(h));
+      portfolioMutationEpochRef.current += 1;
+      setPortfolioLoadError(null);
+      setBrowserRecoverMsg(
+        `Recovered ${browser.assets.length} holding(s) and ${browser.history.length} history point(s) from this browser.`
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setBrowserRecoverMsg(`Recovery failed: ${msg}`);
+    }
+  };
+
   const exportPortfolioBackup = async () => {
     try {
       const res = await fetch('/api/portfolio/export');
@@ -1005,9 +1135,26 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-bg overflow-hidden font-sans selection:bg-accent/30">
       <Header apiStatus={apiStatus} feedDetail={feedDetail} />
-      
+      {(portfolioLoadError || browserRecoverMsg) && (
+        <div
+          className={`mx-4 mt-2 px-4 py-3 rounded-xl border text-xs leading-relaxed ${
+            portfolioLoadError
+              ? 'border-red-500/40 bg-red-500/10 text-red-200'
+              : 'border-accent/40 bg-accent/10 text-text-p'
+          }`}
+        >
+          {portfolioLoadError && (
+            <p>
+              <span className="font-bold uppercase tracking-widest text-[10px]">Portfolio not loaded — </span>
+              {portfolioLoadError}
+            </p>
+          )}
+          {browserRecoverMsg && <p className={portfolioLoadError ? 'mt-2' : ''}>{browserRecoverMsg}</p>}
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-20 min-w-[80px] border-r border-border bg-card flex flex-col items-center py-8 gap-8 z-10 shadow-2xl">
+        <aside className="w-20 xl:w-[5.5rem] min-w-[80px] border-r border-border bg-card flex flex-col items-center xl:items-stretch py-8 gap-6 xl:gap-2 xl:px-1.5 z-10 shadow-2xl shrink-0">
           <NavButton 
             active={activeView === View.DASHBOARD} 
             onClick={() => setActiveView(View.DASHBOARD)} 
@@ -1030,7 +1177,7 @@ export default function App() {
             active={activeView === View.MARKET_RECAP} 
             onClick={() => setActiveView(View.MARKET_RECAP)} 
             icon={<Activity className="w-5 h-5" />} 
-            label="Recap" 
+            label="Market" 
           />
           <NavButton 
             active={activeView === View.OPTIONS} 
@@ -1040,7 +1187,11 @@ export default function App() {
           />
         </aside>
 
-        <main className="flex-1 overflow-y-auto scrollbar-hidden technical-grid p-6">
+        <main
+          className={`flex-1 overflow-y-auto scrollbar-hidden p-6 ${
+            activeView === View.OPTIONS ? 'bg-bg' : 'technical-grid'
+          }`}
+        >
           <AnimatePresence mode="wait">
             {activeView === View.DASHBOARD && (
               <motion.div 
@@ -1048,11 +1199,8 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto w-full dashboard-view space-y-4 pb-8"
+                className="max-w-[1600px] mx-auto w-full dashboard-view space-y-4 pb-8"
               >
-                <div>
-                  <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dashboard</h2>
-                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4">
                 {/* Main Portfolio Performance */}
                 <div className="lg:col-span-2 lg:row-span-2 glass-panel p-8 flex flex-col group h-full">
@@ -1145,50 +1293,52 @@ export default function App() {
                     )}
                   </AnimatePresence>
 
-                  <div className="stat-value text-6xl mb-4 flex items-baseline gap-2 tabular-nums">
+                  <div className="stat-value text-6xl font-black tracking-tighter mb-4 flex items-baseline gap-2 tabular-nums">
                     {formatCurrency(stats.totalValue, 'EUR')}
                   </div>
-                  <div className="flex flex-wrap gap-x-8 gap-y-3">
+                  <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                     <div>
-                      <p className="text-[9px] font-bold text-text-s uppercase tracking-widest opacity-60 mb-1">
-                        Today
-                      </p>
+                      <p className="micro-label mb-1">Today</p>
                       <GainDisplay
                         amountEur={portfolioTodayGain.todayGainEur}
                         percent={portfolioTodayGain.todayGainPercent}
                       />
                     </div>
                     <div>
-                      <p className="text-[9px] font-bold text-text-s uppercase tracking-widest opacity-60 mb-1">
-                        Total gain
-                      </p>
+                      <p className="micro-label mb-1">Total gain</p>
                       <GainDisplay amountEur={stats.totalGain} percent={stats.totalGainPercent} />
+                    </div>
+                    <div className="border-l border-border/40 pl-6 shrink-0">
+                      <p className="micro-label mb-1">Cash (EUR)</p>
+                      <div className="flex items-center gap-1.5">
+                        <EurAmountInput
+                          compact
+                          wrapperClassName="w-[6.75rem]"
+                          placeholder="0,00"
+                          value={cashInput}
+                          onChange={(e) => setCashInput(e.target.value)}
+                          onBlur={() => normalizeCashInputOnBlur()}
+                        />
+                        <button
+                          type="button"
+                          disabled={cashSaving}
+                          onClick={() => void saveCash()}
+                          className="btn-secondary !inline-flex !items-center !justify-center !h-8 !min-h-0 !max-h-8 !py-0 !px-1.5 !gap-0 !text-[9px] !leading-none box-border shrink-0 disabled:opacity-50"
+                        >
+                          {cashSaving ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex-1 mt-8 min-h-[160px]">
+                  <div className="flex-1 mt-8 min-h-[160px] relative">
+                    {portfolioChartData.length < 2 && (
+                      <p className="absolute inset-0 flex items-center justify-center text-center text-[11px] text-text-s px-6 z-[2] pointer-events-none">
+                        History builds as daily totals are recorded. Open the history icon above to add past dates.
+                      </p>
+                    )}
                     <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={(() => {
-                          const todayStr = todayIsoDateHelsinki();
-                          // Map history and ensure unique dates (latest recorded for that day wins, though recording logic only allows one)
-                          const baseData = history.filter((p, i, self) => i === self.findIndex(t => t.date === p.date)).map(p => ({
-                            date: p.date,
-                            name: formatShortMonthDayFi(p.date),
-                            value: p.value
-                          }));
-                          
-                          const hasStoredToday = history.some(p => p.date === todayStr);
-                          
-                          if (!hasStoredToday && stats.totalValue > 0) {
-                            baseData.push({ 
-                              date: todayStr,
-                              name: 'Today', 
-                              value: stats.totalValue 
-                            });
-                          }
-                          
-                          return baseData;
-                        })()}>
+                          <AreaChart data={portfolioChartData}>
                           <defs>
                             <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                               <stop offset="5%" stopColor="var(--color-accent)" stopOpacity={0.2}/>
@@ -1227,7 +1377,7 @@ export default function App() {
                               : 'bg-white/5 text-text-s border-border/60 hover:bg-white/10'
                           }`}
                         >
-                          <MoreVertical className="w-4 h-4" aria-hidden />
+                          <Settings className="w-4 h-4" aria-hidden />
                         </button>
                         {allocPieMenuOpen && (
                           <div
@@ -1395,24 +1545,22 @@ export default function App() {
 
 
                 {/* Holdings Table Section */}
-                <div className="lg:col-span-4 glass-panel p-8 bg-[#0e0e10]/80">
+                <div className="lg:col-span-4 glass-panel p-8">
                   <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <h3 className="card-title mb-2">Holdings</h3>
-                    </div>
+                    <h3 className="card-title mb-0">Holdings</h3>
                     <button 
                       onClick={() => {
                         setEditingAsset(null);
                         setIsModalOpen(true);
                       }}
-                      className="px-3 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 active:scale-[0.98] transition-all flex items-center gap-1.5"
+                      className="btn-primary text-[10px] py-1.5 px-3"
                     >
                       <Plus className="w-3.5 h-3.5" /> Add Asset
                     </button>
                   </div>
 
                   <DataListTable
-                    minWidth={960}
+                    minWidth={1120}
                     columns={[
                       { key: 'asset', label: 'Asset' },
                       { key: 'shares', label: 'Shares', align: 'right' },
@@ -1429,7 +1577,10 @@ export default function App() {
                         cellClassName: 'px-3 py-2 text-right',
                       },
                     ]}
-                    rows={[...assets]
+                    rows={
+                      initialQuotesPending && assets.length > 0
+                        ? holdingsTableSkeletonRows
+                        : [...assets]
                       .sort((a, b) => {
                         const valA =
                           a.quantity *
@@ -1458,18 +1609,16 @@ export default function App() {
                           costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
                         const change = marketChanges[item.symbol] || 0;
                         const todayGainEur = todayGainEurFromChange(totalValue, change);
-                        const ticker =
-                          item.displaySymbol ||
-                          (item.symbol.includes('.') ? item.symbol.split('.')[0] : item.symbol);
+                        const ticker = displayTickerForAsset(item);
 
                         return {
                           asset: (
-                            <div className="min-w-0">
-                              <div className="text-text-p text-sm font-sans truncate">{item.name}</div>
-                              <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest">
-                                {ticker}
-                              </div>
-                            </div>
+                            <AssetNameCell
+                              name={item.name}
+                              ticker={ticker}
+                              yahooSymbol={item.symbol}
+                              type={item.type}
+                            />
                           ),
                           shares: item.quantity,
                           price: formatCurrency(priceInEur, 'EUR'),
@@ -1505,7 +1654,8 @@ export default function App() {
                             </div>
                           ),
                         };
-                      })}
+                      })
+                    }
                     emptyState={
                       <div className="flex flex-col items-center gap-4 opacity-50 py-8">
                         <Wallet className="w-12 h-12" />
@@ -1513,28 +1663,6 @@ export default function App() {
                       </div>
                     }
                   />
-
-                  <div className="mt-8 pt-8 border-t border-border/50">
-                    <h3 className="card-title mb-3">Cash (EUR)</h3>
-                    <div className="flex flex-wrap items-end gap-2">
-                      <EurAmountInput
-                        wrapperClassName="flex-1 min-w-[140px] max-w-[240px]"
-                        className="py-2.5 text-sm"
-                        placeholder="0,00"
-                        value={cashInput}
-                        onChange={(e) => setCashInput(e.target.value)}
-                        onBlur={() => normalizeCashInputOnBlur()}
-                      />
-                      <button
-                        type="button"
-                        disabled={cashSaving}
-                        onClick={() => void saveCash()}
-                        className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-border/60 text-[10px] font-black uppercase tracking-widest text-text-p disabled:opacity-50"
-                      >
-                        {cashSaving ? 'Saving…' : 'Save'}
-                      </button>
-                    </div>
-                  </div>
                 </div>
                 </div>
               </motion.div>
@@ -1588,27 +1716,35 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-2xl mx-auto w-full"
+                className="max-w-3xl mx-auto w-full"
               >
                 <div className="glass-panel p-8">
-                  <h2 className="text-2xl font-black tracking-tight text-white uppercase mb-2">Options</h2>
-                  <p className="text-[10px] text-text-s font-bold uppercase tracking-widest mb-8 opacity-80">
-                    Data & backup
-                  </p>
+                  <h2 className="page-title mb-1">Options</h2>
+                  <p className="page-subtitle mb-6">Data & backup</p>
 
-                  <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio data (SQLite)
                       </h3>
                       <p className="text-xs text-text-s leading-relaxed mb-3">
-                        Holdings, history, and related totals are stored locally. Copy the database file while the server is stopped,
-                        or use JSON export/import to move data between machines.
+                        Holdings and history live in a local database. Copy the path, then back up the file while the server is stopped.
                       </p>
-                      {dataStoreHint && (
-                        <p className="text-[10px] font-mono text-accent/90 break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
-                          {dataStoreHint}
-                        </p>
+                      {(dataStorePath ?? dataStoreHint) && (
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-mono text-accent/90 break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
+                            {dataStorePath ?? dataStoreHint}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void copyDbPath()}
+                            disabled={!(dataStorePath ?? dataStoreHint)}
+                            className="btn-secondary w-full justify-center py-2.5"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            {dbPathCopied ? 'Copied' : 'Copy path'}
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -1616,15 +1752,15 @@ export default function App() {
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-4">
                         Portfolio backup
                       </h3>
-                      <div className="flex flex-wrap gap-3">
+                      <div className="flex flex-col gap-2">
                         <button
                           type="button"
                           onClick={() => exportPortfolioBackup()}
-                          className="flex items-center gap-2 px-4 py-3 rounded-xl bg-accent text-white hover:bg-accent/90 text-[10px] font-black uppercase tracking-widest shadow-lg shadow-accent/20"
+                          className="btn-primary w-full justify-center py-2.5"
                         >
                           <Download className="w-4 h-4" /> Export JSON
                         </button>
-                        <label className="flex items-center gap-2 px-4 py-3 rounded-xl bg-white/10 hover:bg-white/15 text-[10px] font-black uppercase tracking-widest text-text-p cursor-pointer border border-border/50">
+                        <label className="btn-secondary w-full justify-center py-2.5 cursor-pointer">
                           <Upload className="w-4 h-4" /> Import JSON
                           <input
                             ref={importBackupRef}
@@ -1637,9 +1773,16 @@ export default function App() {
                             }}
                           />
                         </label>
+                        <button
+                          type="button"
+                          onClick={() => void recoverFromBrowserStorage()}
+                          className="btn-secondary w-full justify-center py-2.5"
+                        >
+                          <History className="w-4 h-4" /> Recover from browser
+                        </button>
                       </div>
-                      <p className="text-[9px] text-text-s mt-4 uppercase tracking-widest opacity-60 leading-relaxed">
-                        Import merges with existing data unless you replace from a full backup file.
+                      <p className="text-[11px] text-text-s mt-4 leading-relaxed">
+                        Import merges with existing data. Recover restores a browser-only backup from this profile.
                       </p>
                     </div>
                   </div>
@@ -1680,20 +1823,40 @@ export default function App() {
 
 // --- Internal Components ---
 
-const NavButton = ({ active, onClick, icon, label }: { 
-  active: boolean, 
-  onClick: () => void, 
-  icon: React.ReactNode, 
-  label: string 
+const NAV_SHORT: Record<string, string> = {
+  Dashboard: 'Home',
+  'Dividend engine': 'Divs',
+  FIRE: 'FIRE',
+  Market: 'Market',
+  Options: 'Opts',
+};
+
+const NavButton = ({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
 }) => (
-  <button 
+  <button
+    type="button"
     onClick={onClick}
-    className={`group relative p-3 rounded-xl transition-all ${active ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-s hover:text-text-p hover:bg-white/5'}`}
+    title={label}
+    className={`group relative flex flex-col items-center gap-1 p-3 xl:py-2.5 rounded-xl transition-all w-full ${
+      active ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-s hover:text-text-p hover:bg-white/5'
+    }`}
   >
     {icon}
-    <div className="absolute left-full ml-3 opacity-0 group-hover:opacity-100 transition-opacity bg-card border border-border px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest pointer-events-none whitespace-nowrap z-50">
+    <span className="hidden xl:block text-[8px] font-bold uppercase tracking-wide leading-tight text-center max-w-[4.5rem]">
+      {NAV_SHORT[label] ?? label}
+    </span>
+    <span className="xl:hidden absolute left-full ml-3 opacity-0 group-hover:opacity-100 transition-opacity bg-card border border-border px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest pointer-events-none whitespace-nowrap z-50">
       {label}
-    </div>
+    </span>
   </button>
 );
 
@@ -1772,8 +1935,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Submit triggered for symbol:", formData.symbol);
-    
+
     const newAsset: Asset = {
       ...(editAsset?.id ? { id: editAsset.id } : {}),
       ...formData,

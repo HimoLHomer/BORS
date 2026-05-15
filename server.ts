@@ -6,8 +6,8 @@ const projectRoot = process.cwd();
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local"), override: true });
 import { createServer as createViteServer } from "vite";
-import YahooFinance from 'yahoo-finance2';
 import { registerPortfolioRoutes } from "./server/portfolio";
+import { yahooFinance } from "./server/yahooClient";
 import { registerMarketHeatmapRoutes } from "./server/marketHeatmap";
 import { registerMarketOverviewRoutes } from "./server/marketOverview";
 import { registerMarketAiRoutes } from "./server/marketAi";
@@ -15,8 +15,6 @@ import {
   dividendYieldPercentFromQuote,
   dividendYieldPercentFromQuoteSummary,
 } from "./server/dividends";
-const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
-
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;

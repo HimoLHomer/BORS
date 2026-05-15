@@ -241,7 +241,7 @@ export function AlternativeInvestmentsPanel({
   return (
     <div className={MARKET_PANEL}>
       <h3 className="card-title mb-4">Alternative investments</h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
         {order.map((id) => (
           <AlternativeAssetCard key={id} quote={byId.get(id)} loading={loading} />
         ))}

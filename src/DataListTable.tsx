@@ -27,6 +27,9 @@ export function DataListTable({
   highlightWhen,
   rowClassName,
   emptyState,
+  showHeader = true,
+  onRowClick,
+  tableClassName,
 }: {
   columns: DataListColumn[];
   rows: Record<string, React.ReactNode>[];
@@ -34,27 +37,32 @@ export function DataListTable({
   highlightWhen?: (rowIndex: number) => boolean;
   rowClassName?: (rowIndex: number) => string | undefined;
   emptyState?: React.ReactNode;
+  showHeader?: boolean;
+  onRowClick?: (rowIndex: number) => void;
+  tableClassName?: string;
 }) {
   const colSpan = columns.length;
 
   return (
     <div className="overflow-x-auto -mx-2 px-2">
       <table
-        className="w-full border-separate border-spacing-y-1 text-xs font-mono"
+        className={`w-full border-separate border-spacing-y-1 text-xs font-mono${tableClassName ? ` ${tableClassName}` : ''}`}
         style={{ minWidth }}
       >
-        <thead>
-          <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.2em] opacity-50">
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                className={`px-3 py-2 whitespace-nowrap ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.headerClassName ?? ''}`}
-              >
-                {c.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
+        {showHeader ? (
+          <thead>
+            <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.2em] opacity-50">
+              {columns.map((c) => (
+                <th
+                  key={c.key}
+                  className={`px-3 py-2 whitespace-nowrap ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.headerClassName ?? ''}`}
+                >
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        ) : null}
         <tbody className="font-bold">
           {rows.length === 0 && emptyState != null ? (
             <tr className="bg-bg/30 rounded-lg">
@@ -67,9 +75,14 @@ export function DataListTable({
               <tr
                 key={i}
                 className={
-                  rowClassName?.(i) ??
-                  dataListRowClassName(i, highlightWhen?.(i))
+                  [
+                    rowClassName?.(i) ?? dataListRowClassName(i, highlightWhen?.(i)),
+                    onRowClick ? 'cursor-pointer hover:outline hover:outline-1 hover:outline-green/30' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')
                 }
+                onClick={onRowClick ? () => onRowClick(i) : undefined}
               >
                 {columns.map((c) => (
                   <td

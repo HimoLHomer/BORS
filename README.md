@@ -34,6 +34,26 @@ Holdings and portfolio history are stored in a **SQLite file** on your machine (
 
 Back up regularly: use **Export JSON** in the app (chart settings panel on the dashboard), or copy `data/portfolio.db` while the dev server is stopped.
 
+### Release verification
+
+Before trusting a production build (`npm run build` + `npm start`), run:
+
+```bash
+npm run test:release
+```
+
+This runs TypeScript checks, portfolio API tests against a **temporary** database (your real `data/portfolio.db` is not touched), then builds and smoke-tests `dist/server.cjs` with the same API and static SPA entry.
+
+If the dashboard looks empty for a moment but holdings should exist, the data is usually still on disk. While the server is running, open [http://localhost:3000/api/portfolio/assets](http://localhost:3000/api/portfolio/assets). An empty UI with JSON holdings listed means a load/hydration issue, not lost SQLite data.
+
+Optional manual check after `test:release`:
+
+```bash
+npm start
+```
+
+Open [http://localhost:3000](http://localhost:3000) and confirm holdings match the API.
+
 ### Local-first (no Firebase)
 
 - Portfolio data is **SQLite** on disk (`data/portfolio.db` by default). **Firebase was removed** from this project.

@@ -33,14 +33,25 @@ function assetPositionValueEur(
   return Number.isFinite(v) && v >= 0 ? v : 0;
 }
 
+function shortSymbolKey(sym: string): string {
+  const s = sym.trim().toUpperCase();
+  return s.includes('.') ? (s.split('.')[0] ?? s) : s;
+}
+
 function assetsMatchingLink(assets: Asset[], linkedSymbol: string | null): Asset[] {
   if (!linkedSymbol?.trim()) return [];
   const t = linkedSymbol.trim().toUpperCase();
-  return assets.filter(
-    (a) =>
-      (a.symbol && a.symbol.toUpperCase() === t) ||
-      (a.displaySymbol != null && String(a.displaySymbol).toUpperCase() === t)
-  );
+  const base = shortSymbolKey(t);
+  return assets.filter((a) => {
+    const sym = a.symbol?.trim().toUpperCase() ?? '';
+    const disp = a.displaySymbol != null ? String(a.displaySymbol).trim().toUpperCase() : '';
+    return (
+      sym === t ||
+      disp === t ||
+      shortSymbolKey(sym) === base ||
+      (disp !== '' && shortSymbolKey(disp) === base)
+    );
+  });
 }
 
 function effectiveManualDenominatorEur(

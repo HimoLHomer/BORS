@@ -10,14 +10,115 @@ export type DividendHoldingIn = {
   averagePrice?: number;
 };
 
+/** Exchange suffix on Yahoo symbols (e.g. `MI` in `VUCP.MI`). */
+function listingExchangeSuffix(sym: string): string | null {
+  const m = /^[A-Z0-9-]+\.([A-Z]{1,3})$/i.exec(sym.trim());
+  return m ? m[1]!.toUpperCase() : null;
+}
+
+/** Listings where Yahoo chart dividend history is usually complete for UCITS distributing ETFs. */
+const UCITS_DIVIDEND_CHART_SUFFIXES = new Set(["MI", "AS", "L"]);
+
+/** Thin local listings (Nordic, XETRA, etc.) — try cross-listed tickers for chart distributions. */
+function listingNeedsUcitsDividendFallback(sym: string): boolean {
+  const sfx = listingExchangeSuffix(sym);
+  if (!sfx || sfx.length < 2) return false;
+  return !UCITS_DIVIDEND_CHART_SUFFIXES.has(sfx);
+}
+
+/**
+ * UCITS / European listings (.MI, .HE, …) carry dividend history on the listing ticker.
+ * US primaries on thin foreign listings (e.g. `RY6.F` + display `O`) use the display symbol.
+ */
+function preferListingSymbolForDividends(sym: string): boolean {
+  const suffix = listingExchangeSuffix(sym);
+  return suffix != null && suffix.length >= 2;
+}
+
 /** Dividend fundamentals from primary ticker when holding is a foreign listing. */
 export function yahooDividendSymbol(sym: string, displaySymbol?: string | null): string {
+  const s = sym.trim();
   const d = displaySymbol?.trim();
-  if (!d) return sym;
-  if (d.includes(".")) return sym;
-  if (d.length > 8) return sym;
-  if (d.toUpperCase() === sym.toUpperCase()) return sym;
+  if (!d) return s;
+  if (d.includes(".")) return s;
+  if (d.length > 8) return s;
+  if (d.toUpperCase() === s.toUpperCase()) return s;
+  if (preferListingSymbolForDividends(s)) return s;
   return d;
+}
+
+/**
+ * Alternate Yahoo tickers when a local UCITS listing has no dividend feed (common for dist ETFs).
+ * VUCP.HE / VUCP.DU often missing; VUCP.MI usually has chart distributions.
+ * Some distributing ETFs never publish yield in quoteSummary — only chart `events.dividends`.
+ */
+export function yahooDividendSymbolFallbacks(sym: string, displaySymbol?: string | null): string[] {
+  const primary = yahooDividendSymbol(sym, displaySymbol);
+  const out: string[] = [];
+  const add = (c: string) => {
+    const t = c.trim();
+    if (!t) return;
+    if (!out.some((x) => x.toUpperCase() === t.toUpperCase())) out.push(t);
+  };
+  add(primary);
+  add(sym.trim());
+  const base = sym.includes(".") ? (sym.split(".")[0] ?? sym) : sym.trim();
+  if (sym.includes(".") && listingNeedsUcitsDividendFallback(sym)) {
+    add(`${base}.MI`);
+    add(`${base}.AS`);
+    add(`${base}.L`);
+  }
+  if (!sym.includes(".") && primary.toUpperCase() === (displaySymbol?.trim().toUpperCase() ?? primary.toUpperCase())) {
+    add(`${base}.MI`);
+    add(`${base}.AS`);
+    add(`${base}.L`);
+  }
+  return out;
+}
+
+/** Sum chart distribution amounts in the trailing ~12 months (distributing ETFs / UCITS). */
+export function trailingAnnualDividendPerShareFromChart(
+  divs: { date?: Date | string; amount?: number }[] | undefined | null
+): number | null {
+  if (!divs?.length) return null;
+  const cutoff = Date.now() - 365.25 * 86400000;
+  let sum = 0;
+  for (const d of divs) {
+    const t = new Date(d.date as Date).getTime();
+    const amt = d.amount;
+    if (!Number.isFinite(t) || t < cutoff || typeof amt !== "number" || !Number.isFinite(amt) || amt <= 0) {
+      continue;
+    }
+    sum += amt;
+  }
+  return sum > 0 ? Math.round(sum * 10000) / 10000 : null;
+}
+
+function dividendBundleScore(
+  sum: {
+    summaryDetail?: {
+      trailingAnnualDividendRate?: number;
+      dividendRate?: number;
+    };
+    price?: { regularMarketPrice?: number };
+  },
+  divList: { date?: Date | string; amount?: number }[]
+): number {
+  const sd = sum.summaryDetail;
+  const trail =
+    typeof sd?.trailingAnnualDividendRate === "number" && sd.trailingAnnualDividendRate > 0
+      ? sd.trailingAnnualDividendRate
+      : typeof sd?.dividendRate === "number" && sd.dividendRate > 0
+        ? sd.dividendRate
+        : null;
+  const chartTrail = trailingAnnualDividendPerShareFromChart(divList);
+  let score = 0;
+  if (chartTrail != null && chartTrail > 0) score += 5;
+  if (divList.length >= 4) score += 3;
+  if (trail != null && trail > 0) score += 2;
+  if (dividendYieldPercentFromQuoteSummary(sum) != null) score += 2;
+  if (typeof sum.price?.regularMarketPrice === "number" && sum.price.regularMarketPrice > 0) score += 1;
+  return score;
 }
 
 function toIsoDate(d: unknown): string | null {
@@ -73,7 +174,25 @@ export function dividendYieldPercentFromQuoteSummary(sum: {
 /** Yield from `quote()` when quoteSummary is empty (rare listings). */
 export type InferredDividendPayoutFrequency = "monthly" | "quarterly" | "annual";
 
-/** Infer pay cadence from Yahoo chart dividend events (median gap in days). */
+/** Yahoo chart may return dividends as an array or a timestamp-keyed object. */
+export function chartDividendsToList(
+  dividends: unknown
+): { date?: Date | string; amount?: number }[] {
+  if (!dividends) return [];
+  if (Array.isArray(dividends)) return dividends;
+  if (typeof dividends === "object") {
+    return Object.values(dividends as Record<string, { date?: Date | string; amount?: number }>);
+  }
+  return [];
+}
+
+function classifyGapMedianDays(med: number): InferredDividendPayoutFrequency {
+  if (med < 50) return "monthly";
+  if (med < 130) return "quarterly";
+  return "annual";
+}
+
+/** Infer pay cadence from Yahoo chart dividend events (recent gaps weighted). */
 export function inferPayoutFrequencyFromChartDividends(
   divs: { date?: Date | string; amount?: number }[] | undefined | null
 ): InferredDividendPayoutFrequency | null {
@@ -89,11 +208,30 @@ export function inferPayoutFrequencyFromChartDividends(
     if (gap >= 18 && gap <= 400) gapsDays.push(gap);
   }
   if (gapsDays.length === 0) return null;
-  gapsDays.sort((a, b) => a - b);
-  const med = gapsDays[Math.floor(gapsDays.length / 2)]!;
-  if (med < 50) return "monthly";
-  if (med < 130) return "quarterly";
-  return "annual";
+
+  const recentGaps = gapsDays.slice(-4);
+  const sortedRecent = [...recentGaps].sort((a, b) => a - b);
+  const recentMed = sortedRecent[Math.floor(sortedRecent.length / 2)]!;
+  const lastGap = gapsDays[gapsDays.length - 1]!;
+
+  if (lastGap >= 70 && lastGap <= 120) return "quarterly";
+  if (lastGap >= 18 && lastGap <= 45 && recentMed < 50) return "monthly";
+
+  const priorGaps = gapsDays.slice(-5, -1);
+  if (priorGaps.length >= 3 && lastGap >= 65 && lastGap <= 130) {
+    const priorSorted = [...priorGaps].sort((a, b) => a - b);
+    const priorMed = priorSorted[Math.floor(priorSorted.length / 2)]!;
+    if (priorMed < 50) return "quarterly";
+  }
+
+  const lastPay = times[times.length - 1]!;
+  const paysInYear = times.filter((t) => t >= lastPay - 365.25 * 86400000).length;
+  // Trailing payment count is misleading after a cadence change (e.g. STAG monthly → quarterly).
+  if (paysInYear >= 10 && lastGap < 65) return "monthly";
+  if (paysInYear >= 3 && paysInYear <= 5 && lastGap >= 65) return "quarterly";
+  if (lastGap >= 65 && lastGap <= 130) return "quarterly";
+
+  return classifyGapMedianDays(recentMed);
 }
 
 type CalendarPayoutSource = "yahoo" | "estimated" | "none";
@@ -334,23 +472,70 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
             };
           }
           try {
-            const divSym = yahooDividendSymbol(sym, h.displaySymbol);
             const p2 = Math.floor(Date.now() / 1000);
             const p1 = p2 - 86400 * 800;
-            const [sum, chartResult, listQuote, fundQuote] = await Promise.all([
-              yahooFinance.quoteSummary(
-                divSym,
-                { modules: ["summaryDetail", "calendarEvents", "price", "defaultKeyStatistics"] },
-                { validateResult: false }
-              ),
-              yahooFinance
-                .chart(divSym, { period1: p1, period2: p2, interval: "1d", events: "div" }, { validateResult: false })
-                .catch(() => null),
+            const candidates = yahooDividendSymbolFallbacks(sym, h.displaySymbol);
+            const [listQuote, ...candidateBundles] = await Promise.all([
               yahooFinance.quote(sym).catch(() => null),
-              divSym !== sym ? yahooFinance.quote(divSym).catch(() => null) : Promise.resolve(null),
+              ...candidates.map(async (candSym) => {
+                try {
+                  const [sum, chartResult] = await Promise.all([
+                    yahooFinance.quoteSummary(
+                      candSym,
+                      {
+                        modules: [
+                          "summaryDetail",
+                          "calendarEvents",
+                          "price",
+                          "defaultKeyStatistics",
+                          "fundProfile",
+                        ],
+                      },
+                      { validateResult: false }
+                    ),
+                    yahooFinance
+                      .chart(
+                        candSym,
+                        { period1: p1, period2: p2, interval: "1d", events: "div" },
+                        { validateResult: false }
+                      )
+                      .catch(() => null),
+                  ]);
+                  const divList = chartDividendsToList(chartResult?.events?.dividends);
+                  return {
+                    divSym: candSym,
+                    sum,
+                    chartResult,
+                    divList,
+                    score: dividendBundleScore(sum, divList),
+                  };
+                } catch {
+                  return {
+                    divSym: candSym,
+                    sum: null,
+                    chartResult: null,
+                    divList: [] as { date?: Date | string; amount?: number }[],
+                    score: -1,
+                  };
+                }
+              }),
             ]);
-            const fastQuote = listQuote ?? fundQuote;
-            const divList = chartResult?.events?.dividends as { date?: Date | string; amount?: number }[] | undefined;
+
+            const ranked = candidateBundles
+              .filter((b) => b.sum != null)
+              .sort((a, b) => b.score - a.score);
+            const picked = ranked[0] ?? candidateBundles[0];
+            if (!picked?.sum) {
+              throw new Error(`No Yahoo dividend data for ${sym}`);
+            }
+            const divSym = picked.divSym;
+            const sum = picked.sum;
+            const chartResult = picked.chartResult;
+            const fundQuote =
+              divSym !== sym ? await yahooFinance.quote(divSym).catch(() => null) : null;
+            const divList = picked.divList.length
+              ? picked.divList
+              : chartDividendsToList(chartResult?.events?.dividends);
             const payoutFrequency = inferPayoutFrequencyFromChartDividends(divList);
 
             const sd = sum.summaryDetail;
@@ -380,9 +565,11 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
             const quoteCurrency = dividendCurrency;
 
             const perShareDirect =
-              typeof sd?.trailingAnnualDividendRate === "number" && Number.isFinite(sd.trailingAnnualDividendRate)
+              typeof sd?.trailingAnnualDividendRate === "number" &&
+              Number.isFinite(sd.trailingAnnualDividendRate) &&
+              sd.trailingAnnualDividendRate > 0
                 ? sd.trailingAnnualDividendRate
-                : typeof sd?.dividendRate === "number" && Number.isFinite(sd.dividendRate)
+                : typeof sd?.dividendRate === "number" && Number.isFinite(sd.dividendRate) && sd.dividendRate > 0
                   ? sd.dividendRate
                   : null;
 
@@ -393,7 +580,7 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
                   ? listQ.regularMarketPrice
                   : null;
             const livePx = listPx;
-            const dividendYieldPercent = dividendYieldPercentFromQuoteSummary(sum);
+            let dividendYieldPercent = dividendYieldPercentFromQuoteSummary(sum);
 
             const yYield =
               sd?.trailingAnnualDividendYield ??
@@ -411,6 +598,22 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
             ) {
               const frac = yYield > 0 && yYield <= 1 ? yYield : yYield / 100;
               annualPerShare = livePx * frac;
+            }
+            const chartAnnual = trailingAnnualDividendPerShareFromChart(divList);
+            if (
+              (annualPerShare == null || !Number.isFinite(annualPerShare) || annualPerShare <= 0) &&
+              chartAnnual != null
+            ) {
+              annualPerShare = chartAnnual;
+            }
+            if (
+              (dividendYieldPercent == null || dividendYieldPercent <= 0) &&
+              annualPerShare != null &&
+              annualPerShare > 0 &&
+              livePx != null &&
+              livePx > 0
+            ) {
+              dividendYieldPercent = Math.round((annualPerShare / livePx) * 10000) / 100;
             }
 
             const name = (price?.longName || price?.shortName || sym) as string;
@@ -519,9 +722,8 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
           totalHoldingsValueEur += positionValueEur;
           if (row.estimatedAnnualIncomeEur > 0) {
             row.dividendYieldPercent = Math.round((row.estimatedAnnualIncomeEur / positionValueEur) * 10000) / 100;
-          } else {
-            row.dividendYieldPercent = null;
           }
+          // Keep Yahoo/chart yield when income is still zero (e.g. FX pending).
         }
       });
 

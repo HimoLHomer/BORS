@@ -6,9 +6,17 @@ import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
 import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
 import { EurAmountInput } from './EurAmountField';
-import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
 import { computeBlendedYieldSummary } from './blendedYieldSummary';
-import { DataListTable } from './DataListTable';
+import { DividendInfoLinkCell } from './DividendInfoLinkCell';
+import {
+  dividendInfoLinkKeyForManual,
+  dividendInfoLinkKeyForSymbol,
+  loadDividendInfoLinks,
+  saveDividendInfoLinks,
+} from './dividendInfoLinks';
+import { DataListTable, dataListCellClassName } from './DataListTable';
+import { AssetNameCell } from './AssetNameCell';
+import { displayTickerForAsset } from './assetLogo';
 import { saveBlendedYieldCache } from './blendedYieldCache';
 import {
   type ManualDividendPosition,
@@ -16,8 +24,10 @@ import {
   loadManualDividendPositions,
   saveManualDividendPositions,
   frequencyLabel,
-  manualPositionPayoutEvents,
 } from './manualDividends';
+import { DividendPayoutCalendar } from './DividendPayoutCalendar';
+import { SkeletonBarChart, buildTableSkeletonRows } from './SkeletonPulse';
+import type { ApiDividendPaymentInput, ManualDividendPaymentInput } from './dividendRedemptions';
 
 export type { ManualDividendPosition, DividendPayoutFrequency } from './manualDividends';
 
@@ -55,14 +65,15 @@ const BAR_COLOR = 'var(--color-accent)';
 const PANEL = 'glass-panel p-8 bg-[#0e0e10]/80';
 const SECTION_HEAD = 'flex items-center justify-between mb-2 gap-2';
 
-/** Same idea as the Dashboard holdings table: display symbol, else short Yahoo symbol. */
-function displayTickerForAsset(a: Asset | undefined): string {
-  if (!a) return '—';
-  const d = a.displaySymbol?.trim();
-  if (d) return d.toUpperCase();
-  const s = a.symbol;
-  return (s.includes('.') ? s.split('.')[0] : s).toUpperCase();
-}
+const HOLDINGS_DETAIL_COLUMN_KEYS = [
+  'asset',
+  'yield',
+  'annualShare',
+  'income',
+  'freq',
+  'infoLink',
+  'actions',
+] as const;
 
 function shortYahooSymbol(sym: string | null | undefined): string {
   const s = sym?.trim();
@@ -75,9 +86,49 @@ function isDividendPayer(r: DividendRow): boolean {
   return Number.isFinite(r.estimatedAnnualIncomeEur) && r.estimatedAnnualIncomeEur > 0;
 }
 
-function nextFeedPayoutDate(row: DividendRow): string | null {
-  const d = row.dividendDate || row.exDividendDate;
-  return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+function shortSymbolKey(sym: string): string {
+  const s = sym.trim().toUpperCase();
+  return s.includes('.') ? (s.split('.')[0] ?? s) : s;
+}
+
+function apiRowForSymbol(data: DividendsPayload | null, symbol: string | null | undefined): DividendRow | null {
+  const t = symbol?.trim().toUpperCase();
+  if (!t || !data?.rows?.length) return null;
+  return (
+    data.rows.find((r) => {
+      if (r.error) return false;
+      const rs = r.symbol.trim().toUpperCase();
+      return rs === t || shortSymbolKey(rs) === t || shortSymbolKey(t) === rs;
+    }) ?? null
+  );
+}
+
+function manualSupersededByApi(data: DividendsPayload | null, m: ManualDividendPosition): boolean {
+  const api = apiRowForSymbol(data, m.linkedSymbol);
+  return api != null && isDividendPayer(api);
+}
+
+function sourceBadge(kind: 'api' | 'manual') {
+  const label = kind === 'api' ? 'Feed' : 'Manual';
+  const cls =
+    kind === 'api'
+      ? 'text-accent/90 bg-accent/10 border-accent/25'
+      : 'text-text-s/80 bg-white/5 border-border/60';
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest ${cls}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function effectivePayoutFrequency(
+  manual: ManualDividendPosition,
+  apiRow: DividendRow | null
+): DividendPayoutFrequency {
+  if (apiRow?.payoutFrequency) return apiRow.payoutFrequency;
+  return manual.payoutFrequency;
 }
 
 function fxToEur(currency: string | undefined, exchangeRates: Record<string, number>): number {
@@ -100,11 +151,17 @@ function assetPositionValueEur(
 function assetsMatchingLink(assets: Asset[], linkedSymbol: string | null): Asset[] {
   if (!linkedSymbol?.trim()) return [];
   const t = linkedSymbol.trim().toUpperCase();
-  return assets.filter(
-    (a) =>
-      (a.symbol && a.symbol.toUpperCase() === t) ||
-      (a.displaySymbol != null && String(a.displaySymbol).toUpperCase() === t)
-  );
+  const base = shortSymbolKey(t);
+  return assets.filter((a) => {
+    const sym = a.symbol?.trim().toUpperCase() ?? '';
+    const disp = a.displaySymbol != null ? String(a.displaySymbol).trim().toUpperCase() : '';
+    return (
+      sym === t ||
+      disp === t ||
+      shortSymbolKey(sym) === base ||
+      (disp !== '' && shortSymbolKey(disp) === base)
+    );
+  });
 }
 
 function effectiveManualDenominatorEur(
@@ -218,9 +275,37 @@ export function DividendsEngine({
   const [draftUnits, setDraftUnits] = useState('');
   const [draftFrequency, setDraftFrequency] = useState<DividendPayoutFrequency>('quarterly');
   const [draftPayoutDate, setDraftPayoutDate] = useState('');
+  const [infoLinks, setInfoLinks] = useState<Record<string, string>>(() => loadDividendInfoLinks());
+
+  const setInfoLink = useCallback((key: string, url: string | null) => {
+    const k = key.toUpperCase();
+    setInfoLinks((prev) => {
+      const next = { ...prev };
+      if (url) next[k] = url;
+      else delete next[k];
+      saveDividendInfoLinks(next);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     saveManualDividendPositions(manualRows);
   }, [manualRows]);
+
+  useEffect(() => {
+    if (!data?.rows?.length) return;
+    setManualRows((prev) => {
+      let changed = false;
+      const next = prev.map((m) => {
+        if (!m.linkedSymbol?.trim()) return m;
+        const api = apiRowForSymbol(data, m.linkedSymbol);
+        if (!api?.payoutFrequency || api.payoutFrequency === m.payoutFrequency) return m;
+        changed = true;
+        return { ...m, payoutFrequency: api.payoutFrequency };
+      });
+      return changed ? next : prev;
+    });
+  }, [data]);
 
   const load = useCallback(async () => {
     if (assets.length === 0) {
@@ -301,13 +386,20 @@ export function DividendsEngine({
       row,
       index,
     }));
-    const manual = sortedManualRows.map((m) => ({
-      kind: 'manual' as const,
-      income: m.annualIncomeEur,
-      m,
-    }));
+    const manual = sortedManualRows
+      .filter((m) => !manualSupersededByApi(data, m))
+      .map((m) => ({
+        kind: 'manual' as const,
+        income: m.annualIncomeEur,
+        m,
+      }));
     return [...api, ...manual].sort((a, b) => b.income - a.income);
-  }, [dividendPayingRows, sortedManualRows]);
+  }, [dividendPayingRows, sortedManualRows, data]);
+
+  const manualRowsForTotals = useMemo(
+    () => manualRows.filter((m) => !manualSupersededByApi(data, m)),
+    [manualRows, data]
+  );
 
   const displaySummary = useMemo(() => {
     if (!data?.rows?.length) {
@@ -318,8 +410,8 @@ export function DividendsEngine({
       ...exchangeRates,
       ...((data as { rates?: Record<string, number> }).rates ?? {}),
     };
-    return computeBlendedYieldSummary(assets, data.rows, manualRows, marketPrices, rates);
-  }, [data, assets, manualRows, marketPrices, exchangeRates]);
+    return computeBlendedYieldSummary(assets, data.rows, manualRowsForTotals, marketPrices, rates);
+  }, [data, assets, manualRowsForTotals, marketPrices, exchangeRates]);
 
   useEffect(() => {
     if (displaySummary.avgYieldPercent > 0) {
@@ -343,43 +435,50 @@ export function DividendsEngine({
         source: 'api',
       };
     });
-    const manualBars: BarDatum[] = manualRows.map((m) => {
-      const linked = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol) : [];
-      const a = linked[0];
-      const fullName = a?.name ?? m.name;
-      const label = a ? displayTickerForAsset(a) : shortYahooSymbol(m.linkedSymbol);
+    const manualBars: BarDatum[] = manualRows
+      .filter((m) => !manualSupersededByApi(data, m))
+      .map((m) => {
+        const linked = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol) : [];
+        const a = linked[0];
+        const fullName = a?.name ?? m.name;
+        const label = a ? displayTickerForAsset(a) : shortYahooSymbol(m.linkedSymbol);
+        return {
+          key: `manual-${m.id}`,
+          label,
+          fullName,
+          annualEur: m.annualIncomeEur,
+          source: 'manual',
+        };
+      });
+    return [...apiBars, ...manualBars].sort((a, b) => b.annualEur - a.annualEur);
+  }, [dividendPayingRows, assets, manualRows, data]);
+
+  const calendarApiRows = useMemo((): ApiDividendPaymentInput[] => {
+    return dividendPayingRows.map(({ row, index }) => {
+      const a = assets[index];
       return {
-        key: `manual-${m.id}`,
-        label,
-        fullName,
-        annualEur: m.annualIncomeEur,
-        source: 'manual',
+        symbol: row.symbol,
+        name: row.name || a?.name || row.symbol,
+        ticker: a ? displayTickerForAsset(a) : shortYahooSymbol(row.symbol),
+        estimatedAnnualIncomeEur: row.estimatedAnnualIncomeEur,
+        payoutFrequency: row.payoutFrequency,
       };
     });
-    return [...apiBars, ...manualBars].sort((a, b) => b.annualEur - a.annualEur);
-  }, [dividendPayingRows, assets, manualRows]);
+  }, [dividendPayingRows, assets]);
 
-  const payoutEvents = useMemo(() => {
-    const out: { name: string; date: string; estimated: boolean }[] = [];
-    const today = todayIsoDateHelsinki();
-    for (const { row } of dividendPayingRows) {
-      const dates =
-        row.calendarPayoutDates && row.calendarPayoutDates.length > 0
-          ? row.calendarPayoutDates
-          : [];
-      const estimated = row.calendarPayoutSource === 'estimated';
-      for (const date of dates) {
-        out.push({ name: row.name, date, estimated });
-      }
-    }
-    for (const m of manualRows) {
-      for (const ev of manualPositionPayoutEvents(m)) {
-        out.push({ name: ev.name, date: ev.date, estimated: false });
-      }
-    }
-    out.sort((a, b) => a.date.localeCompare(b.date));
-    return out.filter((e) => e.date >= today).slice(0, 24);
-  }, [dividendPayingRows, manualRows]);
+  const calendarManualRows = useMemo((): ManualDividendPaymentInput[] => {
+    return manualRows.map((m) => {
+      const linked = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol) : [];
+      const a = linked[0];
+      return {
+        id: m.id,
+        name: a?.name?.trim() || m.name,
+        ticker: a ? displayTickerForAsset(a) : shortYahooSymbol(m.linkedSymbol),
+        annualIncomeEur: m.annualIncomeEur,
+        payoutFrequency: effectivePayoutFrequency(m, apiRowForSymbol(data, m.linkedSymbol)),
+      };
+    });
+  }, [manualRows, assets, data]);
 
   const resetDrafts = () => {
     setDraftAnnual('');
@@ -403,7 +502,8 @@ export function DividendsEngine({
       m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0]?.symbol ?? m.linkedSymbol : ''
     );
     setDraftUnits(m.units != null ? formatDecimalFi(m.units, 2) : '');
-    setDraftFrequency(m.payoutFrequency);
+    const api = apiRowForSymbol(data, m.linkedSymbol);
+    setDraftFrequency(effectivePayoutFrequency(m, api));
     setDraftPayoutDate(m.payoutAnchorDate ?? '');
     setManualModalOpen(true);
   };
@@ -447,15 +547,19 @@ export function DividendsEngine({
   };
 
   const hasAnyDividendDisplay = dividendPayingRows.length > 0 || manualRows.length > 0;
-  const manualCalendarReady = manualRows.some((m) => m.payoutAnchorDate);
+
+  const holdingsDetailSkeletonRows = useMemo(
+    () =>
+      buildTableSkeletonRows(
+        Math.min(Math.max(assets.length + manualRows.length, 4), 8),
+        [...HOLDINGS_DETAIL_COLUMN_KEYS]
+      ),
+    [assets.length, manualRows.length]
+  );
 
   const holdingsDetailEmptyState = useMemo(() => {
     if (loading && !data) {
-      return (
-        <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
-          Loading dividend data…
-        </p>
-      );
+      return null;
     }
     if (!data && assets.length > 0) {
       return (
@@ -467,7 +571,7 @@ export function DividendsEngine({
         <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
           {assets.length === 0 && manualRows.length === 0
             ? 'No holdings or manual rows.'
-            : 'No feed dividend data — add an estimate from your Dashboard holdings via the menu.'}
+            : 'No Yahoo dividend feed for these holdings — add a manual estimate or link a listing with feed data (e.g. .MI for UCITS ETFs).'}
         </p>
       );
     }
@@ -481,19 +585,21 @@ export function DividendsEngine({
         const { row, index } = entry;
         const a = assets[index];
         const tick = a ? displayTickerForAsset(a) : null;
+        const yahooSym = a?.symbol ?? row.symbol;
         const feedYld = feedYieldPercent(row, a, marketPrices, exchangeRates);
         const annualShareEur = feedAnnualPerShareEur(row, exchangeRates);
         return {
           asset: (
-            <div className="min-w-0">
-              <div className="text-text-p text-sm font-sans truncate" title={row.name}>
-                {row.name}
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="min-w-0 flex-1">
+                <AssetNameCell
+                  name={row.name}
+                  ticker={tick ?? ''}
+                  yahooSymbol={yahooSym}
+                  type={a?.type}
+                />
               </div>
-              {tick ? (
-                <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
-                  {tick}
-                </div>
-              ) : null}
+              {sourceBadge('api')}
             </div>
           ),
           yield: feedYld != null ? formatPercentFi(feedYld, 2) : '—',
@@ -509,33 +615,39 @@ export function DividendsEngine({
               {row.payoutFrequency ? frequencyLabel(row.payoutFrequency) : '—'}
             </span>
           ),
-          next: (
-            <span className="text-text-s/80 text-[11px]">{formatDateFi(nextFeedPayoutDate(row))}</span>
-          ),
+          infoLink: (() => {
+            const linkKey = dividendInfoLinkKeyForSymbol(row.symbol);
+            if (!linkKey) return '—';
+            return (
+              <DividendInfoLinkCell
+                url={infoLinks[linkKey] ?? null}
+                onSave={(url) => setInfoLink(linkKey, url)}
+              />
+            );
+          })(),
           actions: '',
         };
       }
 
       const m = entry.m;
+      const apiMatch = apiRowForSymbol(data, m.linkedSymbol);
       const yld = manualYieldPercent(m, assets, marketPrices, exchangeRates);
       const perShareEur = manualAnnualDividendPerShareEur(m, assets);
       const linkedAs = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0] : undefined;
       const title = linkedAs?.name ?? m.name;
       return {
         asset: (
-          <div className="min-w-0">
-            <div className="text-text-p text-sm font-sans truncate" title={title}>
-              {title}
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="min-w-0 flex-1">
+              <AssetNameCell
+                name={title}
+                ticker={linkedAs ? displayTickerForAsset(linkedAs) : ''}
+                yahooSymbol={linkedAs?.symbol ?? m.linkedSymbol}
+                type={linkedAs?.type}
+                subline={linkedAs ? undefined : 'Link holding on edit'}
+              />
             </div>
-            {linkedAs ? (
-              <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
-                {displayTickerForAsset(linkedAs)}
-              </div>
-            ) : (
-              <div className="mt-0.5 text-[9px] text-text-s/50 font-mono uppercase tracking-widest">
-                Link holding on edit
-              </div>
-            )}
+            {sourceBadge('manual')}
           </div>
         ),
         yield: yld != null ? formatPercentFi(yld, 2) : '—',
@@ -548,10 +660,18 @@ export function DividendsEngine({
         income: formatCurrency(m.annualIncomeEur, 'EUR'),
         freq: (
           <span className="text-text-s/50 text-[11px] uppercase tracking-wider">
-            {frequencyLabel(m.payoutFrequency)}
+            {frequencyLabel(effectivePayoutFrequency(m, apiMatch))}
           </span>
         ),
-        next: <span className="text-text-s/80 text-[11px]">{formatDateFi(m.payoutAnchorDate)}</span>,
+        infoLink: (() => {
+          const linkKey = dividendInfoLinkKeyForManual(m.linkedSymbol, m.id);
+          return (
+            <DividendInfoLinkCell
+              url={infoLinks[linkKey] ?? null}
+              onSave={(url) => setInfoLink(linkKey, url)}
+            />
+          );
+        })(),
         actions: (
           <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
@@ -580,29 +700,10 @@ export function DividendsEngine({
     assets,
     marketPrices,
     exchangeRates,
+    data,
+    infoLinks,
+    setInfoLink,
   ]);
-
-  const payoutTableRows = useMemo(
-    () =>
-      payoutEvents.map((e) => ({
-        asset: (
-          <div className="text-text-p text-sm font-sans truncate" title={e.name}>
-            {e.name}
-          </div>
-        ),
-        date: (
-          <span className="whitespace-nowrap">
-            {formatDateFi(e.date)}
-            {e.estimated ? (
-              <span className="ml-2 text-[9px] text-text-s/45 font-mono uppercase tracking-widest">
-                est.
-              </span>
-            ) : null}
-          </span>
-        ),
-      })),
-    [payoutEvents]
-  );
 
   return (
     <div className="space-y-4">
@@ -610,9 +711,7 @@ export function DividendsEngine({
         <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dividend engine</h2>
       </div>
       {err && (
-        <div className="rounded-xl border border-red/40 bg-red/10 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-200">
-          {err}
-        </div>
+        <div className="error-banner">{err}</div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -631,17 +730,21 @@ export function DividendsEngine({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className={`${PANEL} min-h-[360px] flex flex-col`}>
-          <div className={SECTION_HEAD}>
+        <div className={`${PANEL} min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden`}>
+          <div className={`${SECTION_HEAD} shrink-0`}>
             <h3 className="card-title mb-0">Annual dividend income (by holding)</h3>
           </div>
           {assets.length === 0 && manualRows.length === 0 ? (
             <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
               Add holdings on the Dashboard, then add a per-holding dividend estimate here if needed.
             </p>
+          ) : loading && barData.length === 0 ? (
+            <div className="h-[280px] w-full flex-1 min-h-0" role="status" aria-label="Loading dividend chart">
+              <SkeletonBarChart />
+            </div>
           ) : barData.length === 0 ? (
             <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
-              {loading ? 'Loading…' : 'No dividend-paying holdings (or estimates are all zero).'}
+              No dividend-paying holdings (or estimates are all zero).
             </p>
           ) : (
             <div className="h-[280px] w-full flex-1 min-h-0">
@@ -670,11 +773,16 @@ export function DividendsEngine({
                       borderRadius: 12,
                       padding: 12,
                     }}
+                    labelStyle={{ color: 'var(--color-text-p)', fontWeight: 700, fontSize: 12, marginBottom: 4 }}
                     itemStyle={{ color: 'var(--color-accent)', fontWeight: 900, fontSize: 14 }}
                     formatter={(value: number | undefined) => [
                       formatCurrency(Number(value), 'EUR'),
+                      'Annual income',
                     ]}
-                    labelFormatter={() => ''}
+                    labelFormatter={(_label, payload) => {
+                      const row = payload?.[0]?.payload as BarDatum | undefined;
+                      return row?.fullName ?? row?.label ?? '';
+                    }}
                   />
                   <Bar dataKey="annualEur" radius={[6, 6, 0, 0]} fill={BAR_COLOR} fillOpacity={0.9} />
                 </BarChart>
@@ -683,32 +791,16 @@ export function DividendsEngine({
           )}
         </div>
 
-        <div className={`${PANEL} min-h-[360px] flex flex-col`}>
-          <div className={SECTION_HEAD}>
-            <h3 className="card-title mb-0">Upcoming payouts</h3>
+        <div className={`${PANEL} min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden`}>
+          <div className={`${SECTION_HEAD} shrink-0`}>
+            <h3 className="card-title mb-0">Dividend calendar</h3>
           </div>
-          {payoutEvents.length === 0 ? (
-            <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
-              {assets.length === 0 && manualRows.length === 0
-                ? 'No holdings.'
-                : loading
-                  ? 'Loading…'
-                  : manualRows.length > 0 && !manualCalendarReady
-                    ? 'No payout dates yet — set an anchor pay date on manual estimates.'
-                    : 'No payout dates yet.'}
-            </p>
-          ) : (
-            <div className="flex-1 min-h-0 max-h-[300px] overflow-y-auto scrollbar-hidden">
-              <DataListTable
-                minWidth={360}
-                columns={[
-                  { key: 'asset', label: 'Asset' },
-                  { key: 'date', label: 'Payout date', align: 'right' },
-                ]}
-                rows={payoutTableRows}
-              />
-            </div>
-          )}
+          <DividendPayoutCalendar
+            apiRows={calendarApiRows}
+            manualRows={calendarManualRows}
+            loading={loading}
+            hasHoldings={assets.length > 0}
+          />
         </div>
       </div>
 
@@ -719,7 +811,7 @@ export function DividendsEngine({
             type="button"
             onClick={openManualModal}
             disabled={assets.length === 0}
-            className="px-3 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 active:scale-[0.98] transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+            className="btn-primary text-[10px] py-1.5 px-3 disabled:opacity-40 disabled:pointer-events-none"
           >
             <Plus className="w-3.5 h-3.5" /> Add dividend estimate
           </button>
@@ -731,8 +823,14 @@ export function DividendsEngine({
             { key: 'yield', label: 'Yield %', align: 'right' },
             { key: 'annualShare', label: 'Annual / share', align: 'right' },
             { key: 'income', label: 'Est. annual income', align: 'right' },
-            { key: 'freq', label: 'Pay freq.', align: 'right' },
-            { key: 'next', label: 'Next / anchor', align: 'right' },
+            {
+              key: 'freq',
+              label: 'Pay freq.',
+              align: 'right',
+              headerClassName: 'pr-6',
+              cellClassName: dataListCellClassName('right', 'pr-6'),
+            },
+            { key: 'infoLink', label: 'Dividend info' },
             {
               key: 'actions',
               label: '',
@@ -741,7 +839,7 @@ export function DividendsEngine({
               cellClassName: 'px-3 py-2 text-right',
             },
           ]}
-          rows={holdingsDetailTableRows}
+          rows={loading && !data ? holdingsDetailSkeletonRows : holdingsDetailTableRows}
           emptyState={holdingsDetailEmptyState ?? undefined}
         />
       </div>

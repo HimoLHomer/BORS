@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, RefreshCcw, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
@@ -32,7 +32,7 @@ import { DataListTable } from './DataListTable';
 const PANEL = 'glass-panel p-8 bg-[#0e0e10]/80';
 const INPUT =
   'w-full bg-bg/50 border border-border rounded-xl px-3 py-2 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums';
-const LABEL = 'text-[9px] font-bold text-text-s uppercase tracking-widest opacity-60 block mb-1';
+const LABEL = 'micro-label block mb-1';
 const INLINE_INPUT =
   'bg-bg/50 border border-border rounded-md px-2 py-1.5 text-xs font-mono focus:outline-none focus:border-accent/40';
 const ENTRY_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_5.5rem_1.75rem] gap-2 items-center';
@@ -173,7 +173,6 @@ export function FireProjection({
     const c = loadBlendedYieldCache();
     return c != null ? c.avgYieldPercent : null;
   });
-  const [yieldLoading, setYieldLoading] = useState(false);
   const [stored, setStored] = useState(() => loadFireInputs());
 
   const applyYieldResult = useCallback((avgYieldPercent: number) => {
@@ -188,13 +187,8 @@ export function FireProjection({
   }, []);
 
   const refreshBlendedYield = useCallback(async () => {
-    setYieldLoading(true);
-    try {
-      const r = await fetchBlendedDividendYieldPercent(assets, marketPrices, exchangeRates);
-      applyYieldResult(r.avgYieldPercent);
-    } finally {
-      setYieldLoading(false);
-    }
+    const r = await fetchBlendedDividendYieldPercent(assets, marketPrices, exchangeRates);
+    applyYieldResult(r.avgYieldPercent);
   }, [assets, marketPrices, exchangeRates, applyYieldResult]);
 
   const quotesReady = assets.length === 0 || Object.keys(marketPrices).length > 0;
@@ -338,8 +332,8 @@ export function FireProjection({
         <h2 className="text-2xl font-black tracking-tight text-white uppercase">FIRE projection</h2>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className={`${PANEL} lg:col-span-1 flex flex-col min-h-[200px]`}>
-          <h3 className="card-title mb-3">Independence goal</h3>
+        <div className={`${PANEL} lg:col-span-1 flex flex-col gap-3`}>
+          <h3 className="card-title mb-0">Independence goal</h3>
 
           <p className="font-mono text-2xl font-black tabular-nums tracking-tighter leading-snug">
             <span className="text-text-p">{formatCurrency(currentPortfolioEur, 'EUR')}</span>
@@ -352,7 +346,7 @@ export function FireProjection({
           </p>
 
           {fiRow && independenceCapital > 0 ? (
-            <div className="mt-4 flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5">
               <div className="flex-1 h-1.5 bg-border/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-accent shadow-[0_0_10px_rgba(59,130,246,0.45)] transition-all duration-500"
@@ -365,7 +359,7 @@ export function FireProjection({
             </div>
           ) : null}
 
-          <div className="mt-auto pt-4 border-t border-border/40">
+          <div className="pt-3 border-t border-border/40">
             {fiRow ? (
               <p className="text-[11px] text-green font-bold uppercase tracking-widest">
                 Estimated time to FIRE:{' '}
@@ -382,19 +376,7 @@ export function FireProjection({
         </div>
 
         <div className={`${PANEL} lg:col-span-2`}>
-          <div className="flex items-center justify-between gap-2 mb-3">
-            <h3 className="card-title mb-0">Capital variables</h3>
-            <button
-              type="button"
-              onClick={() => void refreshBlendedYield()}
-              disabled={yieldLoading}
-              className="px-2 py-1.5 rounded-lg border border-border/60 text-[9px] font-black uppercase tracking-widest text-text-s hover:text-accent hover:border-accent/40 flex items-center gap-1"
-              title="Refresh blended yield from holdings"
-            >
-              <RefreshCcw className={`w-3 h-3 ${yieldLoading ? 'animate-spin' : ''}`} />
-              Refresh yield
-            </button>
-          </div>
+          <h3 className="card-title mb-3">Capital variables</h3>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <FireNumInput
               label="Avg market return"
@@ -416,6 +398,7 @@ export function FireProjection({
                   <span className="text-text-s text-sm font-mono">—</span>
                 )}
               </div>
+              <p className="text-[10px] text-text-s mt-1">From Dividend engine</p>
             </div>
             <FireNumInput
               label="Dividend tax / withholding"
@@ -455,7 +438,7 @@ export function FireProjection({
             <button
               type="button"
               onClick={addExpense}
-              className="px-2 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] flex items-center gap-1 shadow-lg shadow-accent/20"
+              className="px-2 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[10px] flex items-center gap-1 shadow-lg shadow-accent/20"
             >
               <Plus className="w-3 h-3" /> Add
             </button>
@@ -493,11 +476,11 @@ export function FireProjection({
               </section>
             )}
           </div>
-          <div className="mt-4 pt-3 border-t border-border/50 flex justify-between text-sm font-mono font-bold tabular-nums">
-            <span className="text-text-s uppercase text-[10px] tracking-widest">Total monthly</span>
+          <div className="mt-4 pt-3 border-t border-border/50 flex justify-between gap-4 text-sm font-mono font-bold tabular-nums">
+            <span className="micro-label mb-0">Total monthly</span>
             <span className="text-text-p">{formatCurrency(monthlyTotal, 'EUR')}</span>
           </div>
-          <div className="flex justify-between text-xs font-mono text-text-s/60 tabular-nums mt-1">
+          <div className="flex justify-between text-xs font-mono text-text-s tabular-nums mt-1">
             <span>Annual expenses</span>
             <span>{formatCurrency(annualExpenses, 'EUR')}</span>
           </div>
@@ -509,7 +492,7 @@ export function FireProjection({
             <button
               type="button"
               onClick={addSaving}
-              className="px-2 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] flex items-center gap-1 shadow-lg shadow-accent/20"
+              className="px-2 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[10px] flex items-center gap-1 shadow-lg shadow-accent/20"
             >
               <Plus className="w-3 h-3" /> Add
             </button>
@@ -552,7 +535,7 @@ export function FireProjection({
                     {rows.map((row) => (
                       <div
                         key={row.id}
-                        className="grid grid-cols-[7.25rem_minmax(0,1fr)_1.75rem] gap-2 items-center w-full"
+                        className="grid grid-cols-[7.25rem_5.5rem_1.75rem] gap-2 items-center w-full"
                       >
                         <MonthYearInput
                           value={row.month}
@@ -562,7 +545,6 @@ export function FireProjection({
                         <ExpenseAmountInput
                           value={row.savedEur}
                           onChange={(n) => updateSaving(row.id, { savedEur: n })}
-                          className="w-full min-w-0"
                         />
                         <button
                           type="button"

@@ -9,7 +9,7 @@ import {
   MarketIndexPanel,
   useMarketOverview,
 } from './MarketOverviewPanels';
-import { MARKET_PANEL, MARKET_REFRESH_BTN } from './marketTheme';
+import { MARKET_PANEL } from './marketTheme';
 
 type HeatmapUniverse = 'sp500' | 'omxh25';
 
@@ -26,6 +26,85 @@ const TILE_ASPECT_RATIO = 1;
 const MIN_SECTOR_BAND_WIDTH = 72;
 
 const SECTOR_HEADER_H = 22;
+
+/** Shared treemap label caps — same for S&P 500 and OMX Helsinki 25. */
+const TREEMAP_FONT_CAP_MAIN = 12;
+const TREEMAP_FONT_CAP_SUB = 9;
+const TREEMAP_FONT_CAP_TINY = 7;
+const TREEMAP_FONT_CAP_MICRO = 6;
+
+/** Vibrant green/red fills — alpha scales with |change| (matches --color-green / --color-red). */
+function heatmapTileFill(change: number): string {
+  const t = Math.min(Math.abs(change) / 4, 1);
+  const alpha = 0.28 + t * 0.44;
+  return change >= 0
+    ? `rgba(34, 197, 94, ${alpha})`
+    : `rgba(239, 68, 68, ${alpha})`;
+}
+
+function HeatmapTileGlowDefs({ greenId, redId }: { greenId: string; redId: string }) {
+  return (
+    <defs>
+      <filter id={greenId} x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur" />
+        <feColorMatrix
+          in="blur"
+          type="matrix"
+          values="0 0 0 0 0.13  0 0 0 0 0.77  0 0 0 0 0.37  0 0 0 0.42 0"
+          result="glow"
+        />
+        <feMerge>
+          <feMergeNode in="glow" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id={redId} x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur" />
+        <feColorMatrix
+          in="blur"
+          type="matrix"
+          values="0 0 0 0 0.94  0 0 0 0 0.27  0 0 0 0 0.27  0 0 0 0.42 0"
+          result="glow"
+        />
+        <feMerge>
+          <feMergeNode in="glow" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+  );
+}
+
+function treemapFontSizes(
+  boxW: number,
+  boxH: number,
+  area: number
+): { main: number; sub: number; tiny: number; micro: number } {
+  const minDim = Math.min(boxW, boxH);
+  if (area < 120) return { main: 6, sub: 6, tiny: 5, micro: 5 };
+  if (area < 280) {
+    return {
+      main: Math.min(7, minDim * 0.36),
+      sub: 6,
+      tiny: 5,
+      micro: 5,
+    };
+  }
+  if (area < 600) {
+    return {
+      main: Math.min(9, minDim / 3.4),
+      sub: Math.min(7, minDim / 4.2),
+      tiny: 6,
+      micro: 5,
+    };
+  }
+  return {
+    main: Math.min(TREEMAP_FONT_CAP_MAIN, minDim / 3.1),
+    sub: Math.min(TREEMAP_FONT_CAP_SUB, minDim / 3.8),
+    tiny: TREEMAP_FONT_CAP_TINY,
+    micro: TREEMAP_FONT_CAP_MICRO,
+  };
+}
 
 type HeatmapTile = {
   symbol: string;
@@ -197,14 +276,40 @@ function sectorsToTreemapData(sectors: HeatmapSector[], universe: HeatmapUnivers
 }
 
 function fitTreemapText(text: string, maxWidth: number, fontSize: number): string {
-  const charW = fontSize * 0.58;
+  const charW = fontSize * 0.55;
   const max = Math.max(2, Math.floor(maxWidth / charW));
   if (text.length <= max) return text;
   return max > 2 ? `${text.slice(0, max - 1)}…` : text.slice(0, max);
 }
 
-function pctFitsInBox(pctText: string, width: number, fontSize: number): boolean {
-  return pctText.length * fontSize * 0.46 <= width - 4;
+function pctFitsInBox(
+  pctText: string,
+  width: number,
+  fontSize: number,
+  height?: number
+): boolean {
+  const hPad = 10;
+  if (pctText.length * fontSize * 0.5 > width - hPad) return false;
+  if (height != null && height < fontSize * 1.3 + 4) return false;
+  return true;
+}
+
+function stackedLabelFits(
+  ticker: string,
+  pctText: string,
+  width: number,
+  height: number,
+  tickerFs: number,
+  pctFs: number,
+  gap: number
+): boolean {
+  const lineH = (fs: number) => fs * 1.28;
+  const needed = lineH(tickerFs) + lineH(pctFs) + gap + 6;
+  if (height < needed) return false;
+  return (
+    fitTreemapText(ticker, width, tickerFs) === ticker &&
+    pctFitsInBox(pctText, width, pctFs, height - lineH(tickerFs) - gap)
+  );
 }
 
 function buildTileLookup(
@@ -243,9 +348,10 @@ function TreemapLabel({
   x,
   y,
   fontSize,
-  fontWeight = 700,
+  fontWeight = 600,
   anchor = 'middle',
   baseline = 'auto',
+  contrastStroke = false,
   children,
 }: {
   x: number;
@@ -254,22 +360,29 @@ function TreemapLabel({
   fontWeight?: number;
   anchor?: 'middle' | 'start';
   baseline?: 'auto' | 'middle';
+  contrastStroke?: boolean;
   children: string;
 }) {
-  const strokeW = Math.max(2.5, fontSize * 0.4);
+  const px = Math.round(x);
+  const py = Math.round(y);
+  const useStroke = contrastStroke && fontSize <= 9;
   return (
     <text
-      x={x}
-      y={y}
+      x={px}
+      y={py}
       textAnchor={anchor}
       dominantBaseline={baseline === 'middle' ? 'middle' : undefined}
-      fill="#ffffff"
+      fill="#f4f4f5"
       fontSize={fontSize}
       fontWeight={fontWeight}
-      stroke="rgba(0,0,0,0.9)"
-      strokeWidth={strokeW}
-      paintOrder="stroke"
-      style={{ pointerEvents: 'none' }}
+      stroke={useStroke ? 'rgba(9,9,11,0.55)' : 'none'}
+      strokeWidth={useStroke ? 0.6 : 0}
+      paintOrder={useStroke ? 'stroke fill' : undefined}
+      style={{
+        pointerEvents: 'none',
+        fontFamily: 'var(--font-sans)',
+        textRendering: 'geometricPrecision',
+      }}
     >
       {children}
     </text>
@@ -289,11 +402,12 @@ type TreemapContentProps = {
   price?: number | null;
   currency?: string;
   children?: readonly unknown[] | null;
-  compact?: boolean;
   showSectorHeaders?: boolean;
   tileLookup?: Map<string, HeatmapTile>;
   sectorName?: string;
   sectorLayoutRef?: React.MutableRefObject<Map<string, number>>;
+  glowGreenId?: string;
+  glowRedId?: string;
   onHover?: (info: HeatmapHover, clientX: number, clientY: number) => void;
   onLeave?: () => void;
 };
@@ -307,17 +421,21 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
     name,
     depth = 0,
     children,
-    compact,
     showSectorHeaders = true,
     onHover,
     onLeave,
     tileLookup,
     sectorName,
     sectorLayoutRef,
+    glowGreenId,
+    glowRedId,
   } = props;
 
   if (depth === 0) {
     sectorLayoutRef?.current.clear();
+    if (glowGreenId && glowRedId) {
+      return <HeatmapTileGlowDefs greenId={glowGreenId} redId={glowRedId} />;
+    }
   }
 
   let boxX = x;
@@ -351,18 +469,22 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
           y={y}
           width={width}
           height={headerH}
-          fill="#0a0a0a"
-          stroke="rgba(255,255,255,0.08)"
+          fill="#18181b"
+          stroke="rgba(39,39,42,0.95)"
           strokeWidth={1}
         />
         <text
-          x={x + 8}
-          y={y + headerH / 2}
-          fill="#ffffff"
+          x={Math.round(x + 8)}
+          y={Math.round(y + headerH / 2)}
+          fill="#d4d4d8"
           fontSize={fontSize}
-          fontWeight={800}
+          fontWeight={600}
           dominantBaseline="middle"
-          style={{ letterSpacing: '0.04em' }}
+          style={{
+            letterSpacing: '0.1em',
+            fontFamily: 'var(--font-sans)',
+            textRendering: 'geometricPrecision',
+          }}
         >
           {fitTreemapText(label, width - 16, fontSize)}
         </text>
@@ -373,53 +495,72 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
   if (isGroup || depth < 1 || boxW < 5 || boxH < 5) return null;
 
   const change = typeof props.change === 'number' ? props.change : 0;
-  const intensity = Math.min(Math.abs(change) * 18, 85);
-  const alpha = 0.4 + intensity / 100;
-  const color =
-    change >= 0 ? `rgba(34, 197, 94, ${alpha})` : `rgba(239, 68, 68, ${alpha})`;
+  const color = heatmapTileFill(change);
+  const tileGlowFilter =
+    glowGreenId && glowRedId
+      ? `url(#${change >= 0 ? glowGreenId : glowRedId})`
+      : undefined;
 
-  const area = boxW * boxH;
-  const minDim = Math.min(boxW, boxH);
-  const aspect = boxW / Math.max(boxH, 1);
-  const isSliver = aspect > 3.4 || aspect < 0.28 || minDim < 12 || area < 140;
-  const pctDecimals = boxW < 28 || minDim < 20 ? 0 : minDim < 28 ? 1 : 2;
+  const inset = 4;
+  const innerW = Math.max(0, boxW - inset * 2);
+  const innerH = Math.max(0, boxH - inset * 2);
+  const area = innerW * innerH;
+  const minDim = Math.min(innerW, innerH);
+  const aspect = innerW / Math.max(innerH, 1);
+  const isSliver = aspect > 3.2 || aspect < 0.3 || minDim < 14 || area < 160;
+  const pctDecimals = innerW < 32 || minDim < 22 ? 0 : minDim < 30 ? 1 : 2;
   const pctText = formatPercentFi(change, pctDecimals, { showPlus: true });
   const pctCompact = formatPercentFi(change, 0, { showPlus: true });
   const ticker = name ?? '';
   const tile = resolveTile(tileLookup, ticker, props.symbol);
 
-  const fontMain = Math.min(Math.max(minDim / 2.6, 9), compact ? 14 : 16);
-  const fontSub = Math.min(Math.max(minDim / 3.4, 8), 12);
-  const fontTiny = Math.min(Math.max(minDim / 4, 7), 10);
-  const fontMicro = Math.max(6, fontTiny - 1);
+  const { main: fontMain, sub: fontSub, tiny: fontTiny, micro: fontMicro } = treemapFontSizes(
+    innerW,
+    innerH,
+    area
+  );
 
-  const pctOkSub = pctFitsInBox(pctText, boxW, fontSub);
-  const pctOkTiny = pctFitsInBox(pctText, boxW, fontTiny);
-  const pctOkMicro = pctFitsInBox(pctCompact, boxW, fontMicro);
+  const pctOkSub = pctFitsInBox(pctText, innerW, fontSub, innerH);
+  const pctOkTiny = pctFitsInBox(pctText, innerW, fontTiny, innerH);
+  const pctOkMicro = pctFitsInBox(pctCompact, innerW, fontMicro, innerH);
+  const labelGap = 4;
 
-  const showBoth = !isSliver && boxW >= 44 && boxH >= 28 && pctOkSub;
-  const showStacked = !isSliver && !showBoth && boxW >= 24 && boxH >= 18 && pctOkTiny;
+  const showBoth =
+    !isSliver &&
+    innerW >= 54 &&
+    innerH >= 40 &&
+    area >= 480 &&
+    pctOkSub &&
+    stackedLabelFits(ticker, pctText, innerW, innerH, fontMain, fontSub, 8);
+  const showStacked =
+    !isSliver &&
+    !showBoth &&
+    innerW >= 38 &&
+    innerH >= 30 &&
+    area >= 280 &&
+    stackedLabelFits(ticker, pctText, innerW, innerH, fontSub, fontTiny, labelGap);
   const showTickerWithPct =
     !showBoth &&
     !showStacked &&
-    boxW >= 18 &&
-    boxH >= 20 &&
-    aspect >= 0.4 &&
-    pctOkMicro;
+    innerW >= 24 &&
+    innerH >= 26 &&
+    area >= 220 &&
+    aspect >= 0.45 &&
+    stackedLabelFits(ticker, pctCompact, innerW, innerH, fontSub, fontMicro, 3);
   const showTickerOnly =
     !showBoth &&
     !showStacked &&
     !showTickerWithPct &&
-    boxW >= 16 &&
-    boxH >= 12 &&
-    aspect >= 0.38;
+    innerW >= 18 &&
+    innerH >= 14 &&
+    aspect >= 0.4;
   const showPctOnly =
     !showBoth &&
     !showStacked &&
     !showTickerWithPct &&
     !showTickerOnly &&
-    boxW >= 12 &&
-    boxH >= 10 &&
+    innerW >= 14 &&
+    innerH >= 12 &&
     (pctOkMicro || pctOkTiny);
 
   const hoverPayload: HeatmapHover = {
@@ -434,13 +575,19 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
 
   const clipId = treemapClipId(boxX, boxY);
   const cx = boxX + boxW / 2;
-  const padY = 3;
+  const labelTop = boxY + inset;
+  const labelMid = boxY + boxH / 2;
 
   return (
     <g>
       <defs>
         <clipPath id={clipId}>
-          <rect x={boxX + 1} y={boxY + 1} width={Math.max(0, boxW - 2)} height={Math.max(0, boxH - 2)} />
+          <rect
+            x={boxX + inset}
+            y={boxY + inset}
+            width={innerW}
+            height={innerH}
+          />
         </clipPath>
       </defs>
       <rect
@@ -448,10 +595,11 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
         y={boxY}
         width={boxW}
         height={boxH}
+        filter={tileGlowFilter}
         style={{
           fill: color,
-          stroke: 'rgba(0,0,0,0.5)',
-          strokeWidth: 1.5,
+          stroke: 'rgba(39,39,42,0.8)',
+          strokeWidth: 1,
           cursor: 'pointer',
         }}
         onMouseEnter={(e) => onHover?.(hoverPayload, e.clientX, e.clientY)}
@@ -461,41 +609,81 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
       <g clipPath={`url(#${clipId})`}>
         {showBoth && (
           <>
-            <TreemapLabel x={cx} y={boxY + boxH / 2 - 6} fontSize={fontMain} fontWeight={800}>
-              {fitTreemapText(ticker, boxW - 8, fontMain)}
+            <TreemapLabel
+              x={cx}
+              y={labelMid - 7}
+              fontSize={fontMain}
+              contrastStroke
+            >
+              {fitTreemapText(ticker, innerW, fontMain)}
             </TreemapLabel>
-            <TreemapLabel x={cx} y={boxY + boxH / 2 + (compact ? 10 : 12)} fontSize={fontSub} fontWeight={700}>
+            <TreemapLabel
+              x={cx}
+              y={labelMid + fontSub * 1.15}
+              fontSize={fontSub}
+              contrastStroke
+            >
               {pctText}
             </TreemapLabel>
           </>
         )}
         {showStacked && (
           <>
-            <TreemapLabel x={cx} y={boxY + boxH / 2 - 2} fontSize={fontSub} fontWeight={800}>
-              {fitTreemapText(ticker, boxW - 6, fontSub)}
+            <TreemapLabel
+              x={cx}
+              y={labelTop + fontSub * 0.85}
+              fontSize={fontSub}
+              contrastStroke
+            >
+              {fitTreemapText(ticker, innerW, fontSub)}
             </TreemapLabel>
-            <TreemapLabel x={cx} y={boxY + boxH / 2 + fontSub + padY} fontSize={fontTiny} fontWeight={700}>
+            <TreemapLabel
+              x={cx}
+              y={labelTop + fontSub * 2.1 + labelGap}
+              fontSize={fontTiny}
+              contrastStroke
+            >
               {pctText}
             </TreemapLabel>
           </>
         )}
         {showTickerWithPct && (
           <>
-            <TreemapLabel x={cx} y={boxY + boxH / 2 - 3} fontSize={fontSub} fontWeight={800}>
-              {fitTreemapText(ticker, boxW - 4, fontSub)}
+            <TreemapLabel
+              x={cx}
+              y={labelTop + fontSub * 0.85}
+              fontSize={fontSub}
+              contrastStroke
+            >
+              {fitTreemapText(ticker, innerW, fontSub)}
             </TreemapLabel>
-            <TreemapLabel x={cx} y={boxY + boxH / 2 + fontMicro + 2} fontSize={fontMicro} fontWeight={700}>
+            <TreemapLabel
+              x={cx}
+              y={labelTop + fontSub * 2.05 + 3}
+              fontSize={fontMicro}
+              contrastStroke
+            >
               {pctCompact}
             </TreemapLabel>
           </>
         )}
         {showTickerOnly && (
-          <TreemapLabel x={cx} y={boxY + boxH / 2 + 3} fontSize={fontSub} fontWeight={800}>
-            {fitTreemapText(ticker, boxW - 4, fontSub)}
+          <TreemapLabel
+            x={cx}
+            y={labelMid + 1}
+            fontSize={area < 200 ? fontTiny : fontSub}
+            contrastStroke
+          >
+            {fitTreemapText(ticker, innerW, area < 200 ? fontTiny : fontSub)}
           </TreemapLabel>
         )}
         {showPctOnly && (
-          <TreemapLabel x={cx} y={boxY + boxH / 2 + 2} fontSize={fontTiny} fontWeight={700}>
+          <TreemapLabel
+            x={cx}
+            y={labelMid + 1}
+            fontSize={fontTiny}
+            contrastStroke
+          >
             {pctOkTiny ? pctText : pctCompact}
           </TreemapLabel>
         )}
@@ -561,17 +749,18 @@ function useHeatmap(universe: HeatmapUniverse, maxTiles?: number) {
 function TreemapChart({
   data,
   tileLookup,
-  compact,
   showSectorHeaders = true,
 }: {
   data: TreemapNode[];
   tileLookup: Map<string, HeatmapTile>;
-  compact?: boolean;
   showSectorHeaders?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sectorLayoutRef = useRef<Map<string, number>>(new Map());
   const [hover, setHover] = useState<HeatmapHover | null>(null);
+  const reactId = React.useId();
+  const glowGreenId = `hg-g-${reactId.replace(/:/g, '')}`;
+  const glowRedId = `hg-r-${reactId.replace(/:/g, '')}`;
 
   const handleHover = useCallback((info: HeatmapHover, clientX: number, clientY: number) => {
     const box = containerRef.current?.getBoundingClientRect();
@@ -635,10 +824,11 @@ function TreemapChart({
               currency={nodeProps.currency as string | undefined}
               children={nodeProps.children}
               sectorName={nodeProps.sectorName as string | undefined}
-              compact={compact}
               showSectorHeaders={showSectorHeaders}
               tileLookup={tileLookup}
               sectorLayoutRef={sectorLayoutRef}
+              glowGreenId={glowGreenId}
+              glowRedId={glowRedId}
               onHover={handleHover}
               onLeave={() => setHover(null)}
             />
@@ -654,19 +844,30 @@ function HeatmapPanel({
   universe,
   chartClassName,
   maxTiles,
-  compact,
 }: {
   title: string;
   universe: HeatmapUniverse;
   chartClassName: string;
   maxTiles?: number;
-  compact?: boolean;
 }) {
-  const { data, loading, error, tileLookup, reload } = useHeatmap(universe, maxTiles);
+  const { data, loading, error, tileLookup, meta, reload } = useHeatmap(universe, maxTiles);
 
   return (
     <div className={`${MARKET_PANEL} flex flex-col`}>
-      <h3 className="card-title mb-2">{title}</h3>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <h3 className="card-title mb-0">{title}</h3>
+        {meta?.asOf ? (
+          <p className="text-[10px] text-text-s/70 font-mono tabular-nums shrink-0" title="Quote snapshot time">
+            {new Date(meta.asOf).toLocaleString('fi-FI', {
+              day: 'numeric',
+              month: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+            {meta.cached ? ' · cached' : ''}
+          </p>
+        ) : null}
+      </div>
       <div className={chartClassName}>
         {loading && data.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 opacity-50">
@@ -675,7 +876,7 @@ function HeatmapPanel({
           </div>
         ) : error && data.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
-            <p className="text-sm text-text-s">{error}</p>
+            <p className="error-banner text-center">{error}</p>
             <button
               type="button"
               onClick={() => void reload()}
@@ -688,7 +889,6 @@ function HeatmapPanel({
           <TreemapChart
             data={data}
             tileLookup={tileLookup}
-            compact={compact}
             showSectorHeaders={universe !== 'omxh25'}
           />
         )}
@@ -698,25 +898,14 @@ function HeatmapPanel({
 }
 
 export function MarketIntelligence() {
-  const { overview, loading: overviewLoading, error: overviewError, reload } = useMarketOverview();
+  const { overview, loading: overviewLoading, error: overviewError } = useMarketOverview();
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-2xl font-black tracking-tight text-white uppercase">Market Intelligence</h2>
-        <button
-          type="button"
-          onClick={() => void reload()}
-          disabled={overviewLoading}
-          className={MARKET_REFRESH_BTN}
-        >
-          <RefreshCcw className={`w-3.5 h-3.5 ${overviewLoading ? 'animate-spin' : ''}`} />
-          Refresh quotes
-        </button>
-      </div>
+      <h2 className="text-2xl font-black tracking-tight text-white uppercase">Market Intelligence</h2>
 
       {overviewError && (
-        <div className="rounded-xl border border-red/40 bg-red/10 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-200">
+        <div className="error-banner">
           {overviewError}
         </div>
       )}
@@ -745,7 +934,6 @@ export function MarketIntelligence() {
             title="OMX Helsinki 25"
             universe="omxh25"
             chartClassName="w-full h-[min(32vh,300px)] overflow-visible"
-            compact
           />
         </div>
         <div className="xl:col-span-4 min-h-0 flex flex-col">
