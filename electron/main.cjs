@@ -45,6 +45,19 @@ function projectRoot() {
   return app.isPackaged ? app.getAppPath() : path.join(__dirname, "..");
 }
 
+function applyServerEnv(env) {
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) process.env[key] = value;
+  }
+}
+
+/** Packaged Windows builds fail to spawn BÖRS.exe with ELECTRON_RUN_AS_NODE (ENOENT / Ö in path). */
+function startServerInProcess(root, serverEntry, env) {
+  applyServerEnv(env);
+  process.chdir(root);
+  require(serverEntry);
+}
+
 function startServer() {
   const root = projectRoot();
   const serverEntry = path.join(root, "dist", "server.cjs");
@@ -63,6 +76,11 @@ function startServer() {
     BORS_USER_DATA: userDataDir(),
     ELECTRON_RUN_AS_NODE: "1",
   };
+
+  if (app.isPackaged) {
+    startServerInProcess(root, serverEntry, env);
+    return;
+  }
 
   serverProcess = spawn(process.execPath, [serverEntry], {
     cwd: root,
