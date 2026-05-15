@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
+import { appRoot } from "./appRoot";
 import type YahooFinance from "yahoo-finance2";
 
 export type HeatmapConstituent = {
@@ -50,7 +51,7 @@ function toYahooSymbol(symbol: string): string {
 
 function loadConstituents(universe: Universe): HeatmapConstituent[] {
   const file = universe === "sp500" ? "sp500.json" : "omxh25.json";
-  const p = path.join(process.cwd(), "data", "market", file);
+  const p = path.join(appRoot(), "data", "market", file);
   if (!fs.existsSync(p)) {
     throw new Error(`Missing constituent file: ${p}`);
   }

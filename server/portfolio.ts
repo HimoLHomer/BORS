@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { registerDividendRoutes } from "./dividends";
+import { appRoot } from "./appRoot";
 import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
@@ -10,7 +11,7 @@ let db: Database.Database | null = null;
 function getDbPath(): string {
   const override = process.env.BORS_DB_PATH;
   if (override) return path.resolve(override);
-  const dataDir = path.join(process.cwd(), "data");
+  const dataDir = path.join(appRoot(), "data");
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, "portfolio.db");
 }

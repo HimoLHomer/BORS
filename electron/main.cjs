@@ -1,10 +1,14 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, shell, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const { ensurePortfolioDb } = require("./migrateDb.cjs");
 
+// Windows packaged builds: avoid network-service crash when loading localhost UI.
+app.commandLine.appendSwitch("disable-features", "NetworkServiceSandbox");
+
 const PORT = Number(process.env.PORT) || 3847;
+const SERVER_HOST = "127.0.0.1";
 let serverProcess = null;
 let mainWindow = null;
 
@@ -53,8 +57,7 @@ function applyServerEnv(env) {
 
 /** Packaged Windows builds fail to spawn BÖRS.exe with ELECTRON_RUN_AS_NODE (ENOENT / Ö in path). */
 function startServerInProcess(root, serverEntry, env) {
-  applyServerEnv(env);
-  process.chdir(root);
+  applyServerEnv({ ...env, BORS_APP_ROOT: root });
   require(serverEntry);
 }
 
@@ -104,8 +107,12 @@ function stopServer() {
   serverProcess = null;
 }
 
+function serverBaseUrl() {
+  return `http://${SERVER_HOST}:${PORT}`;
+}
+
 function waitForServer(maxMs = 30_000) {
-  const base = `http://127.0.0.1:${PORT}`;
+  const base = serverBaseUrl();
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const tick = () => {
@@ -128,6 +135,7 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: "BÖRS",
+    show: false,
     backgroundColor: "#09090b",
     webPreferences: {
       contextIsolation: true,
@@ -135,20 +143,33 @@ async function createWindow() {
     },
   });
 
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
-  await mainWindow.loadURL(base);
+  await mainWindow.loadURL(`${base}/`);
 }
+
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  console.error("[bors] unhandledRejection", reason);
+  dialog.showErrorBox("BÖRS could not start", msg);
+  app.exit(1);
+});
 
 app.whenReady().then(async () => {
   try {
     startServer();
     await createWindow();
   } catch (e) {
+    const msg = e instanceof Error ? (e.stack || e.message) : String(e);
     console.error(e);
+    dialog.showErrorBox("BÖRS could not start", msg);
     app.exit(1);
   }
 });

@@ -1,8 +1,9 @@
 import dotenv from "dotenv";
 import express from "express";
 import path from "path";
+import { appPath, appRoot } from "./server/appRoot";
 
-const projectRoot = process.cwd();
+const projectRoot = appRoot();
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local"), override: true });
 const userDataDir = process.env.BORS_USER_DATA?.trim();
@@ -249,7 +250,7 @@ async function startServer() {
       vite.middlewares(req, res, next);
     });
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = appPath("dist");
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
