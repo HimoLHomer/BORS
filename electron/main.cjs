@@ -4,11 +4,12 @@ const fs = require("fs");
 const { spawn } = require("child_process");
 const { ensurePortfolioDb } = require("./migrateDb.cjs");
 
-// Windows packaged builds: avoid network-service crash when loading localhost UI.
+// Packaged Chromium can fail loading loopback behind proxy / hardened network sandbox.
 app.commandLine.appendSwitch("disable-features", "NetworkServiceSandbox");
+app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
+app.commandLine.appendSwitch("proxy-server", "direct://");
 
 const PORT = Number(process.env.PORT) || 3847;
-const SERVER_HOST = "127.0.0.1";
 let serverProcess = null;
 let mainWindow = null;
 
@@ -107,24 +108,63 @@ function stopServer() {
   serverProcess = null;
 }
 
-function serverBaseUrl() {
-  return `http://${SERVER_HOST}:${PORT}`;
+function portfolioStatusUrls() {
+  return [
+    `http://127.0.0.1:${PORT}/api/portfolio/status`,
+    `http://localhost:${PORT}/api/portfolio/status`,
+    `http://[::1]:${PORT}/api/portfolio/status`,
+  ];
 }
 
-function waitForServer(maxMs = 30_000) {
-  const base = serverBaseUrl();
+function pageUrls() {
+  return [
+    `http://127.0.0.1:${PORT}/`,
+    `http://localhost:${PORT}/`,
+    `http://[::1]:${PORT}/`,
+  ];
+}
+
+/** Prefer probing each loopback hostname; [::1] can work when 127.0.0.1 is odd on some Windows setups. */
+function waitForServer(maxMs = 45_000) {
   const start = Date.now();
+  const urls = portfolioStatusUrls();
+  let flip = 0;
   return new Promise((resolve, reject) => {
     const tick = () => {
-      fetch(`${base}/api/portfolio/status`)
-        .then((r) => (r.ok ? resolve(base) : Promise.reject(new Error(String(r.status)))))
+      const u = urls[flip++ % urls.length];
+      fetch(u)
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          resolve(new URL(u).origin);
+        })
         .catch(() => {
-          if (Date.now() - start > maxMs) reject(new Error("Server did not start in time"));
-          else setTimeout(tick, 250);
+          if (Date.now() - start > maxMs) {
+            reject(new Error(`Server did not start in time (tried ${urls.join(", ")})`));
+          } else setTimeout(tick, 200);
         });
     };
     tick();
   });
+}
+
+/** Chromium often fails localhost once while Node fetch succeeded — retry origins. */
+async function loadAppPage(webContents, baseGuess) {
+  const trimSlash = (s) => String(s || "").replace(/\/+$/, "");
+  const bases = [...new Set([trimSlash(baseGuess), ...pageUrls().map(trimSlash)])].filter(Boolean);
+  const tries = bases.flatMap((b) => [`${b}/`, `${b}/index.html`]);
+  let lastErr = null;
+  for (let round = 0; round < 12; round++) {
+    for (const url of tries) {
+      try {
+        await webContents.loadURL(url);
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 350 + round * 50));
+  }
+  throw lastErr || new Error("loadURL failed for all localhost URLs");
 }
 
 async function createWindow() {
@@ -140,6 +180,7 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: !app.isPackaged,
     },
   });
 
@@ -152,7 +193,11 @@ async function createWindow() {
     return { action: "deny" };
   });
 
-  await mainWindow.loadURL(`${base}/`);
+  mainWindow.webContents.on("did-fail-load", (_e, code, text, url) => {
+    console.error("[bors] did-fail-load", code, text, url);
+  });
+
+  await loadAppPage(mainWindow.webContents, base);
 }
 
 process.on("unhandledRejection", (reason) => {
