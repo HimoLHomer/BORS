@@ -1,14 +1,21 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import path from "path";
+
+const projectRoot = process.cwd();
+dotenv.config({ path: path.join(projectRoot, ".env") });
+dotenv.config({ path: path.join(projectRoot, ".env.local"), override: true });
 import { createServer as createViteServer } from "vite";
 import YahooFinance from 'yahoo-finance2';
 import { registerPortfolioRoutes } from "./server/portfolio";
+import { registerMarketHeatmapRoutes } from "./server/marketHeatmap";
+import { registerMarketOverviewRoutes } from "./server/marketOverview";
+import { registerMarketAiRoutes } from "./server/marketAi";
 import {
   dividendYieldPercentFromQuote,
   dividendYieldPercentFromQuoteSummary,
 } from "./server/dividends";
-const yahooFinance = new YahooFinance();
+const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
 async function startServer() {
   const app = express();
@@ -18,6 +25,16 @@ async function startServer() {
   app.use(express.json());
 
   registerPortfolioRoutes(app, yahooFinance);
+  registerMarketHeatmapRoutes(app, yahooFinance);
+  registerMarketOverviewRoutes(app, yahooFinance);
+  registerMarketAiRoutes(app);
+
+  const marketApiRoutes = [
+    "GET /api/market/heatmap",
+    "GET /api/market/overview",
+    "GET /api/market/ai-status",
+    "POST /api/market/ai-summary",
+  ];
 
   function pickQuotePrice(q: unknown): number | null {
     if (!q || typeof q !== "object") return null;
@@ -195,13 +212,40 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
+  // Unmatched /api → JSON (never SPA index.html)
+  app.use("/api", (req, res) => {
+    const hint =
+      req.path.startsWith("/market/") ?
+        " Restart the dev server (npm run dev on port 3000) after pulling changes."
+      : "";
+    res.status(404).json({
+      error: `API route not found: ${req.method} ${req.originalUrl}.${hint}`,
+    });
+  });
+
+  // Always return JSON for /api errors (never Vite text/plain)
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.path.startsWith("/api")) {
+      next(err);
+      return;
+    }
+    console.error("API error:", err);
+    if (!res.headersSent) {
+      const message = err instanceof Error ? err.message : "Internal server error";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Vite middleware for development (skip /api so JSON routes are never HTML)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
-    app.use(vite.middlewares);
+    app.use((req, res, next) => {
+      if (req.path.startsWith("/api")) return next();
+      vite.middlewares(req, res, next);
+    });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
@@ -212,6 +256,7 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`ALPHA-OS Server running on http://localhost:${PORT}`);
+    for (const r of marketApiRoutes) console.log(`  ${r}`);
   });
 }
 

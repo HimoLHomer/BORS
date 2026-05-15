@@ -54,6 +54,15 @@ export function parseMonthKey(raw: string): string | null {
     const y = Number(slash[2]);
     if (m >= 1 && m <= 12) return `${y}-${String(m).padStart(2, '0')}`;
   }
+  const named = /^([a-zA-Z]+)\s+(\d{4})$/.exec(t);
+  if (named) {
+    const d = new Date(`${named[1]} 1, ${named[2]}`);
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const mo = d.getMonth() + 1;
+      if (mo >= 1 && mo <= 12) return `${y}-${String(mo).padStart(2, '0')}`;
+    }
+  }
   return null;
 }
 

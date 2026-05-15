@@ -37,10 +37,8 @@ import {
 import { AllocationPieDefs, allocationPieSliceChrome } from './allocationPieChrome';
 import { 
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Treemap,
+  PieChart, Pie, Cell,
 } from 'recharts';
-import { GoogleGenAI } from "@google/genai";
-import Markdown from 'react-markdown';
 import { formatCurrency, fxToEur, holdingQuoteFxToEur } from './formatCurrency';
 import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
 import { formatDateFi, formatShortMonthDayFi, formatTimeFi, todayIsoDateHelsinki } from './formatDate';
@@ -49,6 +47,7 @@ import { FireProjection } from './FireProjection';
 import { DataListTable } from './DataListTable';
 import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
 import { EurAmountInput } from './EurAmountField';
+import { MarketIntelligence } from './MarketIntelligence';
 
 // --- Types & Enums ---
 
@@ -1572,78 +1571,14 @@ export default function App() {
             )}
 
             {activeView === View.MARKET_RECAP && (
-              <motion.div 
+              <motion.div
                 key="market-recap"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1400px] mx-auto p-8 space-y-8"
+                className="max-w-[1400px] mx-auto w-full dashboard-view pb-8"
               >
-                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                  <div>
-                    <h2 className="text-2xl font-black tracking-tight text-white uppercase">Market Intelligence</h2>
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-green animate-pulse"></div>
-                      <p className="text-[10px] text-text-s font-bold uppercase tracking-[0.2em]">Global Feed Active • Live Performance Data</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-                  <div className="lg:col-span-3 space-y-8">
-                    <div className="glass-panel p-6 min-h-[500px] flex flex-col">
-                      <div className="flex items-center justify-between mb-6">
-                        <h3 className="card-title">S&P 500 Heatmap</h3>
-                        <span className="text-[9px] text-text-s font-mono uppercase tracking-widest px-3 py-1 bg-white/5 rounded-full">Top US Tech & Finance</span>
-                      </div>
-                      <div className="flex-1">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <Treemap
-                            data={[
-                              { name: 'Technology', children: [{ name: 'AAPL', size: 3000, change: 1.2 }, { name: 'MSFT', size: 2800, change: -0.5 }, { name: 'NVDA', size: 2200, change: 3.8 }, { name: 'AVGO', size: 900, change: 2.1 }] },
-                              { name: 'Comm Services', children: [{ name: 'GOOGL', size: 1800, change: 0.8 }, { name: 'META', size: 1500, change: -1.2 }, { name: 'NFLX', size: 600, change: 1.4 }] },
-                              { name: 'Consumer', children: [{ name: 'AMZN', size: 1700, change: 0.5 }, { name: 'TSLA', size: 800, change: -2.4 }, { name: 'HD', size: 500, change: 0.2 }] },
-                              { name: 'Finance', children: [{ name: 'BRK-B', size: 1000, change: 0.2 }, { name: 'JPM', size: 700, change: 0.1 }, { name: 'V', size: 600, change: 0.5 }] },
-                              { name: 'Healthcare', children: [{ name: 'LLY', size: 850, change: 1.1 }, { name: 'UNH', size: 750, change: -0.4 }, { name: 'JNJ', size: 600, change: 0.2 }] }
-                            ]}
-                            dataKey="size"
-                            stroke="#000"
-                            fill="#0f172a"
-                            content={<CustomTreemapContent />}
-                          />
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-
-                    <div className="glass-panel p-6 min-h-[400px] flex flex-col">
-                      <div className="flex items-center justify-between mb-6">
-                        <h3 className="card-title">OMX Helsinki 25</h3>
-                        <span className="text-[9px] text-text-s font-mono uppercase tracking-widest px-3 py-1 bg-white/5 rounded-full">Nordic Blue Chips</span>
-                      </div>
-                      <div className="flex-1">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <Treemap
-                            data={[
-                              { name: 'Industrial', children: [{ name: 'NESTE', size: 120, change: -3.2 }, { name: 'UPM', size: 100, change: 0.5 }, { name: 'METSO', size: 85, change: 1.2 }, { name: 'FORTUM', size: 80, change: -1.1 }] },
-                              { name: 'Finance', children: [{ name: 'SAMPO', size: 150, change: -0.1 }, { name: 'NDA-FI', size: 140, change: 0.8 }] },
-                              { name: 'Technology', children: [{ name: 'NOKIA', size: 110, change: 1.5 }, { name: 'ELISA', size: 75, change: -0.2 }] },
-                              { name: 'Retail', children: [{ name: 'KESKOB', size: 90, change: 2.1 }] }
-                            ]}
-                            dataKey="size"
-                            stroke="#000"
-                            fill="#0f172a"
-                            aspectRatio={4/3}
-                            content={<CustomTreemapContent />}
-                          />
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-1">
-                    <MarketAISummary />
-                  </div>
-                </div>
+                <MarketIntelligence />
               </motion.div>
             )}
 
@@ -1744,129 +1679,6 @@ export default function App() {
 }
 
 // --- Internal Components ---
-
-const CustomTreemapContent = (props: any) => {
-  const { x, y, width, height, name, change } = props;
-  if (width < 30 || height < 20) return null;
-  
-  const intensity = Math.min(Math.abs(change) * 20, 90);
-  const color = change >= 0 
-    ? `rgba(34, 197, 94, ${intensity / 100 + 0.1})` 
-    : `rgba(239, 68, 68, ${intensity / 100 + 0.1})`;
-
-  return (
-    <g>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        style={{
-          fill: color,
-          stroke: 'rgba(0,0,0,0.4)',
-          strokeWidth: 2,
-        }}
-      />
-      {width > 40 && height > 30 && (
-        <>
-          <text
-            x={x + width / 2}
-            y={y + height / 2 - 4}
-            textAnchor="middle"
-            fill="#fff"
-            fontSize={Math.min(width, height) / 5}
-            fontWeight="900"
-            className="uppercase tracking-tighter"
-          >
-            {name}
-          </text>
-          <text
-            x={x + width / 2}
-            y={y + height / 2 + 10}
-            textAnchor="middle"
-            fill="#fff"
-            fontSize={Math.min(width, height) / 7}
-            opacity={0.8}
-            fontWeight="bold"
-          >
-            {formatPercentFi(change, 2, { showPlus: true })}
-          </text>
-        </>
-      )}
-    </g>
-  );
-};
-
-const MarketAISummary = () => {
-  const [summary, setSummary] = useState('');
-  const [loading, setLoading] = useState(true);
-  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY);
-
-  useEffect(() => {
-    if (!hasGeminiKey) {
-      setSummary(
-        'Running in **local-only** mode: portfolio and history live in SQLite on this computer. Quotes use the bundled Yahoo proxy when you are online. To enable this AI panel, add `GEMINI_API_KEY` to `.env.local` and restart the dev server.'
-      );
-      setLoading(false);
-      return;
-    }
-
-    const generateSummary = async () => {
-      try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: "Why are the global stock markets moving the way they are today? Provide a brief, professional summary of today's key market drivers, economic reports, and geopolitical factors. Focus on S&P 500 and Nordic markets.",
-        });
-        setSummary(response.text || 'Market intelligence feed currently being processed. Re-evaluating drivers...');
-      } catch (e) {
-        setSummary('Could not reach the AI service. Check your API key and network, or use the app without AI (local portfolio still works).');
-      } finally {
-        setLoading(false);
-      }
-    };
-    generateSummary();
-  }, [hasGeminiKey]);
-
-  return (
-    <div className="glass-panel p-8 h-full flex flex-col border-accent/20">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
-          <Zap className="w-5 h-5 text-accent animate-pulse" />
-        </div>
-        <div>
-          <h3 className="card-title leading-none">AI Market Summary</h3>
-          <p className="text-[9px] text-text-s uppercase font-mono tracking-widest mt-1">
-            {hasGeminiKey ? 'Optional: Google Gemini' : 'Disabled (no API key)'}
-          </p>
-        </div>
-      </div>
-      
-      <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="space-y-4">
-            <div className="h-4 bg-white/5 rounded-full w-3/4 animate-pulse"></div>
-            <div className="h-4 bg-white/5 rounded-full w-full animate-pulse"></div>
-            <div className="h-4 bg-white/5 rounded-full w-5/6 animate-pulse"></div>
-            <div className="h-4 bg-white/5 rounded-full w-2/3 animate-pulse"></div>
-          </div>
-        ) : (
-          <div className="markdown-body text-text-p text-sm leading-relaxed prose prose-sm prose-invert max-w-none">
-            <Markdown>{summary}</Markdown>
-          </div>
-        )}
-      </div>
-      
-      {!loading && (
-        <div className="mt-8 p-4 bg-white/5 rounded-xl border border-border/50">
-          <p className="text-[8px] text-text-s uppercase font-mono text-center tracking-widest leading-normal">
-            Information provided by Börs Intelligence is for informational purposes only. Not financial advice.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-};
 
 const NavButton = ({ active, onClick, icon, label }: { 
   active: boolean, 

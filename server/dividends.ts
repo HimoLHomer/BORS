@@ -111,6 +111,41 @@ function addMonthsUtc(d: Date, n: number): Date {
   return x;
 }
 
+function addDaysUtc(d: Date, days: number): Date {
+  const x = new Date(d.getTime());
+  x.setUTCDate(x.getUTCDate() + days);
+  return x;
+}
+
+function parseYmdUtc(ymd: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  const d = new Date(Date.UTC(y, mo, day));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Days from ex-dividend to payment when Yahoo provides both calendar dates. */
+export function inferExToPayLagDays(
+  exDate: string | null,
+  payDate: string | null
+): number | null {
+  const ex = exDate ? parseYmdUtc(exDate) : null;
+  const pay = payDate ? parseYmdUtc(payDate) : null;
+  if (!ex || !pay) return null;
+  const lag = Math.round((pay.getTime() - ex.getTime()) / 86400000);
+  if (lag >= 5 && lag <= 60) return lag;
+  return null;
+}
+
+function defaultExToPayLagDays(freq: InferredDividendPayoutFrequency): number {
+  if (freq === "monthly") return 28;
+  if (freq === "quarterly") return 21;
+  return 30;
+}
+
 function advanceAnchorToUpcomingUtc(anchor: Date, freq: InferredDividendPayoutFrequency): Date {
   const now = new Date();
   const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -124,22 +159,22 @@ function advanceAnchorToUpcomingUtc(anchor: Date, freq: InferredDividendPayoutFr
   return cur;
 }
 
-/** When Yahoo omits `dividendDate`, project likely payout dates from chart dividend spacing (same cadence as inferPayoutFrequencyFromChartDividends). */
-function projectedPayoutDatesFromChartDividends(
-  divList: { date?: Date | string }[] | undefined,
-  freq: InferredDividendPayoutFrequency | null,
+function scheduleCount(freq: InferredDividendPayoutFrequency): number {
+  if (freq === "monthly") return 18;
+  if (freq === "quarterly") return 12;
+  return 6;
+}
+
+/** Project pay dates forward from a known payment anchor (Yahoo pay date or manual anchor). */
+function projectedPayoutDatesFromAnchor(
+  payAnchorYmd: string,
+  freq: InferredDividendPayoutFrequency,
   count: number
 ): string[] {
-  if (!freq || !divList?.length) return [];
-  const times = divList
-    .map((d) => new Date(d.date as Date).getTime())
-    .filter((t) => Number.isFinite(t))
-    .sort((a, b) => a - b);
-  if (times.length === 0) return [];
-  const last = new Date(times[times.length - 1]!);
-  const anchor = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth(), last.getUTCDate()));
+  const parsed = parseYmdUtc(payAnchorYmd);
+  if (!parsed) return [];
   const step = freq === "monthly" ? 1 : freq === "quarterly" ? 3 : 12;
-  let cur = advanceAnchorToUpcomingUtc(anchor, freq);
+  let cur = advanceAnchorToUpcomingUtc(parsed, freq);
   const out: string[] = [];
   for (let i = 0; i < count; i++) {
     out.push(formatYmdUtc(cur));
@@ -148,14 +183,56 @@ function projectedPayoutDatesFromChartDividends(
   return out;
 }
 
+/**
+ * Yahoo chart `events.dividends` are ex-dividend dates, not payment dates.
+ * Shift the last ex-date by a typical ex→pay lag, then project forward.
+ */
+function projectedPayoutDatesFromChartDividends(
+  divList: { date?: Date | string }[] | undefined,
+  freq: InferredDividendPayoutFrequency | null,
+  exToPayLagDays: number,
+  count: number
+): string[] {
+  if (!freq || !divList?.length) return [];
+  const times = divList
+    .map((d) => new Date(d.date as Date).getTime())
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (times.length === 0) return [];
+  const lastEx = new Date(times[times.length - 1]!);
+  const lastExUtc = new Date(Date.UTC(lastEx.getUTCFullYear(), lastEx.getUTCMonth(), lastEx.getUTCDate()));
+  const payAnchor = addDaysUtc(lastExUtc, exToPayLagDays);
+  return projectedPayoutDatesFromAnchor(formatYmdUtc(payAnchor), freq, count);
+}
+
 function buildCalendarPayoutSchedule(
   officialPay: string | null,
+  officialEx: string | null,
   divList: { date?: Date | string }[] | undefined,
   freq: InferredDividendPayoutFrequency | null
 ): { dates: string[]; source: CalendarPayoutSource } {
-  if (officialPay) return { dates: [officialPay], source: "yahoo" };
-  const est = projectedPayoutDatesFromChartDividends(divList, freq, 14);
-  if (est.length) return { dates: est, source: "estimated" };
+  const effectiveFreq =
+    freq ?? (divList && divList.length >= 2 ? inferPayoutFrequencyFromChartDividends(divList) : null);
+  const lag =
+    inferExToPayLagDays(officialEx, officialPay) ??
+    (effectiveFreq ? defaultExToPayLagDays(effectiveFreq) : null);
+
+  if (officialPay && effectiveFreq) {
+    return {
+      dates: projectedPayoutDatesFromAnchor(officialPay, effectiveFreq, scheduleCount(effectiveFreq)),
+      source: "yahoo",
+    };
+  }
+
+  if (officialPay) {
+    return { dates: [officialPay], source: "yahoo" };
+  }
+
+  if (effectiveFreq && lag != null) {
+    const est = projectedPayoutDatesFromChartDividends(divList, effectiveFreq, lag, 14);
+    if (est.length) return { dates: est, source: "estimated" };
+  }
+
   return { dates: [], source: "none" };
 }
 
@@ -339,7 +416,13 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
             const name = (price?.longName || price?.shortName || sym) as string;
 
             const dividendDate = toIsoDate(cal?.dividendDate);
-            const calSchedule = buildCalendarPayoutSchedule(dividendDate, divList, payoutFrequency);
+            const exDividendDate = toIsoDate(cal?.exDividendDate ?? sd?.exDividendDate);
+            const calSchedule = buildCalendarPayoutSchedule(
+              dividendDate,
+              exDividendDate,
+              divList,
+              payoutFrequency
+            );
 
             return {
               symbol: sym,
@@ -353,7 +436,7 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
               annualDividendPerShare: annualPerShare != null && Number.isFinite(annualPerShare) ? annualPerShare : null,
               annualDividendPerShareEur: null,
               estimatedAnnualIncomeEur: 0,
-              exDividendDate: toIsoDate(cal?.exDividendDate ?? sd?.exDividendDate),
+              exDividendDate,
               dividendDate,
               calendarPayoutDates: calSchedule.dates,
               calendarPayoutSource: calSchedule.source,

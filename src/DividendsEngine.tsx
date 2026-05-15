@@ -366,9 +366,7 @@ export function DividendsEngine({
       const dates =
         row.calendarPayoutDates && row.calendarPayoutDates.length > 0
           ? row.calendarPayoutDates
-          : row.dividendDate
-            ? [row.dividendDate]
-            : [];
+          : [];
       const estimated = row.calendarPayoutSource === 'estimated';
       for (const date of dates) {
         out.push({ name: row.name, date, estimated });
@@ -380,11 +378,7 @@ export function DividendsEngine({
       }
     }
     out.sort((a, b) => a.date.localeCompare(b.date));
-    const past = out.filter((e) => e.date < today);
-    const future = out.filter((e) => e.date >= today);
-    const recentPast = past.slice(-6);
-    const nearFuture = future.slice(0, 24);
-    return [...recentPast, ...nearFuture];
+    return out.filter((e) => e.date >= today).slice(0, 24);
   }, [dividendPayingRows, manualRows]);
 
   const resetDrafts = () => {

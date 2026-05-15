@@ -112,8 +112,8 @@ function MonthYearInput({
     <input
       type="text"
       inputMode="numeric"
-      placeholder="5.2026"
-      className={`${INLINE_INPUT} tabular-nums text-text-p ${className || 'w-[5.5rem]'}`}
+      placeholder="Jan 2026"
+      className={`${INLINE_INPUT} text-text-p ${className || 'w-[7.25rem]'}`}
       value={draft}
       onFocus={() => {
         editingRef.current = true;
@@ -552,7 +552,7 @@ export function FireProjection({
                     {rows.map((row) => (
                       <div
                         key={row.id}
-                        className="grid grid-cols-[5.5rem_minmax(0,1fr)_1.75rem] gap-2 items-center w-full"
+                        className="grid grid-cols-[7.25rem_minmax(0,1fr)_1.75rem] gap-2 items-center w-full"
                       >
                         <MonthYearInput
                           value={row.month}
