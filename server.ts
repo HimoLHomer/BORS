@@ -129,14 +129,18 @@ async function startServer() {
     }
     try {
       const results = await yahooFinance.search(q);
-      const quotes = results.quotes;
+      const rawQuotes = Array.isArray(results.quotes) ? results.quotes : [];
+      const quotes = rawQuotes.filter((quote) => {
+        const s = (quote as { symbol?: string }).symbol;
+        return typeof s === "string" && s.trim().length > 0;
+      });
 
       // Enrich top 8 results with price and currency
       const enrichedQuotes = await Promise.all(
         quotes.slice(0, 8).map(async (quote: any) => {
           try {
-            // Some results like news don't have symbols or prices
-            if (!quote.symbol) return quote;
+            // Defensive: skip rows with no ticker (Yahoo sometimes returns sparse entries)
+            if (!quote.symbol || !String(quote.symbol).trim()) return null;
             
             const [detail, sumSnap] = await Promise.all([
               yahooFinance.quote(quote.symbol).catch(() => ({})),
@@ -184,7 +188,7 @@ async function startServer() {
         })
       );
 
-      res.json(enrichedQuotes);
+      res.json(enrichedQuotes.filter((row): row is NonNullable<typeof row> => row != null));
     } catch (error) {
       console.error(`Yahoo Finance search error for ${q}:`, error);
       res.status(500).json({ error: "Failed to search for assets" });

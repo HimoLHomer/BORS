@@ -2,11 +2,23 @@ import type { Express, Request, Response } from "express";
 
 export type DividendHoldingIn = {
   symbol: string;
+  /** Dashboard ticker (e.g. O) when `symbol` is a local listing (e.g. RY6.F). */
+  displaySymbol?: string | null;
   quantity: number;
   currency: string;
   livePrice?: number;
   averagePrice?: number;
 };
+
+/** Dividend fundamentals from primary ticker when holding is a foreign listing. */
+export function yahooDividendSymbol(sym: string, displaySymbol?: string | null): string {
+  const d = displaySymbol?.trim();
+  if (!d) return sym;
+  if (d.includes(".")) return sym;
+  if (d.length > 8) return sym;
+  if (d.toUpperCase() === sym.toUpperCase()) return sym;
+  return d;
+}
 
 function toIsoDate(d: unknown): string | null {
   if (d == null) return null;
@@ -84,6 +96,69 @@ export function inferPayoutFrequencyFromChartDividends(
   return "annual";
 }
 
+type CalendarPayoutSource = "yahoo" | "estimated" | "none";
+
+function formatYmdUtc(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function addMonthsUtc(d: Date, n: number): Date {
+  const x = new Date(d.getTime());
+  x.setUTCMonth(x.getUTCMonth() + n);
+  return x;
+}
+
+function advanceAnchorToUpcomingUtc(anchor: Date, freq: InferredDividendPayoutFrequency): Date {
+  const now = new Date();
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  let cur = new Date(anchor.getTime());
+  const step = freq === "monthly" ? 1 : freq === "quarterly" ? 3 : 12;
+  let guard = 0;
+  while (cur.getTime() < todayUtc && guard < 600) {
+    cur = addMonthsUtc(cur, step);
+    guard += 1;
+  }
+  return cur;
+}
+
+/** When Yahoo omits `dividendDate`, project likely payout dates from chart dividend spacing (same cadence as inferPayoutFrequencyFromChartDividends). */
+function projectedPayoutDatesFromChartDividends(
+  divList: { date?: Date | string }[] | undefined,
+  freq: InferredDividendPayoutFrequency | null,
+  count: number
+): string[] {
+  if (!freq || !divList?.length) return [];
+  const times = divList
+    .map((d) => new Date(d.date as Date).getTime())
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (times.length === 0) return [];
+  const last = new Date(times[times.length - 1]!);
+  const anchor = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth(), last.getUTCDate()));
+  const step = freq === "monthly" ? 1 : freq === "quarterly" ? 3 : 12;
+  let cur = advanceAnchorToUpcomingUtc(anchor, freq);
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push(formatYmdUtc(cur));
+    cur = addMonthsUtc(cur, step);
+  }
+  return out;
+}
+
+function buildCalendarPayoutSchedule(
+  officialPay: string | null,
+  divList: { date?: Date | string }[] | undefined,
+  freq: InferredDividendPayoutFrequency | null
+): { dates: string[]; source: CalendarPayoutSource } {
+  if (officialPay) return { dates: [officialPay], source: "yahoo" };
+  const est = projectedPayoutDatesFromChartDividends(divList, freq, 14);
+  if (est.length) return { dates: est, source: "estimated" };
+  return { dates: [], source: "none" };
+}
+
 /** Yield from `quote()` when quoteSummary is empty (rare listings). */
 export function dividendYieldPercentFromQuote(detail: {
   trailingAnnualDividendYield?: number;
@@ -134,13 +209,23 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
         symbol: string;
         name: string;
         quantity: number;
+        /** Currency of `annualDividendPerShare` (often `financialCurrency`, e.g. USD, while the listing trades in EUR). */
         quoteCurrency: string;
+        /** Yahoo listing / `regularMarketPrice` currency (for converting reference price to EUR). */
+        tradingCurrency: string;
+        /** Same as `quoteCurrency` here — kept explicit for server-side FX. */
+        dividendCurrency: string;
+        /** Yahoo summary `regularMarketPrice` in `tradingCurrency` (fallback position value when dashboard price is missing). */
+        yahooReferencePrice: number | null;
         dividendYieldPercent: number | null;
         annualDividendPerShare: number | null;
         annualDividendPerShareEur: number | null;
         estimatedAnnualIncomeEur: number;
         exDividendDate: string | null;
         dividendDate: string | null;
+        /** Pay dates for the UI calendar (official Yahoo pay date, or projected from chart history). */
+        calendarPayoutDates: string[];
+        calendarPayoutSource: CalendarPayoutSource;
         payoutFrequency: InferredDividendPayoutFrequency | null;
         error: boolean;
       };
@@ -150,42 +235,72 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
           const qty = typeof h.quantity === "number" && Number.isFinite(h.quantity) ? h.quantity : 0;
           const sym = h.symbol?.trim();
           if (!sym) {
+            const hc = (h.currency || baseCurrency).toUpperCase();
             return {
               symbol: "",
               name: "",
               quantity: qty,
-              quoteCurrency: h.currency || baseCurrency,
+              quoteCurrency: hc,
+              tradingCurrency: hc,
+              dividendCurrency: hc,
+              yahooReferencePrice: null,
               dividendYieldPercent: null,
               annualDividendPerShare: null,
               annualDividendPerShareEur: null,
               estimatedAnnualIncomeEur: 0,
               exDividendDate: null,
               dividendDate: null,
+              calendarPayoutDates: [],
+              calendarPayoutSource: "none",
               payoutFrequency: null,
               error: true,
             };
           }
           try {
+            const divSym = yahooDividendSymbol(sym, h.displaySymbol);
             const p2 = Math.floor(Date.now() / 1000);
             const p1 = p2 - 86400 * 800;
-            const [sum, chartResult] = await Promise.all([
+            const [sum, chartResult, listQuote, fundQuote] = await Promise.all([
               yahooFinance.quoteSummary(
-                sym,
-                { modules: ["summaryDetail", "calendarEvents", "price"] },
+                divSym,
+                { modules: ["summaryDetail", "calendarEvents", "price", "defaultKeyStatistics"] },
                 { validateResult: false }
               ),
               yahooFinance
-                .chart(sym, { period1: p1, period2: p2, interval: "1d", events: "div" }, { validateResult: false })
+                .chart(divSym, { period1: p1, period2: p2, interval: "1d", events: "div" }, { validateResult: false })
                 .catch(() => null),
+              yahooFinance.quote(sym).catch(() => null),
+              divSym !== sym ? yahooFinance.quote(divSym).catch(() => null) : Promise.resolve(null),
             ]);
+            const fastQuote = listQuote ?? fundQuote;
             const divList = chartResult?.events?.dividends as { date?: Date | string; amount?: number }[] | undefined;
             const payoutFrequency = inferPayoutFrequencyFromChartDividends(divList);
 
             const sd = sum.summaryDetail;
             const cal = sum.calendarEvents;
             const price = sum.price;
-            const quoteCurrency = (price?.currency || h.currency || "USD").toUpperCase();
-            quoteCurrencies.add(quoteCurrency);
+            const dks = sum.defaultKeyStatistics as { financialCurrency?: string } | undefined;
+            const sdRec = sd as Record<string, unknown> | undefined;
+            const financialRaw =
+              (typeof dks?.financialCurrency === "string" && dks.financialCurrency.trim()
+                ? dks.financialCurrency.trim()
+                : null) ??
+              (sdRec && typeof sdRec.financialCurrency === "string" ? String(sdRec.financialCurrency).trim() : null);
+
+            const listQ = listQuote && typeof listQuote === "object" ? (listQuote as { currency?: string; regularMarketPrice?: number }) : null;
+            const fundQ = fundQuote && typeof fundQuote === "object" ? (fundQuote as { currency?: string }) : null;
+            const listCurrency =
+              typeof listQ?.currency === "string" && listQ.currency.trim() ? listQ.currency.trim() : "";
+            const tradingCurrency = String(
+              listCurrency || h.currency || price?.currency || "USD"
+            ).toUpperCase();
+            const dividendCurrency = String(
+              financialRaw || (divSym !== sym ? fundQ?.currency || "USD" : tradingCurrency)
+            ).toUpperCase();
+            quoteCurrencies.add(tradingCurrency);
+            quoteCurrencies.add(dividendCurrency);
+            /** UI label for per-share dividend — matches `annualDividendPerShare` units. */
+            const quoteCurrency = dividendCurrency;
 
             const perShareDirect =
               typeof sd?.trailingAnnualDividendRate === "number" && Number.isFinite(sd.trailingAnnualDividendRate)
@@ -194,7 +309,13 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
                   ? sd.dividendRate
                   : null;
 
-            const livePx = typeof price?.regularMarketPrice === "number" ? price.regularMarketPrice : null;
+            const listPx =
+              typeof h.livePrice === "number" && h.livePrice > 0
+                ? h.livePrice
+                : typeof listQ?.regularMarketPrice === "number"
+                  ? listQ.regularMarketPrice
+                  : null;
+            const livePx = listPx;
             const dividendYieldPercent = dividendYieldPercentFromQuoteSummary(sum);
 
             const yYield =
@@ -217,33 +338,47 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
 
             const name = (price?.longName || price?.shortName || sym) as string;
 
+            const dividendDate = toIsoDate(cal?.dividendDate);
+            const calSchedule = buildCalendarPayoutSchedule(dividendDate, divList, payoutFrequency);
+
             return {
               symbol: sym,
               name,
               quantity: qty,
               quoteCurrency,
+              tradingCurrency,
+              dividendCurrency,
+              yahooReferencePrice: livePx,
               dividendYieldPercent,
               annualDividendPerShare: annualPerShare != null && Number.isFinite(annualPerShare) ? annualPerShare : null,
               annualDividendPerShareEur: null,
               estimatedAnnualIncomeEur: 0,
               exDividendDate: toIsoDate(cal?.exDividendDate ?? sd?.exDividendDate),
-              dividendDate: toIsoDate(cal?.dividendDate),
+              dividendDate,
+              calendarPayoutDates: calSchedule.dates,
+              calendarPayoutSource: calSchedule.source,
               payoutFrequency,
               error: false,
             };
           } catch (e) {
             console.error(`[dividends] ${sym}`, e);
+            const hc = (h.currency || "USD").toUpperCase();
             return {
               symbol: sym,
               name: sym,
               quantity: qty,
-              quoteCurrency: (h.currency || "USD").toUpperCase(),
+              quoteCurrency: hc,
+              tradingCurrency: hc,
+              dividendCurrency: hc,
+              yahooReferencePrice: null,
               dividendYieldPercent: null,
               annualDividendPerShare: null,
               annualDividendPerShareEur: null,
               estimatedAnnualIncomeEur: 0,
               exDividendDate: null,
               dividendDate: null,
+              calendarPayoutDates: [],
+              calendarPayoutSource: "none",
               payoutFrequency: null,
               error: true,
             };
@@ -271,25 +406,39 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
       holdings.forEach((h, i) => {
         const row = rows[i];
         if (!row || row.error) return;
-        const fx = rates[row.quoteCurrency] ?? (row.quoteCurrency === baseCurrency ? 1 : 0);
+        const divFx = rates[row.dividendCurrency] ?? (row.dividendCurrency === baseCurrency ? 1 : 0);
         const perShareEur =
-          row.annualDividendPerShare != null && Number.isFinite(row.annualDividendPerShare) && fx > 0
-            ? row.annualDividendPerShare * fx
+          row.annualDividendPerShare != null && Number.isFinite(row.annualDividendPerShare) && divFx > 0
+            ? row.annualDividendPerShare * divFx
             : null;
         row.annualDividendPerShareEur = perShareEur != null ? Math.round(perShareEur * 10000) / 10000 : null;
         const income = perShareEur != null && Number.isFinite(perShareEur) ? perShareEur * row.quantity : 0;
         row.estimatedAnnualIncomeEur = Math.round(income * 100) / 100;
         totalAnnualIncomeEur += row.estimatedAnnualIncomeEur;
 
+        const holdCurr = (h.currency || baseCurrency).toUpperCase();
         const px =
           typeof h.livePrice === "number" && h.livePrice > 0
             ? h.livePrice
             : typeof h.averagePrice === "number"
               ? h.averagePrice
               : 0;
-        const posRate = rates[h.currency] ?? (h.currency === baseCurrency ? 1 : 0);
-        if (px > 0 && posRate > 0 && Number.isFinite(h.quantity)) {
-          totalHoldingsValueEur += h.quantity * px * posRate;
+        const posRate = rates[holdCurr] ?? (holdCurr === baseCurrency ? 1 : 0);
+        let positionValueEur =
+          px > 0 && posRate > 0 && Number.isFinite(h.quantity) ? h.quantity * px * posRate : 0;
+        if (!(positionValueEur > 0) && row.yahooReferencePrice != null && row.yahooReferencePrice > 0) {
+          const tFx = rates[row.tradingCurrency] ?? (row.tradingCurrency === baseCurrency ? 1 : 0);
+          if (tFx > 0 && Number.isFinite(h.quantity)) {
+            positionValueEur = h.quantity * row.yahooReferencePrice * tFx;
+          }
+        }
+        if (positionValueEur > 0) {
+          totalHoldingsValueEur += positionValueEur;
+          if (row.estimatedAnnualIncomeEur > 0) {
+            row.dividendYieldPercent = Math.round((row.estimatedAnnualIncomeEur / positionValueEur) * 10000) / 100;
+          } else {
+            row.dividendYieldPercent = null;
+          }
         }
       });
 

@@ -35,6 +35,11 @@ export function getPortfolioDb(): Database.Database {
       amount_eur REAL NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO portfolio_cash (id, amount_eur) VALUES (1, 0);
+    CREATE TABLE IF NOT EXISTS ui_prefs (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload TEXT NOT NULL DEFAULT '{}'
+    );
+    INSERT OR IGNORE INTO ui_prefs (id, payload) VALUES (1, '{}');
   `);
   console.log(`[portfolio] SQLite database: ${file}`);
   return db;
@@ -52,6 +57,25 @@ function getCashAmountEur(): number {
   const raw = row?.amount_eur;
   const n = typeof raw === "number" ? raw : typeof raw === "string" ? parseFloat(raw) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function readUiPrefsPayload(): Record<string, unknown> {
+  try {
+    const row = getPortfolioDb()
+      .prepare("SELECT payload FROM ui_prefs WHERE id = 1")
+      .get() as { payload: string } | undefined;
+    if (!row?.payload) return {};
+    const o = JSON.parse(row.payload) as unknown;
+    return o && typeof o === "object" && !Array.isArray(o) ? (o as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUiPrefsPayload(next: Record<string, unknown>): void {
+  getPortfolioDb()
+    .prepare("UPDATE ui_prefs SET payload = ? WHERE id = 1")
+    .run(JSON.stringify(next));
 }
 
 export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void {
@@ -90,6 +114,31 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to save cash" });
+    }
+  });
+
+  app.get("/api/portfolio/ui-prefs", (_req: Request, res: Response) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(readUiPrefsPayload());
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to read UI preferences" });
+    }
+  });
+
+  app.put("/api/portfolio/ui-prefs", (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const prev = readUiPrefsPayload();
+      if (body.allocationLabelOffsets !== undefined) prev.allocationLabelOffsets = body.allocationLabelOffsets;
+      if (body.allocationChrome !== undefined) prev.allocationChrome = body.allocationChrome;
+      writeUiPrefsPayload(prev);
+      res.set("Cache-Control", "no-store");
+      res.json(readUiPrefsPayload());
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to save UI preferences" });
     }
   });
 
@@ -228,6 +277,7 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         assets,
         history,
         cashEur: getCashAmountEur(),
+        uiPrefs: readUiPrefsPayload(),
       });
     } catch (e) {
       console.error(e);
@@ -238,7 +288,12 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
   app.post("/api/portfolio/import", (req: Request, res: Response) => {
     try {
       const mode = (req.query.mode as string) === "replace" ? "replace" : "merge";
-      const body = req.body as { assets?: Asset[]; history?: HistoryPoint[]; cashEur?: unknown };
+      const body = req.body as {
+        assets?: Asset[];
+        history?: HistoryPoint[];
+        cashEur?: unknown;
+        uiPrefs?: unknown;
+      };
       const d = getPortfolioDb();
       const importAssets = Array.isArray(body.assets) ? body.assets : [];
       const importHistory = Array.isArray(body.history) ? body.history : [];
@@ -270,6 +325,10 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         if (Number.isFinite(c) && c >= 0) {
           d.prepare("UPDATE portfolio_cash SET amount_eur = ? WHERE id = 1").run(c);
         }
+      }
+
+      if (body.uiPrefs && typeof body.uiPrefs === "object" && !Array.isArray(body.uiPrefs)) {
+        writeUiPrefsPayload(body.uiPrefs as Record<string, unknown>);
       }
 
       res.json({ ok: true, mode, assetsImported: importAssets.length, historyImported: importHistory.length });

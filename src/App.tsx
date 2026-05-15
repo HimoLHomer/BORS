@@ -41,6 +41,7 @@ import {
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
 import { formatCurrency } from './formatCurrency';
+import { formatDateFi, formatShortMonthDayFi, formatTimeFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 
 // --- Types & Enums ---
@@ -74,11 +75,55 @@ function normalizeCashAmountEur(raw: unknown): number | null {
   return null;
 }
 
+/** Parses the cash text field (comma or dot decimals). */
+function parseCashInputEur(raw: string): number | null {
+  const t = raw.trim().replace(',', '.');
+  if (t === '') return null;
+  const n = parseFloat(t);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+function formatCashEurTwoDecimals(n: number): string {
+  return n.toFixed(2);
+}
+
 function isAbortError(e: unknown): boolean {
   return (
     (e instanceof DOMException && e.name === 'AbortError') ||
     (e instanceof Error && e.name === 'AbortError')
   );
+}
+
+function coerceRemoteLabelOffsets(raw: unknown): Record<string, AllocationLabelOffset> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: Record<string, AllocationLabelOffset> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!k.trim() || !v || typeof v !== 'object') continue;
+    const o = v as { dx?: unknown; dy?: unknown };
+    const dx = typeof o.dx === 'number' && Number.isFinite(o.dx) ? o.dx : 0;
+    const dy = typeof o.dy === 'number' && Number.isFinite(o.dy) ? o.dy : 0;
+    out[k] = { dx, dy };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function mergeAllocationChromeFromRemote(
+  raw: unknown,
+  prev: AllocationChromePrefs
+): AllocationChromePrefs {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return prev;
+  const o = raw as Record<string, unknown>;
+  const clamp = (v: unknown, min: number, max: number, def: number) => {
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
+    if (!Number.isFinite(n)) return def;
+    return Math.min(max, Math.max(min, n));
+  };
+  return {
+    pieNudgeX: clamp(o.pieNudgeX, -120, 120, prev.pieNudgeX),
+    pieNudgeY: clamp(o.pieNudgeY, -120, 120, prev.pieNudgeY),
+    labelFontPx: clamp(o.labelFontPx, 8, 18, prev.labelFontPx),
+  };
 }
 
 const HistoryPointModal = ({
@@ -91,7 +136,7 @@ const HistoryPointModal = ({
   onSaved: () => Promise<void>;
 }) => {
   const [dateStr, setDateStr] = useState(
-    modal.type === 'edit' ? modal.point.date : new Date().toISOString().split('T')[0]
+    modal.type === 'edit' ? modal.point.date : todayIsoDateHelsinki()
   );
   const [valueStr, setValueStr] = useState(
     modal.type === 'edit' ? String(modal.point.value) : ''
@@ -210,7 +255,7 @@ const HistoryPointModal = ({
           >
             {busy ? 'Saving…' : 'Save'}
           </button>
-          {modal.type === 'edit' && (
+          {modal.type === 'edit' && modal.point.id !== '__bors_live_today__' && (
             <button
               type="button"
               disabled={busy}
@@ -270,7 +315,7 @@ const Header = ({
             )}
           </div>
         </div>
-        <div className="hidden lg:block border-l border-border pl-8">System Time: {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+        <div className="hidden lg:block border-l border-border pl-8">System Time: {formatTimeFi()}</div>
       </div>
     </div>
   </header>
@@ -283,7 +328,6 @@ export default function App() {
   const [dataStoreHint, setDataStoreHint] = useState<string>('SQLite');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
-  const recordAttemptedRef = useRef<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [historyModal, setHistoryModal] = useState<
     null | { type: 'edit'; point: HistoryPoint } | { type: 'add' }
@@ -298,6 +342,8 @@ export default function App() {
   const importBackupRef = useRef<HTMLInputElement>(null);
   /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
   const portfolioMutationEpochRef = useRef(0);
+  /** After first SQLite UI-prefs hydrate (or failed fetch); enables debounced PUT without clobbering server before read. */
+  const uiPrefsRemoteHydratedRef = useRef(false);
   /** Strict Mode / remount: incremented on effect cleanup so stale async cannot apply portfolio state. */
   const portfolioBootstrapGenerationRef = useRef(0);
   const statsTotalValueRef = useRef(0);
@@ -311,6 +357,14 @@ export default function App() {
     const raw = Number(cashEur);
     return Number.isFinite(raw) && raw >= 0 ? raw : 0;
   }, [cashEur]);
+
+  const normalizeCashInputOnBlur = useCallback(() => {
+    setCashInput((prev) => {
+      const p = parseCashInputEur(prev);
+      if (p !== null) return formatCashEurTwoDecimals(p);
+      return prev.trim() === '' ? formatCashEurTwoDecimals(0) : formatCashEurTwoDecimals(cashLineEur);
+    });
+  }, [cashLineEur]);
 
   useEffect(() => {
     const checkApi = async () => {
@@ -427,20 +481,35 @@ export default function App() {
             if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
             const loadedCash = normalizeCashAmountEur(cashData.amountEur) ?? 0;
             setCashEur(Number(loadedCash));
-            setCashInput(loadedCash === 0 ? '' : String(loadedCash));
+            setCashInput(loadedCash === 0 ? '0.00' : formatCashEurTwoDecimals(loadedCash));
           } catch (e) {
             if (isAbortError(e)) return;
             if (!cancelled && portfolioBootstrapGenerationRef.current === gen) {
               setCashEur(0);
-              setCashInput('');
+              setCashInput('0.00');
             }
+          }
+          try {
+            const ur = await fetch('/api/portfolio/ui-prefs', pf);
+            if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
+            if (ur.ok) {
+              const ui = (await ur.json()) as Record<string, unknown>;
+              const lo = coerceRemoteLabelOffsets(ui.allocationLabelOffsets);
+              if (lo) setAllocLabelOffsets(lo);
+              setAllocChrome((c) => mergeAllocationChromeFromRemote(ui.allocationChrome, c));
+            }
+          } catch (e) {
+            if (!isAbortError(e)) console.warn('UI prefs load failed:', e);
           }
         }
       } catch (e) {
         if (isAbortError(e)) return;
         console.error('Portfolio load failed:', e);
       } finally {
-        if (!cancelled && portfolioBootstrapGenerationRef.current === gen) setLoading(false);
+        if (!cancelled && portfolioBootstrapGenerationRef.current === gen) {
+          uiPrefsRemoteHydratedRef.current = true;
+          setLoading(false);
+        }
       }
     })();
     return () => {
@@ -655,12 +724,34 @@ export default function App() {
   }, [allocLabelOffsets]);
 
   useEffect(() => {
+    if (!uiPrefsRemoteHydratedRef.current) return;
+    const ac = new AbortController();
+    const t = window.setTimeout(() => {
+      void fetch('/api/portfolio/ui-prefs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          allocationLabelOffsets: allocLabelOffsets,
+          allocationChrome: allocChrome,
+        }),
+        signal: ac.signal,
+        cache: 'no-store',
+      }).catch(() => {});
+    }, 450);
+    return () => {
+      ac.abort();
+      window.clearTimeout(t);
+    };
+  }, [allocLabelOffsets, allocChrome]);
+
+  useEffect(() => {
     if (allocationSlices.length === 0) return;
     const keep = new Set(allocationSlices.map((s) => s.key));
     setAllocLabelOffsets((prev) => {
       const next: Record<string, AllocationLabelOffset> = { ...prev };
       let changed = false;
       for (const k of Object.keys(next)) {
+        if (k === 'cash') continue;
         if (!keep.has(k)) {
           delete next[k];
           changed = true;
@@ -726,35 +817,45 @@ export default function App() {
 
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
+  /** Persist today's total when missing. Deps avoid live quote ticks (they were resetting the timer before it fired). */
   useEffect(() => {
-    if (stats.totalValue <= 0 || loading) return;
+    if (loading) return;
+    const today = todayIsoDateHelsinki();
+    if (history.some((p) => p.date === today)) return;
+    if (statsTotalValueRef.current <= 0) return;
 
-    const today = new Date().toISOString().split('T')[0];
-    const hasToday = history.some((p) => p.date === today);
+    const t = window.setTimeout(async () => {
+      const val = statsTotalValueRef.current;
+      if (val <= 0) return;
+      try {
+        const res = await fetch('/api/portfolio/history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: today, value: val }),
+        });
+        if (!res.ok) throw new Error('History write failed');
+        const list: HistoryPoint[] = await fetch('/api/portfolio/history').then((r) => r.json());
+        setHistory(dedupeHistoryByDate(list));
+        portfolioMutationEpochRef.current += 1;
+      } catch (e) {
+        console.error('History sync failed', e);
+      }
+    }, 2000);
+    return () => window.clearTimeout(t);
+  }, [history, loading, assets.length, cashLineEur]);
 
-    if (!hasToday && recordAttemptedRef.current !== today) {
-      const recordPoint = async () => {
-        if (history.some((p) => p.date === today)) return;
-
-        recordAttemptedRef.current = today;
-        try {
-          const res = await fetch('/api/portfolio/history', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date: today, value: statsTotalValueRef.current }),
-          });
-          if (!res.ok) throw new Error('History write failed');
-          const list: HistoryPoint[] = await fetch('/api/portfolio/history').then((r) => r.json());
-          setHistory(dedupeHistoryByDate(list));
-          portfolioMutationEpochRef.current += 1;
-        } catch (e) {
-          console.error('History sync failed', e);
-        }
-      };
-      const timeout = setTimeout(recordPoint, 5000);
-      return () => clearTimeout(timeout);
+  const historyPanelRows = useMemo((): HistoryPoint[] => {
+    const todayStr = todayIsoDateHelsinki();
+    const sorted = [...history].sort((a, b) => b.date.localeCompare(a.date));
+    const hasStoredToday = sorted.some((p) => p.date === todayStr);
+    if (!hasStoredToday && stats.totalValue > 0) {
+      return [
+        { id: '__bors_live_today__', date: todayStr, value: stats.totalValue } as HistoryPoint,
+        ...sorted,
+      ];
     }
-  }, [stats.totalValue, history, loading]);
+    return sorted;
+  }, [history, stats.totalValue]);
 
   const exportPortfolioBackup = async () => {
     try {
@@ -763,7 +864,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `bors-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `bors-backup-${todayIsoDateHelsinki()}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -774,11 +875,17 @@ export default function App() {
   const importPortfolioBackup = async (file: File) => {
     try {
       const text = await file.text();
-      const data = JSON.parse(text) as { assets?: Asset[]; history?: HistoryPoint[]; cashEur?: number };
+      const data = JSON.parse(text) as {
+        assets?: Asset[];
+        history?: HistoryPoint[];
+        cashEur?: number;
+        uiPrefs?: unknown;
+      };
       const payload: {
         assets: Asset[];
         history: HistoryPoint[];
         cashEur?: number;
+        uiPrefs?: unknown;
       } = {
         assets: data.assets ?? [],
         history: data.history ?? [],
@@ -786,22 +893,30 @@ export default function App() {
       if (data.cashEur !== undefined && data.cashEur !== null && Number.isFinite(data.cashEur)) {
         payload.cashEur = Math.max(0, data.cashEur);
       }
+      if (data.uiPrefs && typeof data.uiPrefs === 'object' && !Array.isArray(data.uiPrefs)) {
+        payload.uiPrefs = data.uiPrefs;
+      }
       await fetch('/api/portfolio/import?mode=merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       const pf = { cache: 'no-store' as RequestCache };
-      const [a, h, cashRes] = await Promise.all([
+      const [a, h, cashRes, uiRes] = await Promise.all([
         fetch('/api/portfolio/assets', pf).then((r) => r.json()),
         fetch('/api/portfolio/history', pf).then((r) => r.json()),
         fetch('/api/portfolio/cash', pf).then((r) => (r.ok ? r.json() : { amountEur: 0 })),
+        fetch('/api/portfolio/ui-prefs', pf).then((r) => (r.ok ? r.json() : {})),
       ]);
       setAssets(a);
       setHistory(dedupeHistoryByDate(h));
       const cv = normalizeCashAmountEur(cashRes.amountEur) ?? 0;
       setCashEur(Number(cv));
-      setCashInput(cv === 0 ? '' : String(cv));
+      setCashInput(cv === 0 ? '0.00' : formatCashEurTwoDecimals(cv));
+      const ui = uiRes as Record<string, unknown>;
+      const lo = coerceRemoteLabelOffsets(ui.allocationLabelOffsets);
+      if (lo) setAllocLabelOffsets(lo);
+      setAllocChrome((c) => mergeAllocationChromeFromRemote(ui.allocationChrome, c));
       portfolioMutationEpochRef.current += 1;
     } catch (e) {
       console.error('Import failed', e);
@@ -816,7 +931,7 @@ export default function App() {
     const prevEur = cashEur;
     const prevInput = cashInput;
     setCashEur(Number(amount));
-    setCashInput(amount === 0 ? '' : String(amount));
+    setCashInput(amount === 0 ? '0.00' : formatCashEurTwoDecimals(amount));
     setCashSaving(true);
     try {
       const res = await fetch('/api/portfolio/cash', {
@@ -829,7 +944,7 @@ export default function App() {
       const j = (await res.json()) as { amountEur?: unknown };
       const v = normalizeCashAmountEur(j.amountEur) ?? amount;
       setCashEur(Number(v));
-      setCashInput(v === 0 ? '' : String(v));
+      setCashInput(v === 0 ? '0.00' : formatCashEurTwoDecimals(v));
       portfolioMutationEpochRef.current += 1;
     } catch (e) {
       console.error('Cash save failed', e);
@@ -962,11 +1077,19 @@ export default function App() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {[...history]
-                                  .sort((a, b) => b.date.localeCompare(a.date))
-                                  .map((row) => (
-                                    <tr key={row.date} className="border-b border-border/30 hover:bg-white/[0.03]">
-                                      <td className="px-3 py-2 font-mono text-text-p tabular-nums">{row.date}</td>
+                                {historyPanelRows.map((row) => (
+                                    <tr
+                                      key={row.id ?? row.date}
+                                      className="border-b border-border/30 hover:bg-white/[0.03]"
+                                    >
+                                      <td className="px-3 py-2 font-mono text-text-p tabular-nums">
+                                        {formatDateFi(row.date)}
+                                        {row.id === '__bors_live_today__' ? (
+                                          <span className="ml-2 text-[8px] uppercase text-text-s/45 font-bold tracking-widest">
+                                            (live)
+                                          </span>
+                                        ) : null}
+                                      </td>
                                       <td className="px-3 py-2 font-mono font-bold text-text-p tabular-nums">
                                         {formatCurrency(row.value, 'EUR')}
                                       </td>
@@ -982,7 +1105,7 @@ export default function App() {
                                       </td>
                                     </tr>
                                   ))}
-                                {history.length === 0 && (
+                                {historyPanelRows.length === 0 && (
                                   <tr>
                                     <td
                                       colSpan={3}
@@ -1013,11 +1136,11 @@ export default function App() {
                   <div className="flex-1 mt-8 min-h-[160px]">
                     <ResponsiveContainer width="100%" height="100%">
                           <AreaChart data={(() => {
-                          const todayStr = new Date().toISOString().split('T')[0];
+                          const todayStr = todayIsoDateHelsinki();
                           // Map history and ensure unique dates (latest recorded for that day wins, though recording logic only allows one)
                           const baseData = history.filter((p, i, self) => i === self.findIndex(t => t.date === p.date)).map(p => ({
                             date: p.date,
-                            name: new Date(p.date).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+                            name: formatShortMonthDayFi(p.date),
                             value: p.value
                           }));
                           
@@ -1161,7 +1284,7 @@ export default function App() {
                           <Pie
                             key={
                               allocationSlices.length > 0
-                                ? allocationSlices.map((r) => `${r.key}:${r.value}`).join('|')
+                                ? [...new Set(allocationSlices.map((r) => r.key))].sort().join('|')
                                 : 'empty-allocation'
                             }
                             data={
@@ -1247,7 +1370,7 @@ export default function App() {
                           <th className="px-4 py-2">Shares</th>
                           <th className="px-4 py-2">Total Value</th>
                           <th className="px-4 py-2">Cost Basis</th>
-                          <th className="px-4 py-2 text-accent">Total Gain</th>
+                          <th className="px-4 py-2">Total Gain</th>
                           <th className="px-4 py-2">24h Change</th>
                           <th className="px-4 py-2 text-right"></th>
                         </tr>
@@ -1284,8 +1407,13 @@ export default function App() {
                               <td className="px-4 py-3 text-text-s/40 tabular-nums">{formatCurrency(costBasisInEur, 'EUR')}</td>
                               <td className="px-4 py-3 tabular-nums">
                                 <div className={totalGainInEur >= 0 ? 'text-green' : 'text-red'}>
-                                  <div className="text-xs font-bold">{totalGainPercent >= 0 ? '+' : ''}{totalGainPercent.toFixed(2)}%</div>
-                                  <div className="text-[11px] opacity-60 font-sans">{formatCurrency(totalGainInEur, 'EUR')}</div>
+                                  <div className="text-[11px] font-sans font-bold tabular-nums">
+                                    {formatCurrency(totalGainInEur, 'EUR')}
+                                  </div>
+                                  <div className="text-xs opacity-60 font-bold">
+                                    {totalGainPercent >= 0 ? '+' : ''}
+                                    {totalGainPercent.toFixed(2)}%
+                                  </div>
                                 </div>
                               </td>
                               <td className="px-4 py-3 tabular-nums">
@@ -1336,10 +1464,11 @@ export default function App() {
                       <input
                         type="text"
                         inputMode="decimal"
-                        className="flex-1 min-w-[140px] max-w-[240px] bg-bg/50 border border-border rounded-xl px-4 py-2.5 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
-                        placeholder="0"
+                        className="flex-1 min-w-[140px] max-w-[240px] bg-bg/50 border border-border rounded-xl px-4 py-2.5 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums"
+                        placeholder="0.00"
                         value={cashInput}
                         onChange={(e) => setCashInput(e.target.value)}
+                        onBlur={() => normalizeCashInputOnBlur()}
                       />
                       <button
                         type="button"
@@ -1746,7 +1875,14 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
-      setSearchResults(data || []);
+      const raw = Array.isArray(data) ? data : [];
+      const cleaned = raw.filter(
+        (row: { symbol?: unknown }) =>
+          row &&
+          typeof row.symbol === 'string' &&
+          row.symbol.trim().length > 0
+      );
+      setSearchResults(cleaned);
     } catch (e) {
       console.error("Search failed:", e);
     } finally {
@@ -1872,13 +2008,15 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
               >
                 {searchResults.map((result: any, i: number) => (
                   <button
-                    key={result.symbol + i}
+                    key={`${String(result.symbol)}-${i}`}
                     type="button"
                     onClick={() => selectAsset(result)}
                     className="w-full px-5 py-3 text-left hover:bg-white/5 transition-colors group flex items-start justify-between gap-3"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="text-text-p text-xs font-bold truncate">{result.shortName || result.longName}</div>
+                      <div className="text-text-p text-xs font-bold truncate">
+                        {result.shortName || result.longName || result.name || result.symbol}
+                      </div>
                       <div className="text-[10px] font-mono text-text-s group-hover:text-accent transition-colors truncate">
                         {result.symbol}
                         {result.price && (

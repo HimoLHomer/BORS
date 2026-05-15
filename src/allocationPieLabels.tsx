@@ -98,11 +98,11 @@ export function loadAllocationLabelOffsets(): Record<string, AllocationLabelOffs
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const out: Record<string, AllocationLabelOffset> = {};
     for (const [k, v] of Object.entries(parsed)) {
-      if (!v || typeof v !== 'object') continue;
+      if (!k.trim() || !v || typeof v !== 'object') continue;
       const o = v as { dx?: unknown; dy?: unknown };
       const dx = typeof o.dx === 'number' && Number.isFinite(o.dx) ? o.dx : 0;
       const dy = typeof o.dy === 'number' && Number.isFinite(o.dy) ? o.dy : 0;
-      if (dx !== 0 || dy !== 0) out[k] = { dx, dy };
+      out[k] = { dx, dy };
     }
     return out;
   } catch {
@@ -304,7 +304,7 @@ export function buildAllocationPieCalloutMap(
       sign,
       pJoint,
       displayName: truncateName(sl.name),
-      pctLine: `${sl.percent.toFixed(1)}% of portfolio`,
+      pctLine: `${sl.percent.toFixed(1)}%`,
     });
   }
 
@@ -357,7 +357,7 @@ export function allocationCalloutFromLabelProps(props: PieLabelRenderProps): All
         ? percent * 100
         : 0;
   const displayName = truncateName(String(pl?.name ?? name ?? '—'));
-  const pctLine = `${pct.toFixed(1)}% of portfolio`;
+  const pctLine = `${pct.toFixed(1)}%`;
 
   const pEdge = polar(cx, cy, outerRadius, midAngle);
   const pKink = polar(cx, cy, outerRadius + RADIAL_STUB, midAngle);
