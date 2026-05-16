@@ -211,6 +211,12 @@ export function FireProjection({
     saveFireInputs(stored);
   }, [stored]);
 
+  useEffect(() => {
+    const onClientSettingsApplied = () => setStored(loadFireInputs());
+    window.addEventListener('bors-client-settings-applied', onClientSettingsApplied);
+    return () => window.removeEventListener('bors-client-settings-applied', onClientSettingsApplied);
+  }, []);
+
   const setCapital = (patch: Partial<FireCapitalInputs>) => {
     setStored((s) => ({ ...s, capital: { ...s.capital, ...patch } }));
   };

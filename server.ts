@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { appPath, appRoot } from "./server/appRoot";
 
@@ -10,17 +11,22 @@ const userDataDir = process.env.BORS_USER_DATA?.trim();
 if (userDataDir) {
   dotenv.config({ path: path.join(userDataDir, ".env.local"), override: true });
 }
-import { createServer as createViteServer } from "vite";
 import { registerPortfolioRoutes } from "./server/portfolio";
 import { yahooFinance } from "./server/yahooClient";
 import { registerMarketHeatmapRoutes } from "./server/marketHeatmap";
 import { registerMarketOverviewRoutes } from "./server/marketOverview";
 import { registerMarketAiRoutes } from "./server/marketAi";
+import { registerGeminiSettingsRoutes } from "./server/geminiSettings";
 import {
   dividendYieldPercentFromQuote,
   dividendYieldPercentFromQuoteSummary,
 } from "./server/dividends";
 async function startServer() {
+  // npm start runs dist/server.cjs without NODE_ENV; avoid loading Vite (OOM on large bundles).
+  if (!process.env.NODE_ENV && fs.existsSync(path.join(process.cwd(), "dist", "server.cjs"))) {
+    process.env.NODE_ENV = "production";
+  }
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
   const electronApiOnly = process.env.BORS_ELECTRON === "1";
@@ -45,6 +51,7 @@ async function startServer() {
   registerMarketHeatmapRoutes(app, yahooFinance);
   registerMarketOverviewRoutes(app, yahooFinance);
   registerMarketAiRoutes(app);
+  registerGeminiSettingsRoutes(app);
 
   const marketApiRoutes = [
     "GET /api/market/heatmap",
@@ -255,6 +262,7 @@ async function startServer() {
 
   // Vite middleware for development (skip /api so JSON routes are never HTML)
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -264,7 +272,7 @@ async function startServer() {
       vite.middlewares(req, res, next);
     });
   } else if (!electronApiOnly) {
-    const distPath = appPath("dist");
+    const distPath = process.env.BORS_DIST_ROOT?.trim() || appPath("dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

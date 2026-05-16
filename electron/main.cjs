@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain, utilityProcess } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
@@ -97,24 +97,45 @@ function projectRoot() {
   return app.isPackaged ? app.getAppPath() : path.join(__dirname, "..");
 }
 
-/** Unpacked UI (asarUnpack dist/**); API bundle stays in app.asar. */
-function packagedAppRoot() {
-  const unpacked = path.join(process.resourcesPath, "app.asar.unpacked");
-  if (fs.existsSync(path.join(unpacked, "dist", "index.html"))) return unpacked;
-  return projectRoot();
+/** Unpacked dist (asarUnpack); node_modules stay in app.asar. */
+function packagedDistDir() {
+  const dist = path.join(process.resourcesPath, "app.asar.unpacked", "dist");
+  if (fs.existsSync(path.join(dist, "index.html"))) return dist;
+  return path.join(projectRoot(), "dist");
+}
+
+function packagedServerEntry() {
+  const entry = path.join(packagedDistDir(), "server.cjs");
+  if (fs.existsSync(entry)) return entry;
+  return path.join(projectRoot(), "dist", "server.cjs");
+}
+
+function packagedNodePath() {
+  const dirs = [
+    path.join(process.resourcesPath, "app.asar.unpacked", "node_modules"),
+    path.join(projectRoot(), "node_modules"),
+  ].filter((d) => fs.existsSync(d));
+  return dirs.join(path.delimiter);
 }
 
 function serverEnv(root, dbPath) {
-  const appRoot = app.isPackaged ? packagedAppRoot() : root;
-  return {
+  const env = {
     ...process.env,
     NODE_ENV: "production",
     PORT: String(PORT),
     BORS_DB_PATH: dbPath,
     BORS_USER_DATA: userDataDir(),
     BORS_LISTEN_HOST: "127.0.0.1",
-    BORS_APP_ROOT: appRoot,
+    BORS_APP_ROOT: app.isPackaged ? projectRoot() : root,
   };
+  if (app.isPackaged) {
+    env.BORS_DIST_ROOT = packagedDistDir();
+    const nodePath = packagedNodePath();
+    if (nodePath) {
+      env.NODE_PATH = env.NODE_PATH ? `${nodePath}${path.delimiter}${env.NODE_PATH}` : nodePath;
+    }
+  }
+  return env;
 }
 
 function attachServerLogs(child) {
@@ -122,15 +143,16 @@ function attachServerLogs(child) {
   child.stderr?.on("data", (d) => log(`[server] ${String(d).trim()}`));
 }
 
-function startServerUtility(serverEntry, env) {
+function forkServerProcess(serverEntry, env, cwd) {
   return new Promise((resolve, reject) => {
-    const child = utilityProcess.fork(serverEntry, [], {
-      env,
-      serviceName: "bors-api",
+    const child = spawn(process.execPath, [serverEntry], {
+      cwd,
+      env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: "pipe",
+      windowsHide: true,
     });
     const timeout = setTimeout(() => reject(new Error("API server process did not start")), 60_000);
-    child.on("spawn", () => {
+    child.once("spawn", () => {
       clearTimeout(timeout);
       serverProcess = child;
       attachServerLogs(child);
@@ -146,7 +168,7 @@ function startServerUtility(serverEntry, env) {
 
 async function startServer() {
   const root = projectRoot();
-  const serverEntry = path.join(root, "dist", "server.cjs");
+  const serverEntry = app.isPackaged ? packagedServerEntry() : path.join(root, "dist", "server.cjs");
   if (!fs.existsSync(serverEntry)) {
     throw new Error(`Missing server bundle: ${serverEntry}. Run npm run build first.`);
   }
@@ -154,23 +176,10 @@ async function startServer() {
   const dbPath = ensurePortfolioDb(userDataDir());
   loadUserEnv();
   const env = serverEnv(root, dbPath);
+  const cwd = app.isPackaged ? path.dirname(serverEntry) : root;
 
-  if (app.isPackaged) {
-    log("Starting API server (utility process)");
-    await startServerUtility(serverEntry, env);
-    return;
-  }
-
-  serverProcess = spawn(process.execPath, [serverEntry], {
-    cwd: root,
-    env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: "inherit",
-    windowsHide: true,
-  });
-  serverProcess.on("exit", (code) => {
-    if (code !== null && code !== 0) log(`Server exited with code ${code}`);
-    serverProcess = null;
-  });
+  log(app.isPackaged ? "Starting API server (child process)" : "Starting API server (dev)");
+  await forkServerProcess(serverEntry, env, cwd);
 }
 
 function stopServer() {

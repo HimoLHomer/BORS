@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { GoogleGenAI } from "@google/genai";
+import { getGeminiApiKey } from "./geminiSettings";
 import {
   MARKET_INDEX_AI_CONFIG,
   buildFiMarketAiPrompt,
@@ -53,7 +54,7 @@ function parseGeminiError(e: unknown): { httpStatus: number; message: string; co
     return {
       httpStatus: 403,
       code: 403,
-      message: "Gemini API key was rejected. Check GEMINI_API_KEY in .env.local.",
+      message: "Gemini API key was rejected. Update it under Options → Market AI.",
     };
   }
 
@@ -92,14 +93,16 @@ function extractSummaryText(response: {
 
 export function registerMarketAiRoutes(app: Express): void {
   app.get("/api/market/ai-status", (_req: Request, res: Response) => {
-    res.json({ configured: Boolean(process.env.GEMINI_API_KEY?.trim()) });
+    res.json({ configured: Boolean(getGeminiApiKey()) });
   });
 
   app.post("/api/market/ai-summary", (req: Request, res: Response) => {
     void (async () => {
-      const key = process.env.GEMINI_API_KEY?.trim();
+      const key = getGeminiApiKey();
       if (!key) {
-        res.status(503).json({ error: "GEMINI_API_KEY not configured in .env.local" });
+        res.status(503).json({
+          error: "Gemini API key not configured. Add one under Options → Market AI.",
+        });
         return;
       }
 

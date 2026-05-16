@@ -26,7 +26,7 @@ export function friendlyAiErrorMessage(raw: string): string {
     return 'Gemini free-tier quota is used up for now. Wait a few minutes or check usage in [Google AI Studio](https://aistudio.google.com/).';
   }
   if (lower.includes('api key') || lower.includes('403')) {
-    return 'Gemini API key was rejected. Check `GEMINI_API_KEY` in `.env.local` and restart `npm run dev`.';
+    return 'Gemini API key was rejected. Update it under Options → Market AI.';
   }
   if (lower.includes('gemini-1.5-flash') || lower.includes('is not found for api version')) {
     return 'The configured Gemini model is no longer available. Update the model name in server config or `.env.local`, then restart `npm run dev`.';

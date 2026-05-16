@@ -1,6 +1,6 @@
 import path from "node:path";
 
-/** Project root: cwd in dev, `BORS_APP_ROOT` when packaged (Electron app.asar path). */
+/** Project root: cwd in dev, `BORS_APP_ROOT` when packaged (Electron app.asar — node_modules). */
 export function appRoot(): string {
   const fromEnv = process.env.BORS_APP_ROOT?.trim();
   if (fromEnv) return fromEnv;

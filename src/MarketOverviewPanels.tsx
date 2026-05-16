@@ -87,7 +87,7 @@ function useIndexAiSummary(
   const label = quote?.label ?? '';
   const currency = quote?.currency ?? 'USD';
 
-  useEffect(() => {
+  const refreshAiStatus = useCallback(() => {
     void fetch('/api/market/ai-status', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j: { configured?: boolean }) => setAiConfigured(Boolean(j.configured)))
@@ -95,8 +95,15 @@ function useIndexAiSummary(
   }, []);
 
   useEffect(() => {
+    refreshAiStatus();
+    const onSettings = () => refreshAiStatus();
+    window.addEventListener('bors-gemini-settings-changed', onSettings);
+    return () => window.removeEventListener('bors-gemini-settings-changed', onSettings);
+  }, [refreshAiStatus]);
+
+  useEffect(() => {
     if (aiConfigured === false) {
-      setSummary('Add **GEMINI_API_KEY** to `.env.local` and restart `npm run dev`.');
+      setSummary('Add a Gemini API key under **Options → Market AI** (or `.env.local` for dev).');
       setLoading(false);
       return;
     }

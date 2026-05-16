@@ -12,7 +12,7 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && node scripts/build-server.mjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
@@ -23,7 +23,7 @@
     "rebuild:native": "npm rebuild better-sqlite3",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
     "electron:dev": "npm run build && electron .",
-    "electron:build": "npm run build && node scripts/patch-electron-index.mjs && electron-builder --win"
+    "electron:build": "npm run build && node scripts/patch-electron-index.mjs && npm run electron:rebuild && electron-builder --win"
   },
   "build": {
     "appId": "fi.bors.desktop",
@@ -33,12 +33,15 @@
     },
     "files": [
       "dist/**/*",
+      "data/**/*",
       "electron/**/*",
       "node_modules/**/*",
       "package.json"
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
+      "**/node_modules/bindings/**",
+      "**/node_modules/file-uri-to-path/**",
       "dist/**"
     ],
     "win": {
