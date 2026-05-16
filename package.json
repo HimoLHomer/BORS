@@ -23,7 +23,7 @@
     "rebuild:native": "npm rebuild better-sqlite3",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
     "electron:dev": "npm run build && electron .",
-    "electron:build": "npm run build && electron-builder --win"
+    "electron:build": "npm run build && node scripts/patch-electron-index.mjs && electron-builder --win"
   },
   "build": {
     "appId": "fi.bors.desktop",
@@ -38,7 +38,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**"
+      "**/node_modules/better-sqlite3/**",
+      "dist/**"
     ],
     "win": {
       "target": [

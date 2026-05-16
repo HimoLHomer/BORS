@@ -1,51 +1,64 @@
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, utilityProcess } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const { pathToFileURL } = require("url");
 const { spawn } = require("child_process");
 const { ensurePortfolioDb } = require("./migrateDb.cjs");
-
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  app.quit();
-  process.exit(0);
-}
-
-try {
-  const cacheDir = path.join(app.getPath("userData"), "chromium-cache");
-  fs.mkdirSync(cacheDir, { recursive: true });
-  app.commandLine.appendSwitch("disk-cache-dir", cacheDir);
-} catch {
-  /* ignore */
-}
-app.disableHardwareAcceleration();
-app.commandLine.appendSwitch("disable-features", "NetworkServiceSandbox");
-app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
-app.commandLine.appendSwitch("proxy-server", "direct://");
-
-ipcMain.handle("bors:fetch", async (_event, { url, init }) => {
-  const res = await fetch(url, {
-    method: init?.method || "GET",
-    headers: init?.headers,
-    body: init?.body,
-  });
-  const bodyText = await res.text();
-  const headers = {};
-  res.headers.forEach((v, k) => {
-    headers[k] = v;
-  });
-  return {
-    status: res.status,
-    statusText: res.statusText,
-    headers,
-    bodyText,
-  };
-});
 
 const PORT = Number(process.env.PORT) || 3847;
 const LOOPBACK_BASE = `http://127.0.0.1:${PORT}`;
 let serverProcess = null;
 let mainWindow = null;
+let startupLogPath = "";
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  try {
+    if (startupLogPath) fs.appendFileSync(startupLogPath, line);
+  } catch {
+    /* ignore */
+  }
+  console.log(msg);
+}
+
+function showFatal(title, message) {
+  log(`${title}: ${message}`);
+  try {
+    dialog.showErrorBox(title, message);
+  } catch {
+    /* headless */
+  }
+}
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  showFatal("BÖRS", "BÖRS is already running. Check the taskbar or close it in Task Manager (BÖRS.exe).");
+  app.quit();
+} else {
+  try {
+    const cacheDir = path.join(app.getPath("userData"), "chromium-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    app.commandLine.appendSwitch("disk-cache-dir", cacheDir);
+  } catch {
+    /* ignore */
+  }
+  app.commandLine.appendSwitch("disable-features", "NetworkServiceSandbox");
+  app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
+  app.commandLine.appendSwitch("proxy-server", "direct://");
+
+  ipcMain.handle("bors:fetch", async (_event, { url, init }) => {
+    const res = await fetch(url, {
+      method: init?.method || "GET",
+      headers: init?.headers,
+      body: init?.body,
+    });
+    const bodyText = await res.text();
+    const headers = {};
+    res.headers.forEach((v, k) => {
+      headers[k] = v;
+    });
+    return { status: res.status, statusText: res.statusText, headers, bodyText };
+  });
+}
 
 function userDataDir() {
   return app.getPath("userData");
@@ -84,17 +97,6 @@ function projectRoot() {
   return app.isPackaged ? app.getAppPath() : path.join(__dirname, "..");
 }
 
-function applyServerEnv(env) {
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined) process.env[key] = value;
-  }
-}
-
-function startServerInProcess(root, serverEntry, env) {
-  applyServerEnv({ ...env, BORS_APP_ROOT: root });
-  require(serverEntry);
-}
-
 function serverEnv(root, dbPath) {
   return {
     ...process.env,
@@ -103,12 +105,38 @@ function serverEnv(root, dbPath) {
     BORS_DB_PATH: dbPath,
     BORS_USER_DATA: userDataDir(),
     BORS_LISTEN_HOST: "127.0.0.1",
-    BORS_ELECTRON: "1",
-    ELECTRON_RUN_AS_NODE: "1",
+    BORS_APP_ROOT: root,
   };
 }
 
-function startServer() {
+function attachServerLogs(child) {
+  child.stdout?.on("data", (d) => log(`[server] ${String(d).trim()}`));
+  child.stderr?.on("data", (d) => log(`[server] ${String(d).trim()}`));
+}
+
+function startServerUtility(serverEntry, env) {
+  return new Promise((resolve, reject) => {
+    const child = utilityProcess.fork(serverEntry, [], {
+      env,
+      serviceName: "bors-api",
+      stdio: "pipe",
+    });
+    const timeout = setTimeout(() => reject(new Error("API server process did not start")), 60_000);
+    child.on("spawn", () => {
+      clearTimeout(timeout);
+      serverProcess = child;
+      attachServerLogs(child);
+      resolve();
+    });
+    child.on("exit", (code) => log(`API server exited (${code})`));
+    child.on("error", (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
+async function startServer() {
   const root = projectRoot();
   const serverEntry = path.join(root, "dist", "server.cjs");
   if (!fs.existsSync(serverEntry)) {
@@ -120,33 +148,31 @@ function startServer() {
   const env = serverEnv(root, dbPath);
 
   if (app.isPackaged) {
-    startServerInProcess(root, serverEntry, env);
+    log("Starting API server (utility process)");
+    await startServerUtility(serverEntry, env);
     return;
   }
 
   serverProcess = spawn(process.execPath, [serverEntry], {
     cwd: root,
-    env,
+    env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: "inherit",
     windowsHide: true,
   });
-
   serverProcess.on("exit", (code) => {
-    if (code !== null && code !== 0) {
-      console.error("[bors] Server exited with code", code);
-    }
+    if (code !== null && code !== 0) log(`Server exited with code ${code}`);
     serverProcess = null;
   });
 }
 
 function stopServer() {
-  if (serverProcess && !serverProcess.killed) {
+  if (serverProcess && "kill" in serverProcess) {
     serverProcess.kill();
   }
   serverProcess = null;
 }
 
-function waitForServer(maxMs = 45_000) {
+function waitForServer(maxMs = 60_000) {
   const probe = `${LOOPBACK_BASE}/api/portfolio/status`;
   const start = Date.now();
   return new Promise((resolve, reject) => {
@@ -156,74 +182,45 @@ function waitForServer(maxMs = 45_000) {
           if (!r.ok) throw new Error(String(r.status));
           resolve();
         })
-        .catch(() => {
+        .catch((err) => {
           if (Date.now() - start > maxMs) {
-            reject(new Error(`Server did not start in time (${probe})`));
-          } else setTimeout(tick, 200);
+            reject(new Error(`Server did not respond (${probe}): ${err}`));
+          } else setTimeout(tick, 250);
         });
     };
     tick();
   });
 }
 
-/** Packaged Chromium often cannot load http://127.0.0.1; serve UI from disk, API over HTTP. */
-function writePackagedShellHtml(root) {
-  const distDir = path.join(root, "dist");
-  const indexPath = path.join(distDir, "index.html");
-  if (!fs.existsSync(indexPath)) {
-    throw new Error(`Missing UI bundle: ${indexPath}`);
-  }
-  const distBase = pathToFileURL(distDir).href.replace(/\/?$/, "/");
-  const api = LOOPBACK_BASE;
-  const inject = [
-    `<base href="${distBase}">`,
-    "<script>",
-    `(function(){var API=${JSON.stringify(api)};`,
-    "var native=window.fetch.bind(window);",
-    "var ipc=window.__borsIpcFetch;",
-    "window.fetch=function(i,o){",
-    "var u=typeof i==='string'?i:(i&&i.url?i.url:'');",
-    "if(typeof u==='string'&&u.indexOf('/api/')===0){",
-    "var full=API+u;",
-    "return ipc?ipc(full,o):native(full,o);",
-    "}",
-    "return native(i,o);};",
-    "})();",
-    "</script>",
-  ].join("");
-  const html = fs.readFileSync(indexPath, "utf8").replace("<head>", `<head>${inject}`);
-  const shellDir = path.join(userDataDir(), "shell");
-  fs.mkdirSync(shellDir, { recursive: true });
-  const shellIndex = path.join(shellDir, "index.html");
-  fs.writeFileSync(shellIndex, html, "utf8");
-  return shellIndex;
-}
-
-async function loadPackagedUi(webContents, root) {
-  const shellIndex = writePackagedShellHtml(root);
-  await webContents.loadFile(shellIndex);
-}
-
-async function loadDevUi(webContents) {
-  const tries = [`${LOOPBACK_BASE}/`, `${LOOPBACK_BASE}/index.html`];
+async function loadHttpUi(win) {
+  const url = `${LOOPBACK_BASE}/`;
+  log(`Loading UI: ${url}`);
   let lastErr = null;
-  for (let round = 0; round < 12; round++) {
-    for (const url of tries) {
-      try {
-        await webContents.loadURL(url);
-        return;
-      } catch (e) {
-        lastErr = e;
-      }
+  for (let round = 0; round < 20; round++) {
+    try {
+      await win.loadURL(url);
+      return;
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 500 + round * 100));
     }
-    await new Promise((r) => setTimeout(r, 400 + round * 75));
   }
-  throw lastErr || new Error(`loadURL failed for ${LOOPBACK_BASE}`);
+  throw lastErr || new Error(`Could not load ${url}`);
+}
+
+async function openBrowserFallback(reason) {
+  log(`Falling back to system browser: ${reason}`);
+  await shell.openExternal(`${LOOPBACK_BASE}/`);
+  dialog.showMessageBox({
+    type: "info",
+    title: "BÖRS",
+    message: "BÖRS is running in your browser",
+    detail: `The desktop window could not open (${reason}).\n\nBÖRS was opened at:\n${LOOPBACK_BASE}\n\nKeep this window open while you use the app.`,
+  });
 }
 
 async function createWindow() {
   await waitForServer();
-  const root = projectRoot();
 
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -231,18 +228,19 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: "BÖRS",
-    show: false,
+    show: true,
     backgroundColor: "#09090b",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: !app.isPackaged,
+      sandbox: false,
       preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
+    mainWindow.focus();
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -250,54 +248,61 @@ async function createWindow() {
     return { action: "deny" };
   });
 
-  mainWindow.webContents.on("did-fail-load", (_e, code, text, url) => {
-    console.error("[bors] did-fail-load", code, text, url);
-  });
-
-  if (app.isPackaged) {
-    await loadPackagedUi(mainWindow.webContents, root);
-  } else {
-    await loadDevUi(mainWindow.webContents);
+  try {
+    await loadHttpUi(mainWindow);
+    log("BÖRS window ready");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    mainWindow.destroy();
+    mainWindow = null;
+    await openBrowserFallback(msg);
+    app.quit();
   }
 }
 
-process.on("unhandledRejection", (reason) => {
-  const msg = reason instanceof Error ? reason.stack || reason.message : String(reason);
-  console.error("[bors] unhandledRejection", reason);
-  dialog.showErrorBox("BÖRS could not start", msg);
-  app.exit(1);
-});
-
-app.on("second-instance", () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
-});
-
-app.whenReady().then(async () => {
-  try {
-    startServer();
-    await createWindow();
-  } catch (e) {
-    const msg = e instanceof Error ? (e.stack || e.message) : String(e);
-    console.error(e);
-    dialog.showErrorBox("BÖRS could not start", msg);
+if (gotSingleInstanceLock) {
+  process.on("unhandledRejection", (reason) => {
+    const msg = reason instanceof Error ? reason.stack || reason.message : String(reason);
+    showFatal("BÖRS could not start", msg);
     app.exit(1);
-  }
-});
+  });
 
-app.on("window-all-closed", () => {
-  stopServer();
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    } else {
+      void createWindow().catch((e) => {
+        showFatal("BÖRS could not start", e instanceof Error ? e.message : String(e));
+        app.exit(1);
+      });
+    }
+  });
 
-app.on("before-quit", () => {
-  stopServer();
-});
+  app.whenReady().then(async () => {
+    startupLogPath = path.join(userDataDir(), "bors-startup.log");
+    log("BÖRS starting");
+    try {
+      await startServer();
+      await createWindow();
+    } catch (e) {
+      const msg = e instanceof Error ? (e.stack || e.message) : String(e);
+      try {
+        await openBrowserFallback(msg);
+      } catch {
+        showFatal("BÖRS could not start", msg);
+      }
+      app.exit(1);
+    }
+  });
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    void createWindow();
-  }
-});
+  app.on("window-all-closed", () => {
+    stopServer();
+    if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("before-quit", () => {
+    stopServer();
+  });
+}
