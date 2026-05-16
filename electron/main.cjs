@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, nativeImage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
@@ -236,15 +236,31 @@ async function openBrowserFallback(reason) {
   });
 }
 
+function windowIcon() {
+  const candidates = [
+    path.join(__dirname, "..", "resources", "icon.png"),
+    path.join(process.resourcesPath, "icon.png"),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      const img = nativeImage.createFromPath(p);
+      if (!img.isEmpty()) return img;
+    }
+  }
+  return undefined;
+}
+
 async function createWindow() {
   await waitForServer();
 
+  const icon = windowIcon();
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 960,
     minHeight: 640,
     title: "BÖRS",
+    icon,
     show: true,
     backgroundColor: "#09090b",
     webPreferences: {

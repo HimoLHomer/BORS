@@ -2,7 +2,7 @@
   "name": "bors",
   "productName": "BÖRS",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first portfolio dashboard",
   "author": "BORS",
   "main": "electron/main.cjs",
@@ -22,14 +22,16 @@
     "test:release": "npm run lint && npm run verify:portfolio && npm run verify:prod",
     "rebuild:native": "npm rebuild better-sqlite3",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
-    "electron:dev": "npm run build && electron .",
-    "electron:build": "npm run build && node scripts/patch-electron-index.mjs && npm run electron:rebuild && electron-builder --win"
+    "icons": "node scripts/generate-icons.mjs",
+    "electron:dev": "npm run build && npm run icons && electron .",
+    "electron:build": "npm run build && node scripts/patch-electron-index.mjs && npm run icons && npm run electron:rebuild && electron-builder --win"
   },
   "build": {
     "appId": "fi.bors.desktop",
     "productName": "BÖRS",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
     "files": [
       "dist/**/*",
@@ -38,16 +40,24 @@
       "node_modules/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
       "**/node_modules/bindings/**",
       "**/node_modules/file-uri-to-path/**",
       "dist/**"
     ],
+    "publish": null,
     "win": {
       "target": [
         "nsis"
       ],
+      "artifactName": "BORS-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -83,7 +93,9 @@
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.1.14",
+    "to-ico": "^1.1.5",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"

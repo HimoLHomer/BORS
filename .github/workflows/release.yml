@@ -37,15 +37,12 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           RAYON_NUM_THREADS: "1"
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release/*.exe
-            release/*.exe.blockmap
+          files: release/BORS-Setup-*.exe
           generate_release_notes: true
 
       - name: Upload artifact (manual runs)
@@ -53,7 +50,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: BORS-Windows-installer
-          path: |
-            release/*.exe
-            release/*.exe.blockmap
+          path: release/BORS-Setup-*.exe
           retention-days: 30

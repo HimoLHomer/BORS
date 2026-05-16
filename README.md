@@ -7,7 +7,7 @@ Local-first portfolio dashboard: holdings, dividends, FIRE projection, and marke
 You do **not** need Node.js or `npm run build` to use the desktop app.
 
 1. Open **[Releases](https://github.com/Vauhtikeskus/BORS/releases)** on GitHub.
-2. Download the latest **`BÖRS Setup 0.x.x.exe`** (or the newest tag).
+2. Download the latest **`BORS-Setup-0.x.x.exe`** (one file — nothing else required).
 3. Run the installer, then launch **BÖRS** from the Start menu.
 
 Your data is stored under `%APPDATA%\BÖRS\` (portfolio database, optional Gemini key).
@@ -116,7 +116,7 @@ Windows desktop installer (local):
 npm run electron:build
 ```
 
-Output: `release/BÖRS Setup 0.1.0.exe` (requires `npm run build` inside the script; use plenty of RAM — see CI workflow for `NODE_OPTIONS`).
+Output: `release/BORS-Setup-0.1.0.exe` (requires `npm run build` inside the script; use plenty of RAM — see CI workflow for `NODE_OPTIONS`).
 
 **Native module note:** `better-sqlite3` must match your Node version. If you see `ERR_DLOPEN_FAILED` or `NODE_MODULE_VERSION` errors:
 
