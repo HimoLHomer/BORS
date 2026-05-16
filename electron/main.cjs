@@ -1,13 +1,46 @@
-const { app, BrowserWindow, shell, dialog } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { pathToFileURL } = require("url");
 const { spawn } = require("child_process");
 const { ensurePortfolioDb } = require("./migrateDb.cjs");
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+  process.exit(0);
+}
+
+try {
+  const cacheDir = path.join(app.getPath("userData"), "chromium-cache");
+  fs.mkdirSync(cacheDir, { recursive: true });
+  app.commandLine.appendSwitch("disk-cache-dir", cacheDir);
+} catch {
+  /* ignore */
+}
+app.disableHardwareAcceleration();
 app.commandLine.appendSwitch("disable-features", "NetworkServiceSandbox");
 app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
 app.commandLine.appendSwitch("proxy-server", "direct://");
+
+ipcMain.handle("bors:fetch", async (_event, { url, init }) => {
+  const res = await fetch(url, {
+    method: init?.method || "GET",
+    headers: init?.headers,
+    body: init?.body,
+  });
+  const bodyText = await res.text();
+  const headers = {};
+  res.headers.forEach((v, k) => {
+    headers[k] = v;
+  });
+  return {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+    bodyText,
+  };
+});
 
 const PORT = Number(process.env.PORT) || 3847;
 const LOOPBACK_BASE = `http://127.0.0.1:${PORT}`;
@@ -146,11 +179,15 @@ function writePackagedShellHtml(root) {
     `<base href="${distBase}">`,
     "<script>",
     `(function(){var API=${JSON.stringify(api)};`,
-    "var f=window.fetch.bind(window);",
+    "var native=window.fetch.bind(window);",
+    "var ipc=window.__borsIpcFetch;",
     "window.fetch=function(i,o){",
     "var u=typeof i==='string'?i:(i&&i.url?i.url:'');",
-    "if(typeof u==='string'&&u.indexOf('/api/')===0)return f(API+u,o);",
-    "return f(i,o);};",
+    "if(typeof u==='string'&&u.indexOf('/api/')===0){",
+    "var full=API+u;",
+    "return ipc?ipc(full,o):native(full,o);",
+    "}",
+    "return native(i,o);};",
     "})();",
     "</script>",
   ].join("");
@@ -200,6 +237,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: !app.isPackaged,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
@@ -228,6 +266,13 @@ process.on("unhandledRejection", (reason) => {
   console.error("[bors] unhandledRejection", reason);
   dialog.showErrorBox("BÖRS could not start", msg);
   app.exit(1);
+});
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
 });
 
 app.whenReady().then(async () => {
