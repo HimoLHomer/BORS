@@ -45,7 +45,7 @@ import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInp
 import { formatDateFi, formatShortMonthDayFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
-import { GeminiSettingsPanel } from './GeminiSettingsPanel';
+import { AiSettingsPanel } from './AiSettingsPanel';
 import { DataListTable } from './DataListTable';
 import { buildTableSkeletonRows } from './SkeletonPulse';
 import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
@@ -1798,7 +1798,7 @@ export default function App() {
                   <p className="page-subtitle mb-6">Integrations, data & backup</p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <GeminiSettingsPanel />
+                    <AiSettingsPanel />
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio data (SQLite)

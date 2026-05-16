@@ -97,13 +97,13 @@ function useIndexAiSummary(
   useEffect(() => {
     refreshAiStatus();
     const onSettings = () => refreshAiStatus();
-    window.addEventListener('bors-gemini-settings-changed', onSettings);
-    return () => window.removeEventListener('bors-gemini-settings-changed', onSettings);
+    window.addEventListener('bors-ai-settings-changed', onSettings);
+    return () => window.removeEventListener('bors-ai-settings-changed', onSettings);
   }, [refreshAiStatus]);
 
   useEffect(() => {
     if (aiConfigured === false) {
-      setSummary('Add a Gemini API key under **Options → Market AI** (or `.env.local` for dev).');
+      setSummary('Add an API key under **Options → Market AI** for your chosen provider (Gemini or OpenAI).');
       setLoading(false);
       return;
     }
@@ -137,7 +137,7 @@ function useIndexAiSummary(
     void run();
   }, [aiConfigured, price, changePercent, label, currency, variant]);
 
-  return { summary, loading, hasGeminiKey: aiConfigured === true };
+  return { summary, loading, hasAiKey: aiConfigured === true };
 }
 
 function QuoteChangeLine({ quote }: { quote: MarketQuoteSnapshot }) {

@@ -1,4 +1,4 @@
-/** User-facing text for Gemini / market AI failures (never show raw JSON). */
+/** User-facing text for market AI failures (never show raw JSON). */
 export function friendlyAiErrorMessage(raw: string): string {
   let text = raw.trim();
   if (!text) return 'AI summary unavailable. Try again in a few minutes.';
@@ -23,13 +23,22 @@ export function friendlyAiErrorMessage(raw: string): string {
 
   const lower = text.toLowerCase();
   if (lower.includes('quota') || lower.includes('429') || lower.includes('rate limit')) {
-    return 'Gemini free-tier quota is used up for now. Wait a few minutes or check usage in [Google AI Studio](https://aistudio.google.com/).';
+    return 'AI provider quota or rate limit reached. Wait a few minutes and try again.';
   }
-  if (lower.includes('api key') || lower.includes('403')) {
-    return 'Gemini API key was rejected. Update it under Options → Market AI.';
+  if (lower.includes('api key') || lower.includes('403') || lower.includes('401')) {
+    return 'API key was rejected. Update it under **Options → Market AI**.';
   }
-  if (lower.includes('gemini-1.5-flash') || lower.includes('is not found for api version')) {
-    return 'The configured Gemini model is no longer available. Update the model name in server config or `.env.local`, then restart `npm run dev`.';
+  if (
+    lower.includes('is not found for api version') ||
+    lower.includes('is not found') ||
+    lower.includes('no longer available') ||
+    lower.includes('model unavailable') ||
+    (lower.includes('no ') && lower.includes('models available'))
+  ) {
+    return 'AI model unavailable. The app will try other models automatically on the next refresh. If this persists, check your provider and key under **Options → Market AI**.';
+  }
+  if (lower.includes('not configured') || lower.includes('no api key')) {
+    return 'Add an API key under **Options → Market AI** for the provider you selected.';
   }
 
   if (text.startsWith('{')) {

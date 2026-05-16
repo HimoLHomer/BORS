@@ -29,16 +29,7 @@ export type FireYearRow = {
 
 export const FIRE_HORIZON_YEARS = 30;
 
-export const DEFAULT_FIRE_EXPENSES: FireExpenseLine[] = [
-  { id: 'apartment', label: 'Apartment', monthlyEur: 650 },
-  { id: 'food', label: 'Food', monthlyEur: 250 },
-  { id: 'electricity', label: 'Electricity', monthlyEur: 40 },
-  { id: 'phone', label: 'Phone', monthlyEur: 20 },
-  { id: 'gym', label: 'Gym', monthlyEur: 30 },
-  { id: 'insurances', label: 'Insurances', monthlyEur: 45 },
-  { id: 'car', label: 'Car', monthlyEur: 120 },
-  { id: 'other', label: 'Other', monthlyEur: 80 },
-];
+export const DEFAULT_FIRE_EXPENSES: FireExpenseLine[] = [];
 
 export function monthlyExpensesTotal(lines: FireExpenseLine[]): number {
   return lines.reduce((s, l) => s + (Number.isFinite(l.monthlyEur) ? Math.max(0, l.monthlyEur) : 0), 0);

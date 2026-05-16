@@ -16,16 +16,27 @@ import { yahooFinance } from "./server/yahooClient";
 import { registerMarketHeatmapRoutes } from "./server/marketHeatmap";
 import { registerMarketOverviewRoutes } from "./server/marketOverview";
 import { registerMarketAiRoutes } from "./server/marketAi";
-import { registerGeminiSettingsRoutes } from "./server/geminiSettings";
+import { registerAiSettingsRoutes } from "./server/aiSettings";
 import {
   dividendYieldPercentFromQuote,
   dividendYieldPercentFromQuoteSummary,
 } from "./server/dividends";
-async function startServer() {
-  // npm start runs dist/server.cjs without NODE_ENV; avoid loading Vite (OOM on large bundles).
-  if (!process.env.NODE_ENV && fs.existsSync(path.join(process.cwd(), "dist", "server.cjs"))) {
-    process.env.NODE_ENV = "production";
+function resolveNodeEnv(): string {
+  // npm start → dist/server.cjs (static dist/). npm run dev → tsx server.ts (Vite HMR).
+  const entryScript = path.basename(process.argv[1] ?? "");
+  if (entryScript === "server.ts") {
+    // Always Vite for the dev entry — ignore NODE_ENV=production from shell/.env/electron.
+    return "development";
   }
+  if (entryScript === "server.cjs") {
+    return process.env.NODE_ENV?.trim() || "production";
+  }
+  return process.env.NODE_ENV?.trim() || "development";
+}
+
+async function startServer() {
+  const entryScript = path.basename(process.argv[1] ?? "");
+  process.env.NODE_ENV = resolveNodeEnv();
 
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -51,7 +62,7 @@ async function startServer() {
   registerMarketHeatmapRoutes(app, yahooFinance);
   registerMarketOverviewRoutes(app, yahooFinance);
   registerMarketAiRoutes(app);
-  registerGeminiSettingsRoutes(app);
+  registerAiSettingsRoutes(app);
 
   const marketApiRoutes = [
     "GET /api/market/heatmap",
@@ -282,7 +293,10 @@ async function startServer() {
   const listenHost = process.env.BORS_LISTEN_HOST?.trim() || "0.0.0.0";
   app.listen(PORT, listenHost, () => {
     const hostLabel = listenHost === "0.0.0.0" ? "localhost" : listenHost;
-    console.log(`ALPHA-OS Server running on http://${hostLabel}:${PORT}`);
+    const uiMode = process.env.NODE_ENV === "production" ? "static dist" : "Vite dev";
+    console.log(
+      `ALPHA-OS Server running on http://${hostLabel}:${PORT} (${uiMode}, NODE_ENV=${process.env.NODE_ENV}, entry=${entryScript})`,
+    );
     for (const r of marketApiRoutes) console.log(`  ${r}`);
   });
 }
