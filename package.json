@@ -2,7 +2,7 @@
   "name": "bors",
   "productName": "BÖRS",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local-first portfolio dashboard",
   "author": "BORS",
   "main": "electron/main.cjs",
@@ -57,12 +57,16 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "BORS-Setup-${version}.${ext}",
-      "signAndEditExecutable": false
+      "icon": "resources/icon.ico",
+      "artifactName": "BORS-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico",
+      "createDesktopShortcut": "always"
     }
   },
   "dependencies": {
