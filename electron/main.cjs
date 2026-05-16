@@ -10,6 +10,8 @@ app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
 app.commandLine.appendSwitch("proxy-server", "direct://");
 
 const PORT = Number(process.env.PORT) || 3847;
+/** Chromium on Windows often fails [::1]; always load the UI over IPv4 loopback. */
+const LOOPBACK_BASE = `http://127.0.0.1:${PORT}`;
 let serverProcess = null;
 let mainWindow = null;
 
@@ -78,6 +80,8 @@ function startServer() {
     PORT: String(PORT),
     BORS_DB_PATH: dbPath,
     BORS_USER_DATA: userDataDir(),
+    BORS_LISTEN_HOST: "127.0.0.1",
+    BORS_ELECTRON: "1",
     ELECTRON_RUN_AS_NODE: "1",
   };
 
@@ -108,38 +112,19 @@ function stopServer() {
   serverProcess = null;
 }
 
-function portfolioStatusUrls() {
-  return [
-    `http://127.0.0.1:${PORT}/api/portfolio/status`,
-    `http://localhost:${PORT}/api/portfolio/status`,
-    `http://[::1]:${PORT}/api/portfolio/status`,
-  ];
-}
-
-function pageUrls() {
-  return [
-    `http://127.0.0.1:${PORT}/`,
-    `http://localhost:${PORT}/`,
-    `http://[::1]:${PORT}/`,
-  ];
-}
-
-/** Prefer probing each loopback hostname; [::1] can work when 127.0.0.1 is odd on some Windows setups. */
 function waitForServer(maxMs = 45_000) {
+  const probe = `${LOOPBACK_BASE}/api/portfolio/status`;
   const start = Date.now();
-  const urls = portfolioStatusUrls();
-  let flip = 0;
   return new Promise((resolve, reject) => {
     const tick = () => {
-      const u = urls[flip++ % urls.length];
-      fetch(u)
+      fetch(probe)
         .then((r) => {
           if (!r.ok) throw new Error(String(r.status));
-          resolve(new URL(u).origin);
+          resolve(LOOPBACK_BASE);
         })
         .catch(() => {
           if (Date.now() - start > maxMs) {
-            reject(new Error(`Server did not start in time (tried ${urls.join(", ")})`));
+            reject(new Error(`Server did not start in time (${probe})`));
           } else setTimeout(tick, 200);
         });
     };
@@ -147,13 +132,11 @@ function waitForServer(maxMs = 45_000) {
   });
 }
 
-/** Chromium often fails localhost once while Node fetch succeeded — retry origins. */
-async function loadAppPage(webContents, baseGuess) {
-  const trimSlash = (s) => String(s || "").replace(/\/+$/, "");
-  const bases = [...new Set([trimSlash(baseGuess), ...pageUrls().map(trimSlash)])].filter(Boolean);
-  const tries = bases.flatMap((b) => [`${b}/`, `${b}/index.html`]);
+/** Retry IPv4 loopback only — Node fetch can succeed on [::1] while Chromium cannot load it. */
+async function loadAppPage(webContents) {
+  const tries = [`${LOOPBACK_BASE}/`, `${LOOPBACK_BASE}/index.html`];
   let lastErr = null;
-  for (let round = 0; round < 12; round++) {
+  for (let round = 0; round < 15; round++) {
     for (const url of tries) {
       try {
         await webContents.loadURL(url);
@@ -162,13 +145,13 @@ async function loadAppPage(webContents, baseGuess) {
         lastErr = e;
       }
     }
-    await new Promise((r) => setTimeout(r, 350 + round * 50));
+    await new Promise((r) => setTimeout(r, 400 + round * 75));
   }
-  throw lastErr || new Error("loadURL failed for all localhost URLs");
+  throw lastErr || new Error(`loadURL failed for ${LOOPBACK_BASE}`);
 }
 
 async function createWindow() {
-  const base = await waitForServer();
+  await waitForServer();
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -197,7 +180,7 @@ async function createWindow() {
     console.error("[bors] did-fail-load", code, text, url);
   });
 
-  await loadAppPage(mainWindow.webContents, base);
+  await loadAppPage(mainWindow.webContents);
 }
 
 process.on("unhandledRejection", (reason) => {

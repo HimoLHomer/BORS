@@ -257,8 +257,10 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`ALPHA-OS Server running on http://localhost:${PORT}`);
+  const listenHost = process.env.BORS_LISTEN_HOST?.trim() || "0.0.0.0";
+  app.listen(PORT, listenHost, () => {
+    const hostLabel = listenHost === "0.0.0.0" ? "localhost" : listenHost;
+    console.log(`ALPHA-OS Server running on http://${hostLabel}:${PORT}`);
     for (const r of marketApiRoutes) console.log(`  ${r}`);
   });
 }
