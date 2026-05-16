@@ -23,6 +23,20 @@ import {
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  const electronApiOnly = process.env.BORS_ELECTRON === "1";
+
+  if (electronApiOnly) {
+    app.use((req, res, next) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+    });
+  }
 
   // Add middleware to parse JSON
   app.use(express.json());
@@ -249,11 +263,11 @@ async function startServer() {
       if (req.path.startsWith("/api")) return next();
       vite.middlewares(req, res, next);
     });
-  } else {
+  } else if (!electronApiOnly) {
     const distPath = appPath("dist");
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 

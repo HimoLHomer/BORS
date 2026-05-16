@@ -1,16 +1,15 @@
 const { app, BrowserWindow, shell, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const { pathToFileURL } = require("url");
 const { spawn } = require("child_process");
 const { ensurePortfolioDb } = require("./migrateDb.cjs");
 
-// Packaged Chromium can fail loading loopback behind proxy / hardened network sandbox.
 app.commandLine.appendSwitch("disable-features", "NetworkServiceSandbox");
 app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
 app.commandLine.appendSwitch("proxy-server", "direct://");
 
 const PORT = Number(process.env.PORT) || 3847;
-/** Chromium on Windows often fails [::1]; always load the UI over IPv4 loopback. */
 const LOOPBACK_BASE = `http://127.0.0.1:${PORT}`;
 let serverProcess = null;
 let mainWindow = null;
@@ -58,10 +57,22 @@ function applyServerEnv(env) {
   }
 }
 
-/** Packaged Windows builds fail to spawn BÖRS.exe with ELECTRON_RUN_AS_NODE (ENOENT / Ö in path). */
 function startServerInProcess(root, serverEntry, env) {
   applyServerEnv({ ...env, BORS_APP_ROOT: root });
   require(serverEntry);
+}
+
+function serverEnv(root, dbPath) {
+  return {
+    ...process.env,
+    NODE_ENV: "production",
+    PORT: String(PORT),
+    BORS_DB_PATH: dbPath,
+    BORS_USER_DATA: userDataDir(),
+    BORS_LISTEN_HOST: "127.0.0.1",
+    BORS_ELECTRON: "1",
+    ELECTRON_RUN_AS_NODE: "1",
+  };
 }
 
 function startServer() {
@@ -73,17 +84,7 @@ function startServer() {
 
   const dbPath = ensurePortfolioDb(userDataDir());
   loadUserEnv();
-
-  const env = {
-    ...process.env,
-    NODE_ENV: "production",
-    PORT: String(PORT),
-    BORS_DB_PATH: dbPath,
-    BORS_USER_DATA: userDataDir(),
-    BORS_LISTEN_HOST: "127.0.0.1",
-    BORS_ELECTRON: "1",
-    ELECTRON_RUN_AS_NODE: "1",
-  };
+  const env = serverEnv(root, dbPath);
 
   if (app.isPackaged) {
     startServerInProcess(root, serverEntry, env);
@@ -120,7 +121,7 @@ function waitForServer(maxMs = 45_000) {
       fetch(probe)
         .then((r) => {
           if (!r.ok) throw new Error(String(r.status));
-          resolve(LOOPBACK_BASE);
+          resolve();
         })
         .catch(() => {
           if (Date.now() - start > maxMs) {
@@ -132,11 +133,44 @@ function waitForServer(maxMs = 45_000) {
   });
 }
 
-/** Retry IPv4 loopback only — Node fetch can succeed on [::1] while Chromium cannot load it. */
-async function loadAppPage(webContents) {
+/** Packaged Chromium often cannot load http://127.0.0.1; serve UI from disk, API over HTTP. */
+function writePackagedShellHtml(root) {
+  const distDir = path.join(root, "dist");
+  const indexPath = path.join(distDir, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    throw new Error(`Missing UI bundle: ${indexPath}`);
+  }
+  const distBase = pathToFileURL(distDir).href.replace(/\/?$/, "/");
+  const api = LOOPBACK_BASE;
+  const inject = [
+    `<base href="${distBase}">`,
+    "<script>",
+    `(function(){var API=${JSON.stringify(api)};`,
+    "var f=window.fetch.bind(window);",
+    "window.fetch=function(i,o){",
+    "var u=typeof i==='string'?i:(i&&i.url?i.url:'');",
+    "if(typeof u==='string'&&u.indexOf('/api/')===0)return f(API+u,o);",
+    "return f(i,o);};",
+    "})();",
+    "</script>",
+  ].join("");
+  const html = fs.readFileSync(indexPath, "utf8").replace("<head>", `<head>${inject}`);
+  const shellDir = path.join(userDataDir(), "shell");
+  fs.mkdirSync(shellDir, { recursive: true });
+  const shellIndex = path.join(shellDir, "index.html");
+  fs.writeFileSync(shellIndex, html, "utf8");
+  return shellIndex;
+}
+
+async function loadPackagedUi(webContents, root) {
+  const shellIndex = writePackagedShellHtml(root);
+  await webContents.loadFile(shellIndex);
+}
+
+async function loadDevUi(webContents) {
   const tries = [`${LOOPBACK_BASE}/`, `${LOOPBACK_BASE}/index.html`];
   let lastErr = null;
-  for (let round = 0; round < 15; round++) {
+  for (let round = 0; round < 12; round++) {
     for (const url of tries) {
       try {
         await webContents.loadURL(url);
@@ -152,6 +186,8 @@ async function loadAppPage(webContents) {
 
 async function createWindow() {
   await waitForServer();
+  const root = projectRoot();
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -180,7 +216,11 @@ async function createWindow() {
     console.error("[bors] did-fail-load", code, text, url);
   });
 
-  await loadAppPage(mainWindow.webContents);
+  if (app.isPackaged) {
+    await loadPackagedUi(mainWindow.webContents, root);
+  } else {
+    await loadDevUi(mainWindow.webContents);
+  }
 }
 
 process.on("unhandledRejection", (reason) => {
