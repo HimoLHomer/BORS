@@ -6,7 +6,7 @@ Local-first portfolio dashboard: holdings, dividends, FIRE projection, and marke
 
 You do **not** need Node.js or `npm run build` to use the desktop app.
 
-1. Open **[Releases](https://github.com/Vauhtikeskus/BORS/releases)** on GitHub.
+1. Open **[Releases](https://github.com/HimoLHomer/BORS/releases)** on GitHub.
 2. Download the latest **`BORS-Setup-0.x.x.exe`** (one file — nothing else required).
 3. Run the installer, then launch **BÖRS** from the Start menu.
 
@@ -27,7 +27,7 @@ Developers who clone the repo can still run from source — see [First-time setu
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/Vauhtikeskus/BORS.git
+   git clone https://github.com/HimoLHomer/BORS.git
    cd BORS
    ```
 
@@ -86,7 +86,7 @@ On first **Electron** launch, if the AppData database does not exist yet, the ap
 
 ## Publishing a release (maintainers)
 
-Push a version tag — GitHub Actions builds the Windows installer and attaches it to [Releases](https://github.com/Vauhtikeskus/BORS/releases). You do not commit `release/` to git.
+Push a version tag — GitHub Actions builds the Windows installer and attaches it to [Releases](https://github.com/HimoLHomer/BORS/releases). You do not commit `release/` to git.
 
 ```bash
 git tag v0.1.0
