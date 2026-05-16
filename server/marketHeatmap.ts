@@ -49,12 +49,21 @@ function toYahooSymbol(symbol: string): string {
   return symbol.replace(/\.([A-Z])$/, "-$1");
 }
 
+function constituentFilePath(file: string): string {
+  const candidates = [
+    path.join(appRoot(), "assets", "market", file),
+    path.join(appRoot(), "data", "market", file),
+  ];
+  const found = candidates.find((p) => fs.existsSync(p));
+  if (!found) {
+    throw new Error(`Missing constituent file: ${candidates.join(" or ")}`);
+  }
+  return found;
+}
+
 function loadConstituents(universe: Universe): HeatmapConstituent[] {
   const file = universe === "sp500" ? "sp500.json" : "omxh25.json";
-  const p = path.join(appRoot(), "data", "market", file);
-  if (!fs.existsSync(p)) {
-    throw new Error(`Missing constituent file: ${p}`);
-  }
+  const p = constituentFilePath(file);
   const raw = fs.readFileSync(p, "utf8");
   const parsed = JSON.parse(raw) as HeatmapConstituent[];
   if (!Array.isArray(parsed)) throw new Error(`Invalid ${file}`);

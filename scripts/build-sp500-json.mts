@@ -1,12 +1,12 @@
 /**
- * One-off: converts data/market/sp500-constituents.csv → data/market/sp500.json
+ * One-off: converts assets/market/sp500-constituents.csv → assets/market/sp500.json
  * Run: npx tsx scripts/build-sp500-json.mts
  */
 import fs from 'fs';
 import path from 'path';
 
-const csvPath = path.join(process.cwd(), 'data/market/sp500-constituents.csv');
-const outPath = path.join(process.cwd(), 'data/market/sp500.json');
+const csvPath = path.join(process.cwd(), 'assets/market/sp500-constituents.csv');
+const outPath = path.join(process.cwd(), 'assets/market/sp500.json');
 
 const raw = fs.readFileSync(csvPath, 'utf8');
 const lines = raw.split(/\r?\n/).filter(Boolean);
