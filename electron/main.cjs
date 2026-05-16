@@ -97,7 +97,15 @@ function projectRoot() {
   return app.isPackaged ? app.getAppPath() : path.join(__dirname, "..");
 }
 
+/** Unpacked UI (asarUnpack dist/**); API bundle stays in app.asar. */
+function packagedAppRoot() {
+  const unpacked = path.join(process.resourcesPath, "app.asar.unpacked");
+  if (fs.existsSync(path.join(unpacked, "dist", "index.html"))) return unpacked;
+  return projectRoot();
+}
+
 function serverEnv(root, dbPath) {
+  const appRoot = app.isPackaged ? packagedAppRoot() : root;
   return {
     ...process.env,
     NODE_ENV: "production",
@@ -105,7 +113,7 @@ function serverEnv(root, dbPath) {
     BORS_DB_PATH: dbPath,
     BORS_USER_DATA: userDataDir(),
     BORS_LISTEN_HOST: "127.0.0.1",
-    BORS_APP_ROOT: root,
+    BORS_APP_ROOT: appRoot,
   };
 }
 

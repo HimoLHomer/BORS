@@ -472,8 +472,13 @@ export default function App() {
         if (!cancelled) setPortfolioLoadError(null);
         const statusRes = await fetch('/api/portfolio/status', pf);
         if (!statusRes.ok) {
+          const port = typeof window !== 'undefined' ? window.location.port : '';
+          const hint =
+            port === '3847'
+              ? 'Restart BÖRS from the Start menu. If it persists, reinstall the latest desktop build.'
+              : 'Run npm run dev and open http://localhost:3000';
           throw new Error(
-            `Portfolio API unavailable (HTTP ${statusRes.status}). Run npm run dev and open http://localhost:3000`
+            `Portfolio API unavailable (HTTP ${statusRes.status ?? 'unknown'}). ${hint}`
           );
         }
         const s = await statusRes.json();
