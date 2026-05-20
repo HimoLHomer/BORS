@@ -9,7 +9,8 @@ import {
   MarketIndexPanel,
   useMarketOverview,
 } from './MarketOverviewPanels';
-import { MARKET_PANEL } from './marketTheme';
+import { MARKET_PANEL, MARKET_REFRESH_BTN } from './marketTheme';
+import { onFeedReconnected } from './feedReconnect';
 
 type HeatmapUniverse = 'sp500' | 'omxh25';
 
@@ -743,6 +744,8 @@ function useHeatmap(universe: HeatmapUniverse, maxTiles?: number) {
     void load(false);
   }, [load]);
 
+  useEffect(() => onFeedReconnected(() => void load(true)), [load]);
+
   return { data, loading, error, meta, tileCount, tileLookup, reload: () => load(true) };
 }
 
@@ -898,15 +901,25 @@ function HeatmapPanel({
 }
 
 export function MarketIntelligence() {
-  const { overview, loading: overviewLoading, error: overviewError } = useMarketOverview();
+  const { overview, loading: overviewLoading, error: overviewError, reload: reloadOverview } =
+    useMarketOverview();
 
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-black tracking-tight text-white uppercase">Market Intelligence</h2>
 
       {overviewError && (
-        <div className="error-banner">
-          {overviewError}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="error-banner flex-1">{overviewError}</div>
+          <button
+            type="button"
+            onClick={() => void reloadOverview()}
+            disabled={overviewLoading}
+            className={MARKET_REFRESH_BTN}
+          >
+            <RefreshCcw className={`w-3 h-3 shrink-0 ${overviewLoading ? 'animate-spin' : ''}`} aria-hidden />
+            Retry
+          </button>
         </div>
       )}
 

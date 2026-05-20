@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
 import { formatCurrency } from './formatCurrency';
 import { fetchJson } from './apiFetch';
+import { onFeedReconnected } from './feedReconnect';
 import { friendlyAiErrorMessage } from './aiErrorMessage';
 import { MARKET_PANEL, MARKET_SUBCARD } from './marketTheme';
 
@@ -70,6 +71,8 @@ export function useMarketOverview() {
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  useEffect(() => onFeedReconnected(() => void load(true)), [load]);
 
   return { overview, loading, error, reload: () => load(true) };
 }

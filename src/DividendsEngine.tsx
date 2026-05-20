@@ -6,7 +6,12 @@ import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
 import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
 import { EurAmountInput } from './EurAmountField';
-import { computeBlendedYieldSummary } from './blendedYieldSummary';
+import {
+  computeBlendedYieldSummary,
+  isDividendPayerRow,
+  manualRowsForBlendedSummary,
+  manualSupersededByApiRow,
+} from './blendedYieldSummary';
 import { DividendInfoLinkCell } from './DividendInfoLinkCell';
 import {
   dividendInfoLinkKeyForManual,
@@ -81,11 +86,6 @@ function shortYahooSymbol(sym: string | null | undefined): string {
   return (s.includes('.') ? s.split('.')[0] : s).toUpperCase();
 }
 
-function isDividendPayer(r: DividendRow): boolean {
-  if (r.error) return false;
-  return Number.isFinite(r.estimatedAnnualIncomeEur) && r.estimatedAnnualIncomeEur > 0;
-}
-
 function shortSymbolKey(sym: string): string {
   const s = sym.trim().toUpperCase();
   return s.includes('.') ? (s.split('.')[0] ?? s) : s;
@@ -104,8 +104,7 @@ function apiRowForSymbol(data: DividendsPayload | null, symbol: string | null | 
 }
 
 function manualSupersededByApi(data: DividendsPayload | null, m: ManualDividendPosition): boolean {
-  const api = apiRowForSymbol(data, m.linkedSymbol);
-  return api != null && isDividendPayer(api);
+  return manualSupersededByApiRow(data?.rows ?? [], m);
 }
 
 function sourceBadge(kind: 'api' | 'manual') {
@@ -370,7 +369,7 @@ export function DividendsEngine({
     if (!data?.rows.length) return [] as { row: DividendRow; index: number }[];
     return data.rows
       .map((row, index) => ({ row, index }))
-      .filter(({ row }) => isDividendPayer(row))
+      .filter(({ row }) => isDividendPayerRow(row))
       .sort((a, b) => b.row.estimatedAnnualIncomeEur - a.row.estimatedAnnualIncomeEur);
   }, [data]);
 
@@ -396,11 +395,6 @@ export function DividendsEngine({
     return [...api, ...manual].sort((a, b) => b.income - a.income);
   }, [dividendPayingRows, sortedManualRows, data]);
 
-  const manualRowsForTotals = useMemo(
-    () => manualRows.filter((m) => !manualSupersededByApi(data, m)),
-    [manualRows, data]
-  );
-
   const displaySummary = useMemo(() => {
     if (!data?.rows?.length) {
       return { totalAnnualEur: 0, avgYieldPercent: 0 };
@@ -410,8 +404,8 @@ export function DividendsEngine({
       ...exchangeRates,
       ...((data as { rates?: Record<string, number> }).rates ?? {}),
     };
-    return computeBlendedYieldSummary(assets, data.rows, manualRowsForTotals, marketPrices, rates);
-  }, [data, assets, manualRowsForTotals, marketPrices, exchangeRates]);
+    return computeBlendedYieldSummary(assets, data.rows, manualRows, marketPrices, rates);
+  }, [data, assets, manualRows, marketPrices, exchangeRates]);
 
   useEffect(() => {
     if (displaySummary.avgYieldPercent > 0) {
@@ -458,7 +452,7 @@ export function DividendsEngine({
       const a = assets[index];
       return {
         symbol: row.symbol,
-        name: row.name || a?.name || row.symbol,
+        name: a?.name?.trim() || row.name || row.symbol,
         ticker: a ? displayTickerForAsset(a) : shortYahooSymbol(row.symbol),
         estimatedAnnualIncomeEur: row.estimatedAnnualIncomeEur,
         payoutFrequency: row.payoutFrequency,
@@ -466,8 +460,13 @@ export function DividendsEngine({
     });
   }, [dividendPayingRows, assets]);
 
+  const manualRowsForBlended = useMemo(
+    () => manualRowsForBlendedSummary(manualRows, data?.rows ?? []),
+    [manualRows, data]
+  );
+
   const calendarManualRows = useMemo((): ManualDividendPaymentInput[] => {
-    return manualRows.map((m) => {
+    return manualRowsForBlended.map((m) => {
       const linked = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol) : [];
       const a = linked[0];
       return {
@@ -478,7 +477,7 @@ export function DividendsEngine({
         payoutFrequency: effectivePayoutFrequency(m, apiRowForSymbol(data, m.linkedSymbol)),
       };
     });
-  }, [manualRows, assets, data]);
+  }, [manualRowsForBlended, assets, data]);
 
   const resetDrafts = () => {
     setDraftAnnual('');
@@ -548,6 +547,9 @@ export function DividendsEngine({
 
   const hasAnyDividendDisplay = dividendPayingRows.length > 0 || manualRows.length > 0;
 
+  /** API fetch in flight and no payload yet — manual rows must not render ahead of holdings detail. */
+  const dividendsFetchPending = loading && data == null;
+
   const holdingsDetailSkeletonRows = useMemo(
     () =>
       buildTableSkeletonRows(
@@ -558,7 +560,7 @@ export function DividendsEngine({
   );
 
   const holdingsDetailEmptyState = useMemo(() => {
-    if (loading && !data) {
+    if (dividendsFetchPending) {
       return null;
     }
     if (!data && assets.length > 0) {
@@ -576,7 +578,7 @@ export function DividendsEngine({
       );
     }
     return null;
-  }, [loading, data, assets.length, hasAnyDividendDisplay, manualRows.length]);
+  }, [dividendsFetchPending, data, assets.length, hasAnyDividendDisplay, manualRows.length]);
 
   const holdingsDetailTableRows = useMemo(() => {
     if (holdingsDetailEmptyState != null) return [];
@@ -738,7 +740,7 @@ export function DividendsEngine({
             <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
               Add holdings on the Dashboard, then add a per-holding dividend estimate here if needed.
             </p>
-          ) : loading && barData.length === 0 ? (
+          ) : dividendsFetchPending ? (
             <div className="h-[280px] w-full flex-1 min-h-0" role="status" aria-label="Loading dividend chart">
               <SkeletonBarChart />
             </div>
@@ -796,9 +798,9 @@ export function DividendsEngine({
             <h3 className="card-title mb-0">Dividend calendar</h3>
           </div>
           <DividendPayoutCalendar
-            apiRows={calendarApiRows}
-            manualRows={calendarManualRows}
-            loading={loading}
+            apiRows={dividendsFetchPending ? [] : calendarApiRows}
+            manualRows={dividendsFetchPending ? [] : calendarManualRows}
+            loading={dividendsFetchPending}
             hasHoldings={assets.length > 0}
           />
         </div>
@@ -839,7 +841,7 @@ export function DividendsEngine({
               cellClassName: 'px-3 py-2 text-right',
             },
           ]}
-          rows={loading && !data ? holdingsDetailSkeletonRows : holdingsDetailTableRows}
+          rows={dividendsFetchPending ? holdingsDetailSkeletonRows : holdingsDetailTableRows}
           emptyState={holdingsDetailEmptyState ?? undefined}
         />
       </div>

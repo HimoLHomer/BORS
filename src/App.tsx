@@ -19,6 +19,7 @@ import {
   Upload,
   History,
   Copy,
+  ChevronDown,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BorsMark } from './BorsMark';
@@ -40,20 +41,25 @@ import {
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts';
-import { formatCurrency, fxToEur, holdingQuoteFxToEur } from './formatCurrency';
+import { formatCurrency, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
+import { mergeHoldingPurchase } from './mergeHoldingPurchase';
 import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
 import { formatDateFi, formatShortMonthDayFi, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
 import { AiSettingsPanel } from './AiSettingsPanel';
 import { DataListTable } from './DataListTable';
-import { buildTableSkeletonRows } from './SkeletonPulse';
+import { buildTableSkeletonRows, SkeletonBlock, SkeletonCurrency } from './SkeletonPulse';
 import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
 import { EurAmountInput } from './EurAmountField';
 import { AssetNameCell } from './AssetNameCell';
 import { displayTickerForAsset } from './assetLogo';
 import { MarketIntelligence } from './MarketIntelligence';
 import { fetchJson } from './apiFetch';
+import {
+  dispatchFeedReconnected,
+  subscribeAcceleratedFeedRetry,
+} from './feedReconnect';
 import {
   applyClientSettingsToLocalStorage,
   collectClientSettingsFromLocalStorage,
@@ -328,9 +334,13 @@ const LoadingScreen = () => (
 const Header = ({
   apiStatus,
   feedDetail,
+  onRetryFeed,
+  feedRetrying,
 }: {
   apiStatus: 'connecting' | 'connected' | 'error';
   feedDetail: string | null;
+  onRetryFeed: () => void;
+  feedRetrying: boolean;
 }) => (
   <header className="border-b border-border bg-bg px-6 py-4 flex items-center justify-between">
     <div className="flex items-center gap-2 leading-none">
@@ -354,13 +364,25 @@ const Header = ({
               </span>
             ) : (
               <span
-                className="text-red flex items-center gap-1.5 max-w-[min(420px,45vw)] truncate cursor-help"
+                className="text-red flex items-center gap-1.5 max-w-[min(320px,35vw)] truncate cursor-help"
                 title={feedDetail ?? 'Yahoo health check failed. Run npm run dev (Express + Vite) and ensure outbound network allows Yahoo Finance.'}
               >
                 Offline
               </span>
             )}
           </div>
+          {apiStatus !== 'connected' && (
+            <button
+              type="button"
+              onClick={onRetryFeed}
+              disabled={feedRetrying}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 text-text-s hover:bg-white/10 hover:text-text-p transition-all text-[9px] font-bold uppercase tracking-widest disabled:opacity-40"
+              title={feedDetail ?? 'Retry Yahoo market feed'}
+            >
+              <RefreshCcw className={`w-3 h-3 shrink-0 ${feedRetrying ? 'animate-spin' : ''}`} aria-hidden />
+              Retry
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -388,6 +410,10 @@ export default function App() {
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ 'EUR': 1 });
   const [apiStatus, setApiStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [feedDetail, setFeedDetail] = useState<string | null>(null);
+  const [feedRetrying, setFeedRetrying] = useState(false);
+  const [quotesRefreshEpoch, setQuotesRefreshEpoch] = useState(0);
+  const apiStatusRef = useRef(apiStatus);
+  apiStatusRef.current = apiStatus;
   const [portfolioLoadError, setPortfolioLoadError] = useState<string | null>(null);
   const [browserRecoverMsg, setBrowserRecoverMsg] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
@@ -418,49 +444,72 @@ export default function App() {
     });
   }, [cashLineEur]);
 
-  useEffect(() => {
-    const checkApi = async () => {
+  const checkYahooFeed = useCallback(async (opts?: { manual?: boolean }) => {
+    if (opts?.manual) {
+      setFeedRetrying(true);
+      setApiStatus('connecting');
+      setFeedDetail(null);
+    }
+    try {
+      const res = await fetch('/api/health/yahoo', { cache: 'no-store' });
+      const text = await res.text();
+      let data: { status?: string; error?: string; message?: string } = {};
       try {
-        const res = await fetch('/api/health/yahoo', { cache: 'no-store' });
-        const text = await res.text();
-        let data: { status?: string; error?: string; message?: string } = {};
-        try {
-          data = JSON.parse(text) as typeof data;
-        } catch {
-          setApiStatus('error');
-          setFeedDetail(
-            res.ok
-              ? 'Invalid JSON from /api/health/yahoo'
-              : `HTTP ${res.status} — use npm run dev so API routes are served (not vite alone).`
-          );
-          return;
-        }
-        if (res.ok && data.status === 'connected') {
-          setApiStatus('connected');
-          setFeedDetail(null);
-        } else {
-          setApiStatus('error');
-          const hint =
-            data.error ||
-            data.message ||
-            (typeof data.status === 'string' ? data.status : null) ||
-            `HTTP ${res.status}`;
-          setFeedDetail(hint);
-        }
-      } catch (e) {
+        data = JSON.parse(text) as typeof data;
+      } catch {
         setApiStatus('error');
-        const msg = e instanceof Error ? e.message : String(e);
         setFeedDetail(
-          /failed to fetch|networkerror|load failed/i.test(msg)
-            ? `${msg} — is the app server running (npm run dev on the same origin)?`
-            : msg
+          res.ok
+            ? 'Invalid JSON from /api/health/yahoo'
+            : `HTTP ${res.status} — use npm run dev so API routes are served (not vite alone).`
         );
+        return;
       }
-    };
-    void checkApi();
-    const interval = setInterval(() => void checkApi(), 30000); // Check every 30s
-    return () => clearInterval(interval);
+      if (res.ok && data.status === 'connected') {
+        const wasConnected = apiStatusRef.current === 'connected';
+        setApiStatus('connected');
+        setFeedDetail(null);
+        if (!wasConnected) {
+          dispatchFeedReconnected();
+          setQuotesRefreshEpoch((n) => n + 1);
+        }
+      } else {
+        setApiStatus('error');
+        const hint =
+          data.error ||
+          data.message ||
+          (typeof data.status === 'string' ? data.status : null) ||
+          `HTTP ${res.status}`;
+        setFeedDetail(hint);
+      }
+    } catch (e) {
+      setApiStatus('error');
+      const msg = e instanceof Error ? e.message : String(e);
+      setFeedDetail(
+        /failed to fetch|networkerror|load failed/i.test(msg)
+          ? `${msg} — is the app server running (npm run dev on the same origin)?`
+          : msg
+      );
+    } finally {
+      if (opts?.manual) setFeedRetrying(false);
+    }
   }, []);
+
+  const retryYahooFeed = useCallback(() => {
+    void checkYahooFeed({ manual: true });
+  }, [checkYahooFeed]);
+
+  useEffect(() => {
+    void checkYahooFeed();
+    const ms = apiStatus === 'connected' ? 30_000 : 8_000;
+    const interval = window.setInterval(() => void checkYahooFeed(), ms);
+    return () => window.clearInterval(interval);
+  }, [checkYahooFeed, apiStatus]);
+
+  useEffect(() => {
+    if (apiStatus === 'connected') return;
+    return subscribeAcceleratedFeedRetry(() => void checkYahooFeed());
+  }, [apiStatus, checkYahooFeed]);
 
   useEffect(() => {
     const gen = portfolioBootstrapGenerationRef.current;
@@ -683,7 +732,7 @@ export default function App() {
     return () => {
       clearInterval(dataInterval);
     };
-  }, [assets]);
+  }, [assets, quotesRefreshEpoch]);
 
   const holdingsTableSkeletonRows = useMemo(
     () =>
@@ -976,16 +1025,33 @@ export default function App() {
 
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
-  /** Persist today's total when missing. Deps avoid live quote ticks (they were resetting the timer before it fired). */
+  /** Wait for first quote fetch + FX rates before trusting EUR totals for SQLite history. */
+  const portfolioValuationReady = useMemo(() => {
+    if (loading) return false;
+    if (assets.length === 0) return true;
+    if (initialQuotesPending) return false;
+    return portfolioFxReady(assets, quoteCurrencies, exchangeRates);
+  }, [loading, assets, initialQuotesPending, quoteCurrencies, exchangeRates]);
+
+  /** Quotes/FX not ready, or Yahoo health still connecting — skeleton feed-dependent EUR fields. */
+  const feedMetricsLoading = useMemo(() => {
+    if (assets.length === 0) return false;
+    if (apiStatus === 'connecting') return true;
+    return !portfolioValuationReady;
+  }, [assets.length, apiStatus, portfolioValuationReady]);
+
+  /** Persist today's total once FX/quotes are ready; upsert if an early save was wrong. */
   useEffect(() => {
-    if (loading) return;
+    if (!portfolioValuationReady) return;
     const today = todayIsoDateHelsinki();
-    if (history.some((p) => p.date === today)) return;
     if (statsTotalValueRef.current <= 0) return;
 
     const t = window.setTimeout(async () => {
       const val = statsTotalValueRef.current;
       if (val <= 0) return;
+      const storedToday = history.find((p) => p.date === today);
+      if (storedToday && Math.abs(storedToday.value - val) <= 0.01) return;
+
       try {
         const res = await fetch('/api/portfolio/history', {
           method: 'POST',
@@ -1001,7 +1067,7 @@ export default function App() {
       }
     }, 2000);
     return () => window.clearTimeout(t);
-  }, [history, loading, assets.length, cashLineEur]);
+  }, [history, portfolioValuationReady, assets.length, cashLineEur]);
 
   const historyPanelRows = useMemo((): HistoryPoint[] => {
     const todayStr = todayIsoDateHelsinki();
@@ -1209,7 +1275,12 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-bg overflow-hidden font-sans selection:bg-accent/30">
-      <Header apiStatus={apiStatus} feedDetail={feedDetail} />
+      <Header
+        apiStatus={apiStatus}
+        feedDetail={feedDetail}
+        onRetryFeed={retryYahooFeed}
+        feedRetrying={feedRetrying || apiStatus === 'connecting'}
+      />
       {(portfolioLoadError || browserRecoverMsg) && (
         <div
           className={`mx-4 mt-2 px-4 py-3 rounded-xl border text-xs leading-relaxed ${
@@ -1336,7 +1407,11 @@ export default function App() {
                                         ) : null}
                                       </td>
                                       <td className="px-3 py-2 font-mono font-bold text-text-p tabular-nums">
-                                        {formatCurrency(row.value, 'EUR')}
+                                        {row.id === '__bors_live_today__' && feedMetricsLoading ? (
+                                          <SkeletonCurrency className="h-4 w-24" />
+                                        ) : (
+                                          formatCurrency(row.value, 'EUR')
+                                        )}
                                       </td>
                                       <td className="px-3 py-2 text-right">
                                         <button
@@ -1368,8 +1443,15 @@ export default function App() {
                     )}
                   </AnimatePresence>
 
-                  <div className="stat-value text-6xl font-black tracking-tighter mb-4 flex items-baseline gap-2 tabular-nums">
-                    {formatCurrency(stats.totalValue, 'EUR')}
+                  <div
+                    className="stat-value text-6xl font-black tracking-tighter mb-4 flex items-baseline gap-2 tabular-nums"
+                    aria-busy={feedMetricsLoading}
+                  >
+                    {feedMetricsLoading ? (
+                      <SkeletonCurrency className="h-14 w-52" />
+                    ) : (
+                      formatCurrency(stats.totalValue, 'EUR')
+                    )}
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                     <div>
@@ -1377,11 +1459,16 @@ export default function App() {
                       <GainDisplay
                         amountEur={portfolioTodayGain.todayGainEur}
                         percent={portfolioTodayGain.todayGainPercent}
+                        loading={feedMetricsLoading}
                       />
                     </div>
                     <div>
                       <p className="micro-label mb-1">Total gain</p>
-                      <GainDisplay amountEur={stats.totalGain} percent={stats.totalGainPercent} />
+                      <GainDisplay
+                        amountEur={stats.totalGain}
+                        percent={stats.totalGainPercent}
+                        loading={feedMetricsLoading}
+                      />
                     </div>
                     <div className="border-l border-border/40 pl-6 shrink-0">
                       <p className="micro-label mb-1">Cash (EUR)</p>
@@ -1539,8 +1626,18 @@ export default function App() {
                     <div
                       ref={allocationPieWrapRef}
                       className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0"
+                      aria-busy={feedMetricsLoading}
                     >
-                      <ResponsiveContainer width="100%" height="100%">
+                      {feedMetricsLoading ? (
+                        <div className="absolute inset-0 flex items-center justify-center z-[1]">
+                          <SkeletonBlock className="h-44 w-44 rounded-full" />
+                        </div>
+                      ) : null}
+                      <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                        className={feedMetricsLoading ? 'opacity-0 pointer-events-none' : undefined}
+                      >
                         <PieChart margin={{ ...allocChartMargins }}>
                           <AllocationPieDefs />
                           <Pie
@@ -1653,7 +1750,7 @@ export default function App() {
                       },
                     ]}
                     rows={
-                      initialQuotesPending && assets.length > 0
+                      feedMetricsLoading
                         ? holdingsTableSkeletonRows
                         : [...assets]
                       .sort((a, b) => {
@@ -1769,6 +1866,7 @@ export default function App() {
                   marketPrices={marketPrices}
                   exchangeRates={exchangeRates}
                   quoteCurrencies={quoteCurrencies}
+                  portfolioMetricsLoading={feedMetricsLoading}
                 />
               </motion.div>
             )}
@@ -1879,6 +1977,7 @@ export default function App() {
             }} 
             editAsset={editingAsset || undefined}
             onPersist={persistAsset}
+            exchangeRates={exchangeRates}
           />
         )}
         {historyModal && (
@@ -1936,10 +2035,11 @@ const NavButton = ({
   </button>
 );
 
-const AddAssetModal = ({ onClose, onPersist, editAsset }: { 
+const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: { 
   onClose: () => void, 
   onPersist: (asset: Asset, isEdit: boolean) => Promise<void>,
-  editAsset?: Asset
+  editAsset?: Asset,
+  exchangeRates: Record<string, number>,
 }) => {
   const [formData, setFormData] = useState({
     symbol: editAsset?.symbol || '',
@@ -1952,6 +2052,12 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
       editAsset?.averagePrice != null ? formatDecimalFi(editAsset.averagePrice, 2) : '',
     currency: editAsset?.currency || 'EUR'
   });
+  const [purchaseExpanded, setPurchaseExpanded] = useState(Boolean(editAsset));
+  const [purchaseAddQty, setPurchaseAddQty] = useState('');
+  const [purchaseAddPrice, setPurchaseAddPrice] = useState('');
+  const [purchaseAddCurrency, setPurchaseAddCurrency] = useState(
+    editAsset?.currency || 'EUR'
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
@@ -2059,6 +2165,56 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
     }
   };
 
+  const purchasePreview = useMemo(() => {
+    if (!editAsset) return null;
+    const addQty = parseDecimalInput(purchaseAddQty, 0);
+    if (!(addQty > 0) || purchaseAddPrice.trim() === '') return null;
+    const addPrice = parseDecimalInput(purchaseAddPrice, 0);
+    return mergeHoldingPurchase({
+      quantity: parseDecimalInput(formData.quantity, 0),
+      averagePrice: parseDecimalInput(formData.averagePrice, 0),
+      holdingCurrency: formData.currency,
+      addQuantity: addQty,
+      addPricePerUnit: addPrice,
+      addCurrency: purchaseAddCurrency,
+      exchangeRates,
+    });
+  }, [
+    editAsset,
+    formData.quantity,
+    formData.averagePrice,
+    formData.currency,
+    purchaseAddQty,
+    purchaseAddPrice,
+    purchaseAddCurrency,
+    exchangeRates,
+  ]);
+
+  const handleApplyPurchase = () => {
+    const addQty = parseDecimalInput(purchaseAddQty, 0);
+    const addPrice = parseDecimalInput(purchaseAddPrice, 0);
+    const result = mergeHoldingPurchase({
+      quantity: parseDecimalInput(formData.quantity, 0),
+      averagePrice: parseDecimalInput(formData.averagePrice, 0),
+      holdingCurrency: formData.currency,
+      addQuantity: addQty,
+      addPricePerUnit: addPrice,
+      addCurrency: purchaseAddCurrency,
+      exchangeRates,
+    });
+    if ('error' in result) return;
+    setFormData((f) => ({
+      ...f,
+      quantity: formatDecimalFi(result.quantity, 2),
+      averagePrice: formatDecimalFi(result.averagePrice, 2),
+    }));
+    setPurchaseAddQty('');
+    setPurchaseAddPrice('');
+  };
+
+  const canApplyPurchase =
+    purchasePreview != null && !('error' in purchasePreview);
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -2080,6 +2236,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
         <h2 className="text-2xl font-black tracking-tighter mb-1 text-text-p uppercase">{editAsset ? 'Edit Holding' : 'Add New Holding'}</h2>
         <p className="text-text-s mb-8 text-[10px] uppercase tracking-[0.25em] font-bold opacity-60">{editAsset ? 'Modify existing asset vector' : 'Add a new asset to your portfolio'}</p>
         
+        {!editAsset && (
         <div className="mb-8 space-y-2 relative">
           <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Find Asset (Name or Ticker)</label>
           <div className="relative">
@@ -2155,6 +2312,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
             )}
           </AnimatePresence>
         </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-8">
           {error && (
@@ -2212,6 +2370,128 @@ const AddAssetModal = ({ onClose, onPersist, editAsset }: {
               onChange={e => setFormData({ ...formData, name: e.target.value })}
             />
           </div>
+
+          {editAsset && (
+            <div className="rounded-xl border border-accent/25 bg-accent/5 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setPurchaseExpanded((v) => !v)}
+                className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-white/5 transition-colors"
+              >
+                <span className="text-[10px] font-black text-accent uppercase tracking-[0.2em]">
+                  Add purchase
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 text-accent shrink-0 transition-transform ${purchaseExpanded ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {purchaseExpanded && (
+                <div className="px-5 pb-5 space-y-4 border-t border-accent/15">
+                  <p className="text-[10px] text-text-s font-mono pt-4">
+                    Current:{' '}
+                    <span className="text-text-p font-bold">
+                      {formatDecimalFi(parseDecimalInput(formData.quantity, 0), 2)}
+                    </span>
+                    {' @ '}
+                    <span className="text-text-p font-bold">
+                      {formatDecimalFi(parseDecimalInput(formData.averagePrice, 0), 2)}
+                    </span>
+                    {' '}
+                    {formData.currency}
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                        Additional shares
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                        placeholder="0,00"
+                        value={purchaseAddQty}
+                        onChange={(e) => setPurchaseAddQty(e.target.value)}
+                        onBlur={() =>
+                          setPurchaseAddQty((v) => formatDecimalInputFi(v, 2))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                        Price / unit ({purchaseAddCurrency})
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                        placeholder="0,00"
+                        value={purchaseAddPrice}
+                        onChange={(e) => setPurchaseAddPrice(e.target.value)}
+                        onBlur={() =>
+                          setPurchaseAddPrice((v) => formatDecimalInputFi(v, 2))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                        Purchase currency
+                      </label>
+                      <select
+                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all text-sm appearance-none"
+                        value={purchaseAddCurrency}
+                        onChange={(e) => setPurchaseAddCurrency(e.target.value)}
+                      >
+                        <option value="EUR">EUR (€)</option>
+                        <option value="USD">USD ($)</option>
+                        <option value="GBP">GBP (£)</option>
+                      </select>
+                    </div>
+                  </div>
+                  {purchasePreview && 'error' in purchasePreview && (
+                    <p className="text-[10px] text-red/90 font-bold uppercase tracking-widest">
+                      {purchasePreview.error}
+                    </p>
+                  )}
+                  {purchasePreview && !('error' in purchasePreview) && (
+                    <div className="text-[10px] text-text-s space-y-1 font-mono leading-relaxed">
+                      <p>
+                        <span className="text-text-s/60 uppercase tracking-widest text-[9px] font-bold">
+                          Preview
+                        </span>
+                        {' — '}
+                        <span className="text-text-p font-bold">
+                          {formatDecimalFi(purchasePreview.quantity, 2)}
+                        </span>{' '}
+                        shares · avg{' '}
+                        <span className="text-text-p font-bold">
+                          {formatDecimalFi(purchasePreview.averagePrice, 2)}
+                        </span>{' '}
+                        {formData.currency}
+                      </p>
+                      <p>
+                        Cost basis{' '}
+                        {formatCurrency(purchasePreview.totalCostBasis, formData.currency)}
+                        {formData.currency.toUpperCase() !== 'EUR' && (
+                          <>
+                            {' · '}
+                            {formatCurrency(purchasePreview.totalCostBasisEur, 'EUR')}
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!canApplyPurchase}
+                    onClick={handleApplyPurchase}
+                    className="w-full py-3 bg-white/10 hover:bg-white/15 disabled:opacity-40 border border-border rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-text-p transition-all"
+                  >
+                    Apply to holding
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">

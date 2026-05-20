@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import type { Asset } from './types';
-import { formatCurrency } from './formatCurrency';
+import { formatCurrency, portfolioFxReady } from './formatCurrency';
+import { SkeletonBlock, SkeletonCurrency } from './SkeletonPulse';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
 import { useFiDecimalDraft } from './useFiDecimalDraft';
 import {
@@ -18,8 +19,8 @@ import {
   loadBlendedYieldCache,
 } from './blendedYieldCache';
 import {
-  currentMonthKey,
   formatMonthDisplay,
+  isMonthlySavingComplete,
   loadFireInputs,
   parseMonthKey,
   saveFireInputs,
@@ -47,6 +48,7 @@ function FireNumInput({
   decimals = 2,
   readOnly,
   groupThousands = true,
+  emptyWhenZero = false,
 }: {
   label: string;
   value: number;
@@ -56,12 +58,14 @@ function FireNumInput({
   decimals?: number;
   readOnly?: boolean;
   groupThousands?: boolean;
+  emptyWhenZero?: boolean;
 }) {
   const { inputProps } = useFiDecimalDraft(value, readOnly ? undefined : onChange, {
     fractionDigits: decimals,
     readOnly,
     groupThousands,
     trailingSuffix: suffix === '%' ? '%' : undefined,
+    emptyWhenZero,
   });
 
   return (
@@ -162,12 +166,14 @@ export function FireProjection({
   marketPrices,
   exchangeRates,
   quoteCurrencies = {},
+  portfolioMetricsLoading = false,
 }: {
   currentPortfolioEur: number;
   assets: Asset[];
   marketPrices: Record<string, number>;
   exchangeRates: Record<string, number>;
   quoteCurrencies?: Record<string, string>;
+  portfolioMetricsLoading?: boolean;
 }) {
   const [blendedYield, setBlendedYield] = useState<number | null>(() => {
     const c = loadBlendedYieldCache();
@@ -191,7 +197,11 @@ export function FireProjection({
     applyYieldResult(r.avgYieldPercent);
   }, [assets, marketPrices, exchangeRates, applyYieldResult]);
 
-  const quotesReady = assets.length === 0 || Object.keys(marketPrices).length > 0;
+  const quotesReady =
+    assets.length === 0 ||
+    (!portfolioMetricsLoading &&
+      Object.keys(marketPrices).length > 0 &&
+      portfolioFxReady(assets, quoteCurrencies, exchangeRates));
 
   useEffect(() => {
     if (!quotesReady) return;
@@ -247,8 +257,10 @@ export function FireProjection({
   const independenceCapital = independenceGoalFromProjection(projection);
   const fiRow = fiYearIndex >= 0 ? projection[fiYearIndex] : null;
 
+  const startAgeUnset = stored.capital.startAge === 0;
+
   const capitalRows = projection.map((r) => ({
-    age: r.age,
+    age: startAgeUnset ? '—' : r.age,
     year: r.calendarYear,
     portfolio: formatCurrency(r.portfolioValueEur, 'EUR'),
     dividend: formatCurrency(r.annualDividendNetEur, 'EUR'),
@@ -279,16 +291,22 @@ export function FireProjection({
 
   const annualSavingsGoalEur = Math.max(0, stored.capital.investedMonthlyEur) * 12;
 
-  const savingsByYear = useMemo(() => {
-    const groups = new Map<string, FireMonthlySaving[]>();
+  const { savingsByYear, draftSavings } = useMemo(() => {
+    const complete: FireMonthlySaving[] = [];
+    const draft: FireMonthlySaving[] = [];
     for (const row of stored.monthlySavings) {
+      if (isMonthlySavingComplete(row)) complete.push(row);
+      else draft.push(row);
+    }
+    const groups = new Map<string, FireMonthlySaving[]>();
+    for (const row of complete) {
       const year = row.month.slice(0, 4);
       if (!/^\d{4}$/.test(year)) continue;
       const list = groups.get(year) ?? [];
       list.push(row);
       groups.set(year, list);
     }
-    return [...groups.entries()]
+    const savingsByYear = [...groups.entries()]
       .sort(([a], [b]) => Number(b) - Number(a))
       .map(([year, rows]) => {
         const sorted = [...rows].sort((a, b) => b.month.localeCompare(a.month));
@@ -303,6 +321,7 @@ export function FireProjection({
             : 0;
         return { year, rows: sorted, total, goalMet, goalPct };
       });
+    return { savingsByYear, draftSavings: draft };
   }, [stored.monthlySavings, annualSavingsGoalEur]);
 
   const updateSaving = (id: string, patch: Partial<FireMonthlySaving>) => {
@@ -316,8 +335,8 @@ export function FireProjection({
     setStored((s) => ({
       ...s,
       monthlySavings: [
+        { id: `save-${Date.now()}`, month: '', savedEur: 0 },
         ...s.monthlySavings,
-        { id: `save-${Date.now()}`, month: currentMonthKey(), savedEur: 0 },
       ],
     }));
   };
@@ -341,9 +360,16 @@ export function FireProjection({
         <div className={`${PANEL} lg:col-span-1 flex flex-col gap-3`}>
           <h3 className="card-title mb-0">Independence goal</h3>
 
-          <p className="font-mono text-2xl font-black tabular-nums tracking-tighter leading-snug">
-            <span className="text-text-p">{formatCurrency(currentPortfolioEur, 'EUR')}</span>
-            {fiRow && independenceCapital > 0 ? (
+          <p
+            className="font-mono text-2xl font-black tabular-nums tracking-tighter leading-snug"
+            aria-busy={portfolioMetricsLoading}
+          >
+            {portfolioMetricsLoading ? (
+              <SkeletonCurrency className="h-8 w-36 inline-block" />
+            ) : (
+              <span className="text-text-p">{formatCurrency(currentPortfolioEur, 'EUR')}</span>
+            )}
+            {!portfolioMetricsLoading && fiRow && independenceCapital > 0 ? (
               <>
                 <span className="text-text-s/25 font-bold"> / </span>
                 <span className="text-text-s/55">{formatCurrency(independenceCapital, 'EUR')}</span>
@@ -351,7 +377,12 @@ export function FireProjection({
             ) : null}
           </p>
 
-          {fiRow && independenceCapital > 0 ? (
+          {portfolioMetricsLoading ? (
+            <div className="flex items-center gap-2.5" aria-hidden>
+              <SkeletonBlock className="flex-1 h-1.5 rounded-full" />
+              <SkeletonBlock className="h-3 w-10 shrink-0" />
+            </div>
+          ) : fiRow && independenceCapital > 0 ? (
             <div className="flex items-center gap-2.5">
               <div className="flex-1 h-1.5 bg-border/60 rounded-full overflow-hidden">
                 <div
@@ -396,7 +427,9 @@ export function FireProjection({
                 className="bg-bg/50 border border-border rounded-xl px-3 py-2 min-h-[42px] flex items-center"
                 title="From Dividends Engine holdings (auto-refreshed)"
               >
-                {effectiveYield > 0 ? (
+                {!quotesReady ? (
+                  <SkeletonBlock className="h-4 w-14" />
+                ) : effectiveYield > 0 ? (
                   <span className="text-sm font-mono text-accent tabular-nums">
                     {formatPercentFi(effectiveYield, 2)}
                   </span>
@@ -424,6 +457,7 @@ export function FireProjection({
               onChange={(n) => setCapital({ startAge: Math.round(n) })}
               step="1"
               decimals={0}
+              emptyWhenZero
             />
             <FireNumInput
               label="Start year"
@@ -504,10 +538,41 @@ export function FireProjection({
             </button>
           </div>
           <div className="space-y-3 max-h-[320px] overflow-y-auto scrollbar-hidden">
-            {savingsByYear.length === 0 ? (
+            {savingsByYear.length === 0 && draftSavings.length === 0 ? (
               <p className="text-text-s/50 text-xs font-mono py-4 text-center">No entries yet</p>
             ) : (
-              savingsByYear.map(({ year, rows, total, goalMet, goalPct }) => (
+              <>
+              {draftSavings.length > 0 ? (
+                <section className={ENTRY_GROUP}>
+                  <div className="space-y-1.5">
+                    {draftSavings.map((row) => (
+                      <div
+                        key={row.id}
+                        className="grid grid-cols-[7.25rem_5.5rem_1.75rem] gap-2 items-center w-full"
+                      >
+                        <MonthYearInput
+                          value={row.month}
+                          onChange={(month) => updateSaving(row.id, { month })}
+                          className="w-full"
+                        />
+                        <ExpenseAmountInput
+                          value={row.savedEur}
+                          onChange={(n) => updateSaving(row.id, { savedEur: n })}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeSaving(row.id)}
+                          className="p-1 text-text-s hover:text-red rounded-md justify-self-end"
+                          aria-label="Remove saving"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {savingsByYear.map(({ year, rows, total, goalMet, goalPct }) => (
                 <section key={year} className={ENTRY_GROUP}>
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <span className="text-[10px] font-black text-text-p uppercase tracking-widest">
@@ -564,7 +629,8 @@ export function FireProjection({
                     ))}
                   </div>
                 </section>
-              ))
+              ))}
+              </>
             )}
           </div>
         </div>

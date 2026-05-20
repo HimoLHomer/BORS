@@ -7,6 +7,21 @@ export function SkeletonBlock({ className = '' }: { className?: string }) {
   return <div className={`rounded ${SKELETON_PULSE} ${className}`.trim()} aria-hidden />;
 }
 
+/** Inline placeholder for EUR amounts (stats, table cells). */
+export function SkeletonCurrency({ className = 'h-7 w-28' }: { className?: string }) {
+  return <SkeletonBlock className={className} aria-busy aria-label="Loading" />;
+}
+
+/** Two-line gain placeholder (amount + percent). */
+export function SkeletonGain({ className = '' }: { className?: string }) {
+  return (
+    <div className={`inline-block text-right space-y-1 ${className}`.trim()} aria-busy aria-label="Loading">
+      <div className={`h-3.5 w-20 rounded ${SKELETON_PULSE} ml-auto`} />
+      <div className={`h-3 w-12 rounded ${SKELETON_PULSE} ml-auto`} />
+    </div>
+  );
+}
+
 export function SkeletonLines({
   count = 3,
   className = '',

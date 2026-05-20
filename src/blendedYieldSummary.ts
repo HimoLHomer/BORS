@@ -2,6 +2,7 @@ import type { Asset } from './types';
 import type { ManualDividendPosition } from './manualDividends';
 
 export type DividendRowForYield = {
+  symbol?: string;
   estimatedAnnualIncomeEur: number;
   error: boolean;
 };
@@ -11,9 +12,38 @@ export type BlendedYieldSummary = {
   avgYieldPercent: number;
 };
 
-function isDividendPayer(r: DividendRowForYield): boolean {
+export function isDividendPayerRow(r: DividendRowForYield): boolean {
   if (r.error) return false;
   return Number.isFinite(r.estimatedAnnualIncomeEur) && r.estimatedAnnualIncomeEur > 0;
+}
+
+function apiRowForSymbol(rows: DividendRowForYield[], symbol: string | null | undefined): DividendRowForYield | null {
+  const t = symbol?.trim().toUpperCase();
+  if (!t || !rows.length) return null;
+  return (
+    rows.find((r) => {
+      if (r.error) return false;
+      const rs = (r.symbol ?? '').trim().toUpperCase();
+      if (!rs) return false;
+      return rs === t || shortSymbolKey(rs) === t || shortSymbolKey(t) === rs;
+    }) ?? null
+  );
+}
+
+/** Manual line omitted when the feed already pays dividends for the linked symbol. */
+export function manualSupersededByApiRow(
+  apiRows: DividendRowForYield[],
+  m: ManualDividendPosition
+): boolean {
+  const api = apiRowForSymbol(apiRows, m.linkedSymbol);
+  return api != null && isDividendPayerRow(api);
+}
+
+export function manualRowsForBlendedSummary(
+  manualRows: ManualDividendPosition[],
+  apiRows: DividendRowForYield[]
+): ManualDividendPosition[] {
+  return manualRows.filter((m) => !manualSupersededByApiRow(apiRows, m));
 }
 
 function fxToEur(currency: string | undefined, exchangeRates: Record<string, number>): number {
@@ -77,9 +107,11 @@ export function computeBlendedYieldSummary(
   marketPrices: Record<string, number>,
   exchangeRates: Record<string, number>
 ): BlendedYieldSummary {
+  const manuals = manualRowsForBlendedSummary(manualRows, rows);
+
   const dividendPayingRows = rows
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => isDividendPayer(row));
+    .filter(({ row }) => isDividendPayerRow(row));
 
   let apiAnnualEur = 0;
   let apiValueEur = 0;
@@ -93,11 +125,11 @@ export function computeBlendedYieldSummary(
 
   const apiYieldPercent = apiValueEur > 0 ? (apiAnnualEur / apiValueEur) * 100 : 0;
 
-  const manualAnnualSum = manualRows.reduce(
+  const manualAnnualSum = manuals.reduce(
     (s, m) => s + (Number.isFinite(m.annualIncomeEur) ? m.annualIncomeEur : 0),
     0
   );
-  const manualDenominatorSum = manualRows.reduce((s, m) => {
+  const manualDenominatorSum = manuals.reduce((s, m) => {
     const d = effectiveManualDenominatorEur(m, assets, marketPrices, exchangeRates);
     return s + (d != null && Number.isFinite(d) ? d : 0);
   }, 0);

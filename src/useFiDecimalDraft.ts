@@ -16,15 +16,18 @@ type Options = {
   groupThousands?: boolean;
   /** Shown tight after the number, e.g. `7,00 %`. Parsed away on commit. */
   trailingSuffix?: '%';
+  /** When true, zero displays as an empty field (unset). */
+  emptyWhenZero?: boolean;
 };
 
 function formatDraftValue(
   value: number,
   fractionDigits: number,
   groupThousands: boolean,
-  trailingSuffix?: '%'
+  trailingSuffix?: '%',
+  emptyWhenZero?: boolean
 ): string {
-  if (!Number.isFinite(value)) return '';
+  if (!Number.isFinite(value) || (emptyWhenZero && value === 0)) return '';
   const num =
     !groupThousands && fractionDigits === 0
       ? formatWholeNumber(value)
@@ -49,11 +52,12 @@ export function useFiDecimalDraft(
     min,
     groupThousands = true,
     trailingSuffix,
+    emptyWhenZero = false,
   } = options;
 
   const format = useCallback(
-    (n: number) => formatDraftValue(n, fractionDigits, groupThousands, trailingSuffix),
-    [fractionDigits, groupThousands, trailingSuffix]
+    (n: number) => formatDraftValue(n, fractionDigits, groupThousands, trailingSuffix, emptyWhenZero),
+    [fractionDigits, groupThousands, trailingSuffix, emptyWhenZero]
   );
 
   const [draft, setDraft] = useState(() => format(value));

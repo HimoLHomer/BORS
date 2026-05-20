@@ -1,5 +1,6 @@
 import { formatCurrency } from './formatCurrency';
 import { formatPercentFi } from './formatNumber';
+import { SkeletonGain } from './SkeletonPulse';
 
 /** EUR gain from a prior close given current market value and % change. */
 export function todayGainEurFromChange(marketValueEur: number, changePercent: number): number {
@@ -9,7 +10,16 @@ export function todayGainEurFromChange(marketValueEur: number, changePercent: nu
   return marketValueEur - marketValueEur / factor;
 }
 
-export function GainDisplay({ amountEur, percent }: { amountEur: number; percent: number }) {
+export function GainDisplay({
+  amountEur,
+  percent,
+  loading = false,
+}: {
+  amountEur: number;
+  percent: number;
+  loading?: boolean;
+}) {
+  if (loading) return <SkeletonGain />;
   const positive = amountEur >= 0;
   return (
     <div className={`inline-block text-right ${positive ? 'text-green' : 'text-red'}`}>

@@ -26,7 +26,7 @@ export function defaultFireCapital(): FireCapitalInputs {
   return {
     marketReturnPercent: 7,
     investedMonthlyEur: 1000,
-    startAge: 33,
+    startAge: 0,
     startYear: currentYear(),
     dividendTaxRatePercent: 25,
   };
@@ -75,6 +75,12 @@ export function currentMonthKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/** Row is complete enough to group and sort by month (valid month + amount entered). */
+export function isMonthlySavingComplete(row: FireMonthlySaving): boolean {
+  if (parseMonthKey(row.month) == null) return false;
+  return Number.isFinite(row.savedEur) && row.savedEur > 0;
+}
+
 
 export function loadFireInputs(): FireStoredInputs {
   try {
@@ -113,7 +119,6 @@ export function loadFireInputs(): FireStoredInputs {
                 savedEur: num(s?.savedEur, 0),
               };
             })
-            .filter((s) => s.month)
         : d.monthlySavings,
     };
   } catch {
