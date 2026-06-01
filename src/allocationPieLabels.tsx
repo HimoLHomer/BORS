@@ -21,6 +21,13 @@ export type AllocationChromePrefs = {
   labelFontPx: number;
 };
 
+/** Drag / slider limits for pie position (positive Y = lower in the card). */
+export const ALLOCATION_PIE_NUDGE_LIMITS = {
+  x: 80,
+  yMin: -40,
+  yMax: 100,
+} as const;
+
 const CHROME_DEFAULTS: AllocationChromePrefs = { pieNudgeX: 0, pieNudgeY: 0, labelFontPx: 11 };
 
 function clampNum(v: unknown, min: number, max: number, fallback: number): number {
@@ -35,8 +42,18 @@ export function loadAllocationChromePrefs(): AllocationChromePrefs {
     if (!raw) return { ...CHROME_DEFAULTS };
     const o = JSON.parse(raw) as Record<string, unknown>;
     return {
-      pieNudgeX: clampNum(o.pieNudgeX, -120, 120, CHROME_DEFAULTS.pieNudgeX),
-      pieNudgeY: clampNum(o.pieNudgeY, -120, 120, CHROME_DEFAULTS.pieNudgeY),
+      pieNudgeX: clampNum(
+        o.pieNudgeX,
+        -ALLOCATION_PIE_NUDGE_LIMITS.x,
+        ALLOCATION_PIE_NUDGE_LIMITS.x,
+        CHROME_DEFAULTS.pieNudgeX
+      ),
+      pieNudgeY: clampNum(
+        o.pieNudgeY,
+        ALLOCATION_PIE_NUDGE_LIMITS.yMin,
+        ALLOCATION_PIE_NUDGE_LIMITS.yMax,
+        CHROME_DEFAULTS.pieNudgeY
+      ),
       labelFontPx: clampNum(o.labelFontPx, 8, 18, CHROME_DEFAULTS.labelFontPx),
     };
   } catch {
@@ -52,21 +69,39 @@ export function saveAllocationChromePrefs(prefs: AllocationChromePrefs): void {
   }
 }
 
-/** Clamp nudge so margins stay ≥ 8px on each side. */
+const MIN_CHART_MARGIN = 8;
+
+function clampPieNudgeX(nudgeX: number): number {
+  const { x } = ALLOCATION_PIE_NUDGE_LIMITS;
+  return Math.min(x, Math.max(-x, nudgeX));
+}
+
+function clampPieNudgeY(nudgeY: number): number {
+  const { yMin, yMax } = ALLOCATION_PIE_NUDGE_LIMITS;
+  return Math.min(yMax, Math.max(yMin, nudgeY));
+}
+
+export function clampAllocationChromePrefs(prefs: AllocationChromePrefs): AllocationChromePrefs {
+  return {
+    pieNudgeX: clampPieNudgeX(prefs.pieNudgeX),
+    pieNudgeY: clampPieNudgeY(prefs.pieNudgeY),
+    labelFontPx: clampNum(prefs.labelFontPx, 8, 18, CHROME_DEFAULTS.labelFontPx),
+  };
+}
+
+/** Apply pie nudge via asymmetric margins (positive Y moves the pie down). */
 export function allocationPieMarginsWithNudge(
   base: typeof ALLOCATION_PIE_CHART_MARGIN,
   nudgeX: number,
   nudgeY: number
 ): AllocationPieMargin {
-  const maxNx = Math.min(100, base.left - 8, base.right - 8);
-  const maxNy = Math.min(100, base.top - 8, base.bottom - 8);
-  const nx = Math.min(maxNx, Math.max(-maxNx, nudgeX));
-  const ny = Math.min(maxNy, Math.max(-maxNy, nudgeY));
+  const nx = clampPieNudgeX(nudgeX);
+  const ny = clampPieNudgeY(nudgeY);
   return {
-    top: base.top + ny,
-    bottom: base.bottom - ny,
-    left: base.left + nx,
-    right: base.right - nx,
+    top: Math.max(MIN_CHART_MARGIN, base.top + ny),
+    bottom: Math.max(MIN_CHART_MARGIN, base.bottom - ny),
+    left: Math.max(MIN_CHART_MARGIN, base.left + nx),
+    right: Math.max(MIN_CHART_MARGIN, base.right - nx),
   };
 }
 

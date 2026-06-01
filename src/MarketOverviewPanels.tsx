@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
 import { formatCurrency } from './formatCurrency';
@@ -6,6 +7,10 @@ import { fetchJson } from './apiFetch';
 import { onFeedReconnected } from './feedReconnect';
 import { friendlyAiErrorMessage } from './aiErrorMessage';
 import { MARKET_PANEL, MARKET_SUBCARD } from './marketTheme';
+import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
+import type { MarketHeatmapMover, MarketSectorBreadth } from './marketAiPrompt';
+import { sanitizeMarketSummary } from './marketAiValidation';
+import { getMarketSessionStatus, useMarketSessionClock } from './marketSession';
 
 export type MarketQuoteSnapshot = {
   id: string;
@@ -77,18 +82,48 @@ export function useMarketOverview() {
   return { overview, loading, error, reload: () => load(true) };
 }
 
+type TopMoversPayload = {
+  gainers: MarketHeatmapMover[];
+  losers: MarketHeatmapMover[];
+};
+
 function useIndexAiSummary(
   quote: MarketQuoteSnapshot | null | undefined,
-  variant: 'us' | 'fi'
+  variant: 'us' | 'fi',
+  asOf: string | null | undefined,
+  heatmapAsOf: string | null | undefined,
+  topMovers: TopMoversPayload | undefined,
+  sectorBreadth: MarketSectorBreadth | undefined
 ) {
   const [summary, setSummary] = useState('');
+  const [summaryDate, setSummaryDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
+  const summaryTextRef = useRef('');
+  const postCloseHydrateRef = useRef(false);
 
   const price = quote?.price ?? null;
-  const changePercent = quote?.changePercent ?? 0;
   const label = quote?.label ?? '';
   const currency = quote?.currency ?? 'USD';
+  const changePercent = quote?.changePercent ?? 0;
+
+  const marketDate = useMemo(() => todayIsoDateHelsinki(), []);
+  const sessionTick = useMarketSessionClock();
+  const session = useMemo(
+    () => getMarketSessionStatus(variant, new Date(sessionTick)),
+    [variant, sessionTick]
+  );
+
+  const contextKey = useMemo(() => {
+    const g = topMovers?.gainers ?? [];
+    const l = topMovers?.losers ?? [];
+    const movers = [...g, ...l].map((m) => `${m.symbol}:${m.changePercent.toFixed(2)}`).join('|');
+    const sector = sectorBreadth
+      ? `${sectorBreadth.leadingSector}:${sectorBreadth.leadingAvgPct.toFixed(2)}`
+      : '';
+    const idx = Number.isFinite(changePercent) ? changePercent.toFixed(2) : '0';
+    return `${asOf ?? ''}|${heatmapAsOf ?? ''}|${idx}|${movers}|${sector}`;
+  }, [topMovers, sectorBreadth, changePercent, asOf, heatmapAsOf]);
 
   const refreshAiStatus = useCallback(() => {
     void fetch('/api/market/ai-status', { cache: 'no-store' })
@@ -104,7 +139,82 @@ function useIndexAiSummary(
     return () => window.removeEventListener('bors-ai-settings-changed', onSettings);
   }, [refreshAiStatus]);
 
+  const fetchSummary = useCallback(async (forceRefresh = false) => {
+      if (aiConfigured !== true || price == null) return;
+      setLoading(true);
+      try {
+        const body: Record<string, unknown> = {
+          variant,
+          label,
+          price,
+          changePercent,
+          currency,
+          marketDate,
+          asOf: asOf ?? null,
+          refresh: forceRefresh,
+        };
+        const g = topMovers?.gainers ?? [];
+        const l = topMovers?.losers ?? [];
+        if (g.length > 0 || l.length > 0) {
+          body.topMovers = { gainers: g, losers: l };
+        }
+        if (sectorBreadth) {
+          body.sectorBreadth = sectorBreadth;
+        }
+        const res = await fetch('/api/market/ai-summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = await fetchJson<{
+          summary?: string;
+          marketDate?: string;
+          error?: string;
+          code?: number;
+        }>(res);
+        if (!res.ok) {
+          throw new Error(json.error ?? `AI summary failed (${res.status})`);
+        }
+        setSummaryDate(json.marketDate ?? marketDate);
+        const raw = json.summary?.trim() || 'Summary unavailable.';
+        setSummary(raw);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'AI request failed';
+        setSummary(friendlyAiErrorMessage(msg));
+      } finally {
+        setLoading(false);
+      }
+  }, [aiConfigured, price, variant, label, changePercent, currency, marketDate, asOf, topMovers, sectorBreadth]);
+
   useEffect(() => {
+    summaryTextRef.current = summary;
+  }, [summary]);
+
+  useEffect(() => {
+    if (!session.showSummary) {
+      postCloseHydrateRef.current = false;
+      setSummary(session.closedMessage);
+      setSummaryDate(null);
+      setLoading(false);
+      return;
+    }
+    if (!session.isOpen) {
+      setLoading(false);
+      const hasMovers =
+        (topMovers?.gainers.length ?? 0) > 0 || (topMovers?.losers.length ?? 0) > 0;
+      if (
+        !postCloseHydrateRef.current &&
+        !summaryTextRef.current.trim() &&
+        aiConfigured === true &&
+        price != null &&
+        hasMovers
+      ) {
+        postCloseHydrateRef.current = true;
+        void fetchSummary();
+      }
+      return;
+    }
+    postCloseHydrateRef.current = false;
     if (aiConfigured === false) {
       setSummary('Add an API key under **Options → Market AI** for your chosen provider (Gemini or OpenAI).');
       setLoading(false);
@@ -116,31 +226,66 @@ function useIndexAiSummary(
       setLoading(false);
       return;
     }
+    const hasMovers =
+      (topMovers?.gainers.length ?? 0) > 0 || (topMovers?.losers.length ?? 0) > 0;
+    if (!hasMovers) return;
+    void fetchSummary();
+  }, [
+    aiConfigured,
+    price,
+    label,
+    variant,
+    marketDate,
+    contextKey,
+    fetchSummary,
+    session.isOpen,
+    session.showSummary,
+    session.closedMessage,
+  ]);
 
-    const run = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/market/ai-summary', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ variant, label, price, changePercent, currency }),
-        });
-        const json = await fetchJson<{ summary?: string; error?: string; code?: number }>(res);
-        if (!res.ok) {
-          throw new Error(json.error ?? `AI summary failed (${res.status})`);
-        }
-        setSummary(json.summary?.trim() || 'Summary unavailable — try refreshing.');
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'AI request failed';
-        setSummary(friendlyAiErrorMessage(msg));
-      } finally {
-        setLoading(false);
-      }
-    };
-    void run();
-  }, [aiConfigured, price, changePercent, label, currency, variant]);
+  const displaySummary = useMemo(() => {
+    if (!session.showSummary) return summary;
+    if (!summary.trim() || price == null) return summary;
+    const g = topMovers?.gainers ?? [];
+    const l = topMovers?.losers ?? [];
+    const movers = [...g, ...l].map((m) => ({
+      symbol: m.symbol,
+      name: m.name,
+      changePercent: m.changePercent,
+    }));
+    return sanitizeMarketSummary(summary, {
+      indexLabel: label,
+      changePercent,
+      movers,
+      topGainer: g[0]
+        ? { symbol: g[0].symbol, name: g[0].name, changePercent: g[0].changePercent }
+        : undefined,
+      topLoser: l[0]
+        ? { symbol: l[0].symbol, name: l[0].name, changePercent: l[0].changePercent }
+        : undefined,
+    });
+  }, [summary, price, label, changePercent, topMovers, session.showSummary]);
 
-  return { summary, loading, hasAiKey: aiConfigured === true };
+  const canRefresh =
+    session.showSummary &&
+    aiConfigured === true &&
+    price != null &&
+    ((topMovers?.gainers.length ?? 0) > 0 || (topMovers?.losers.length ?? 0) > 0);
+
+  const refreshSummary = useCallback(() => {
+    if (!canRefresh) return;
+    void fetchSummary(true);
+  }, [canRefresh, fetchSummary]);
+
+  return {
+    summary: displaySummary,
+    summaryDate: session.showSummary ? summaryDate : null,
+    loading: session.showSummary ? loading : false,
+    hasAiKey: aiConfigured === true,
+    marketClosed: !session.showSummary,
+    canRefresh,
+    refreshSummary,
+  };
 }
 
 function QuoteChangeLine({ quote }: { quote: MarketQuoteSnapshot }) {
@@ -163,16 +308,32 @@ export function MarketIndexPanel({
   quote,
   overviewLoading,
   variant,
+  asOf,
+  heatmapAsOf,
+  topMovers,
+  sectorBreadth,
   panelMinHeight,
   aiMinHeight = 'min-h-[220px]',
 }: {
   quote: MarketQuoteSnapshot | undefined;
   overviewLoading: boolean;
   variant: 'us' | 'fi';
+  asOf?: string | null;
+  /** Snapshot time of the heatmap tiles beside this panel (keeps AI in sync). */
+  heatmapAsOf?: string | null;
+  topMovers?: TopMoversPayload;
+  sectorBreadth?: MarketSectorBreadth;
   panelMinHeight?: string;
   aiMinHeight?: string;
 }) {
-  const { summary, loading: aiLoading } = useIndexAiSummary(quote, variant);
+  const {
+    summary,
+    summaryDate,
+    loading: aiLoading,
+    marketClosed,
+    canRefresh,
+    refreshSummary,
+  } = useIndexAiSummary(quote, variant, asOf, heatmapAsOf, topMovers, sectorBreadth);
 
   return (
     <div className={`${MARKET_PANEL} flex flex-col flex-1 min-h-0 ${panelMinHeight ?? ''}`}>
@@ -194,7 +355,33 @@ export function MarketIndexPanel({
       </div>
 
       <div className={`flex-1 min-h-0 overflow-y-auto scrollbar-hidden mt-3 pt-3 border-t border-border/40 ${aiMinHeight}`}>
-        {aiLoading ? (
+        {!marketClosed && (summaryDate || canRefresh) && (
+          <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem]">
+            {summaryDate && !aiLoading ? (
+              <p
+                className="text-[10px] text-text-s/80 tabular-nums"
+                title="News date used for this summary"
+              >
+                News for {formatDateFi(summaryDate)}
+              </p>
+            ) : (
+              <span className="flex-1" />
+            )}
+            {canRefresh && (
+              <button
+                type="button"
+                onClick={() => refreshSummary()}
+                disabled={aiLoading}
+                title="Refresh AI summary"
+                aria-label="Refresh AI summary"
+                className="shrink-0 p-1 rounded-md text-text-s hover:text-text-p hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+          </div>
+        )}
+        {aiLoading && !marketClosed ? (
           <div className="space-y-2">
             <div className="h-2.5 bg-white/5 rounded-full w-full animate-pulse" />
             <div className="h-2.5 bg-white/5 rounded-full w-5/6 animate-pulse" />

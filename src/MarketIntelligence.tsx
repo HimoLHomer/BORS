@@ -11,6 +11,12 @@ import {
 } from './MarketOverviewPanels';
 import { MARKET_PANEL, MARKET_REFRESH_BTN } from './marketTheme';
 import { onFeedReconnected } from './feedReconnect';
+import {
+  computeSectorBreadth,
+  pickTopHeatmapMovers,
+  type MarketHeatmapMover,
+  type MarketSectorBreadth,
+} from './marketAiPrompt';
 
 type HeatmapUniverse = 'sp500' | 'omxh25';
 
@@ -82,13 +88,13 @@ function treemapFontSizes(
   area: number
 ): { main: number; sub: number; tiny: number; micro: number } {
   const minDim = Math.min(boxW, boxH);
-  if (area < 120) return { main: 6, sub: 6, tiny: 5, micro: 5 };
+  if (area < 120) return { main: 7, sub: 6, tiny: 6, micro: 6 };
   if (area < 280) {
     return {
-      main: Math.min(7, minDim * 0.36),
-      sub: 6,
-      tiny: 5,
-      micro: 5,
+      main: Math.min(8, minDim * 0.38),
+      sub: Math.min(7, minDim * 0.32),
+      tiny: 6,
+      micro: 6,
     };
   }
   if (area < 600) {
@@ -152,6 +158,20 @@ function prepareSectorsForTreemap(sectors: HeatmapSector[]): HeatmapSector[] {
   return sectors
     .map((s) => ({ name: s.name, children: trimSectorChildren(s.children) }))
     .filter((s) => s.children.length > 0);
+}
+
+/** Tiles actually drawn on the treemap — AI movers must match these (OMX shows top 14 by size). */
+function tilesVisibleOnHeatmap(
+  sectors: HeatmapSector[],
+  universe: HeatmapUniverse
+): HeatmapTile[] {
+  const prepared = prepareSectorsForTreemap(sectors);
+  if (universe === 'omxh25') {
+    return [...prepared.flatMap((s) => s.children)]
+      .sort((a, b) => b.size - a.size)
+      .slice(0, OMX_DISPLAY_CAP);
+  }
+  return prepared.flatMap((s) => s.children);
 }
 
 /** GICS sector → short header labels (Finviz-style). */
@@ -295,6 +315,10 @@ function pctFitsInBox(
   return true;
 }
 
+function lineHeight(fs: number): number {
+  return fs * 1.28;
+}
+
 function stackedLabelFits(
   ticker: string,
   pctText: string,
@@ -304,12 +328,46 @@ function stackedLabelFits(
   pctFs: number,
   gap: number
 ): boolean {
-  const lineH = (fs: number) => fs * 1.28;
-  const needed = lineH(tickerFs) + lineH(pctFs) + gap + 6;
+  const needed = lineHeight(tickerFs) + lineHeight(pctFs) + gap + 4;
   if (height < needed) return false;
+  const tickerOk = fitTreemapText(ticker, width, tickerFs).length >= 2;
+  return tickerOk && pctFitsInBox(pctText, width, pctFs, height - lineHeight(tickerFs) - gap);
+}
+
+function inlineLabelFits(ticker: string, pct: string, width: number, fontSize: number): boolean {
+  const label = `${fitTreemapText(ticker, width * 0.55, fontSize)} ${pct}`;
+  return label.length * fontSize * 0.52 <= width - 6;
+}
+
+function renderStackedLabels(
+  cx: number,
+  boxY: number,
+  boxH: number,
+  lines: { text: string; fontSize: number }[],
+  gap: number
+): React.ReactNode {
+  const heights = lines.map((l) => lineHeight(l.fontSize));
+  const total = heights.reduce((s, h) => s + h, 0) + gap * Math.max(0, lines.length - 1);
+  let y = boxY + (boxH - total) / 2;
   return (
-    fitTreemapText(ticker, width, tickerFs) === ticker &&
-    pctFitsInBox(pctText, width, pctFs, height - lineH(tickerFs) - gap)
+    <>
+      {lines.map((line, i) => {
+        const h = heights[i]!;
+        const centerY = y + h / 2;
+        y += h + (i < lines.length - 1 ? gap : 0);
+        return (
+          <TreemapLabel
+            key={`${line.text}-${i}`}
+            x={cx}
+            y={centerY}
+            fontSize={line.fontSize}
+            contrastStroke
+          >
+            {line.text}
+          </TreemapLabel>
+        );
+      })}
+    </>
   );
 }
 
@@ -351,7 +409,6 @@ function TreemapLabel({
   fontSize,
   fontWeight = 600,
   anchor = 'middle',
-  baseline = 'auto',
   contrastStroke = false,
   children,
 }: {
@@ -360,7 +417,6 @@ function TreemapLabel({
   fontSize: number;
   fontWeight?: number;
   anchor?: 'middle' | 'start';
-  baseline?: 'auto' | 'middle';
   contrastStroke?: boolean;
   children: string;
 }) {
@@ -372,7 +428,7 @@ function TreemapLabel({
       x={px}
       y={py}
       textAnchor={anchor}
-      dominantBaseline={baseline === 'middle' ? 'middle' : undefined}
+      dominantBaseline="middle"
       fill="#f4f4f5"
       fontSize={fontSize}
       fontWeight={fontWeight}
@@ -502,14 +558,24 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
       ? `url(#${change >= 0 ? glowGreenId : glowRedId})`
       : undefined;
 
-  const inset = 4;
+  const inset = Math.min(boxW, boxH) < 32 ? 2 : 4;
+  const innerX = boxX + inset;
+  const innerY = boxY + inset;
   const innerW = Math.max(0, boxW - inset * 2);
   const innerH = Math.max(0, boxH - inset * 2);
   const area = innerW * innerH;
   const minDim = Math.min(innerW, innerH);
   const aspect = innerW / Math.max(innerH, 1);
-  const isSliver = aspect > 3.2 || aspect < 0.3 || minDim < 14 || area < 160;
-  const pctDecimals = innerW < 32 || minDim < 22 ? 0 : minDim < 30 ? 1 : 2;
+  const isTallSliver = aspect < 0.42;
+  const isWideSliver = aspect > 2.35 && innerH < 30;
+  const isOmxTreemap = props.sectorName === 'OMX Helsinki 25';
+  const pctDecimals = isOmxTreemap
+    ? 2
+    : innerW < 36 || minDim < 24
+      ? 0
+      : minDim < 32
+        ? 1
+        : 2;
   const pctText = formatPercentFi(change, pctDecimals, { showPlus: true });
   const pctCompact = formatPercentFi(change, 0, { showPlus: true });
   const ticker = name ?? '';
@@ -524,44 +590,73 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
   const pctOkSub = pctFitsInBox(pctText, innerW, fontSub, innerH);
   const pctOkTiny = pctFitsInBox(pctText, innerW, fontTiny, innerH);
   const pctOkMicro = pctFitsInBox(pctCompact, innerW, fontMicro, innerH);
-  const labelGap = 4;
+  const labelGap = 3;
+  const canFitTickerLine = (fs: number) =>
+    fitTreemapText(ticker, innerW, fs).length >= Math.min(2, ticker.length);
 
   const showBoth =
-    !isSliver &&
     innerW >= 54 &&
     innerH >= 40 &&
     area >= 480 &&
     pctOkSub &&
     stackedLabelFits(ticker, pctText, innerW, innerH, fontMain, fontSub, 8);
   const showStacked =
-    !isSliver &&
     !showBoth &&
-    innerW >= 38 &&
-    innerH >= 30 &&
-    area >= 280 &&
+    innerW >= 36 &&
+    innerH >= 28 &&
+    area >= 240 &&
     stackedLabelFits(ticker, pctText, innerW, innerH, fontSub, fontTiny, labelGap);
   const showTickerWithPct =
     !showBoth &&
     !showStacked &&
+    innerW >= 22 &&
+    innerH >= 24 &&
+    area >= 180 &&
+    stackedLabelFits(ticker, pctCompact, innerW, innerH, fontSub, fontMicro, labelGap);
+  const showWideSliver =
+    !showBoth &&
+    !showStacked &&
+    !showTickerWithPct &&
+    isWideSliver &&
+    innerW >= 20 &&
+    inlineLabelFits(ticker, pctCompact, innerW, fontMicro);
+  const showInline =
+    !showBoth &&
+    !showStacked &&
+    !showTickerWithPct &&
+    !showWideSliver &&
     innerW >= 24 &&
-    innerH >= 26 &&
-    area >= 220 &&
-    aspect >= 0.45 &&
-    stackedLabelFits(ticker, pctCompact, innerW, innerH, fontSub, fontMicro, 3);
+    innerH >= 12 &&
+    inlineLabelFits(ticker, pctCompact, innerW, fontMicro);
   const showTickerOnly =
     !showBoth &&
     !showStacked &&
     !showTickerWithPct &&
-    innerW >= 18 &&
-    innerH >= 14 &&
-    aspect >= 0.4;
+    !showWideSliver &&
+    !showInline &&
+    innerW >= 14 &&
+    innerH >= 12 &&
+    canFitTickerLine(fontTiny);
+  const showSliverVertical =
+    !showBoth &&
+    !showStacked &&
+    !showTickerWithPct &&
+    !showWideSliver &&
+    !showInline &&
+    !showTickerOnly &&
+    isTallSliver &&
+    innerH >= 32 &&
+    innerW >= 10 &&
+    canFitTickerLine(fontMicro);
   const showPctOnly =
     !showBoth &&
     !showStacked &&
     !showTickerWithPct &&
+    !showWideSliver &&
+    !showInline &&
     !showTickerOnly &&
-    innerW >= 14 &&
-    innerH >= 12 &&
+    !showSliverVertical &&
+    minDim >= 10 &&
     (pctOkMicro || pctOkTiny);
 
   const hoverPayload: HeatmapHover = {
@@ -575,20 +670,16 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
   };
 
   const clipId = treemapClipId(boxX, boxY);
-  const cx = boxX + boxW / 2;
-  const labelTop = boxY + inset;
-  const labelMid = boxY + boxH / 2;
+  const cx = innerX + innerW / 2;
+  const cy = innerY + innerH / 2;
+  const tickerFit = (fs: number) => fitTreemapText(ticker, innerW, fs);
+  const inlineText = `${tickerFit(fontMicro)} ${pctCompact}`;
 
   return (
     <g>
       <defs>
         <clipPath id={clipId}>
-          <rect
-            x={boxX + inset}
-            y={boxY + inset}
-            width={innerW}
-            height={innerH}
-          />
+          <rect x={innerX} y={innerY} width={innerW} height={innerH} />
         </clipPath>
       </defs>
       <rect
@@ -608,83 +699,51 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
         onMouseLeave={() => onLeave?.()}
       />
       <g clipPath={`url(#${clipId})`}>
-        {showBoth && (
-          <>
-            <TreemapLabel
-              x={cx}
-              y={labelMid - 7}
-              fontSize={fontMain}
-              contrastStroke
-            >
-              {fitTreemapText(ticker, innerW, fontMain)}
-            </TreemapLabel>
-            <TreemapLabel
-              x={cx}
-              y={labelMid + fontSub * 1.15}
-              fontSize={fontSub}
-              contrastStroke
-            >
-              {pctText}
-            </TreemapLabel>
-          </>
-        )}
-        {showStacked && (
-          <>
-            <TreemapLabel
-              x={cx}
-              y={labelTop + fontSub * 0.85}
-              fontSize={fontSub}
-              contrastStroke
-            >
-              {fitTreemapText(ticker, innerW, fontSub)}
-            </TreemapLabel>
-            <TreemapLabel
-              x={cx}
-              y={labelTop + fontSub * 2.1 + labelGap}
-              fontSize={fontTiny}
-              contrastStroke
-            >
-              {pctText}
-            </TreemapLabel>
-          </>
-        )}
-        {showTickerWithPct && (
-          <>
-            <TreemapLabel
-              x={cx}
-              y={labelTop + fontSub * 0.85}
-              fontSize={fontSub}
-              contrastStroke
-            >
-              {fitTreemapText(ticker, innerW, fontSub)}
-            </TreemapLabel>
-            <TreemapLabel
-              x={cx}
-              y={labelTop + fontSub * 2.05 + 3}
-              fontSize={fontMicro}
-              contrastStroke
-            >
-              {pctCompact}
-            </TreemapLabel>
-          </>
-        )}
-        {showTickerOnly && (
-          <TreemapLabel
-            x={cx}
-            y={labelMid + 1}
-            fontSize={area < 200 ? fontTiny : fontSub}
-            contrastStroke
-          >
-            {fitTreemapText(ticker, innerW, area < 200 ? fontTiny : fontSub)}
+        {showBoth &&
+          renderStackedLabels(cx, innerY, innerH, [
+            { text: tickerFit(fontMain), fontSize: fontMain },
+            { text: pctText, fontSize: fontSub },
+          ], 4)}
+        {showStacked &&
+          renderStackedLabels(cx, innerY, innerH, [
+            { text: tickerFit(fontSub), fontSize: fontSub },
+            { text: pctText, fontSize: fontTiny },
+          ], labelGap)}
+        {showTickerWithPct &&
+          renderStackedLabels(cx, innerY, innerH, [
+            { text: tickerFit(fontSub), fontSize: fontSub },
+            { text: pctCompact, fontSize: fontMicro },
+          ], labelGap)}
+        {(showInline || showWideSliver) && (
+          <TreemapLabel x={cx} y={cy} fontSize={fontMicro} contrastStroke>
+            {inlineText}
           </TreemapLabel>
         )}
-        {showPctOnly && (
-          <TreemapLabel
+        {showTickerOnly && (
+          <TreemapLabel x={cx} y={cy} fontSize={fontTiny} contrastStroke>
+            {tickerFit(fontTiny)}
+          </TreemapLabel>
+        )}
+        {showSliverVertical && (
+          <text
             x={cx}
-            y={labelMid + 1}
-            fontSize={fontTiny}
-            contrastStroke
+            y={cy}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fill="#f4f4f5"
+            fontSize={fontMicro}
+            fontWeight={600}
+            stroke="rgba(9,9,11,0.55)"
+            strokeWidth={0.6}
+            paintOrder="stroke fill"
+            transform={`rotate(-90, ${cx}, ${cy})`}
+            style={{ pointerEvents: 'none', fontFamily: 'var(--font-sans)' }}
           >
+            {tickerFit(fontMicro)}
+          </text>
+        )}
+        {showPctOnly && (
+          <TreemapLabel x={cx} y={cy} fontSize={fontMicro} contrastStroke>
             {pctOkTiny ? pctText : pctCompact}
           </TreemapLabel>
         )}
@@ -712,6 +771,21 @@ function useHeatmap(universe: HeatmapUniverse, maxTiles?: number) {
   const tileLookup = useMemo(
     () => buildTileLookup(sectors, universe),
     [sectors, universe]
+  );
+
+  const topMovers = useMemo(() => {
+    const visible = tilesVisibleOnHeatmap(sectors, universe);
+    const tiles: MarketHeatmapMover[] = visible.map((tile) => ({
+      symbol: tile.symbol,
+      name: tile.name,
+      changePercent: tile.change,
+    }));
+    return pickTopHeatmapMovers(tiles);
+  }, [sectors, universe]);
+
+  const sectorBreadth = useMemo(
+    () => computeSectorBreadth(sectors),
+    [sectors]
   );
 
   const load = useCallback(async (refresh = false) => {
@@ -746,7 +820,17 @@ function useHeatmap(universe: HeatmapUniverse, maxTiles?: number) {
 
   useEffect(() => onFeedReconnected(() => void load(true)), [load]);
 
-  return { data, loading, error, meta, tileCount, tileLookup, reload: () => load(true) };
+  return {
+    data,
+    loading,
+    error,
+    meta,
+    tileCount,
+    tileLookup,
+    topMovers,
+    sectorBreadth,
+    reload: () => load(true),
+  };
 }
 
 function TreemapChart({
@@ -847,29 +931,36 @@ function HeatmapPanel({
   universe,
   chartClassName,
   maxTiles,
+  onTopMovers,
+  onSectorBreadth,
+  onHeatmapAsOf,
 }: {
   title: string;
   universe: HeatmapUniverse;
   chartClassName: string;
   maxTiles?: number;
+  onTopMovers?: (movers: {
+    gainers: MarketHeatmapMover[];
+    losers: MarketHeatmapMover[];
+  }) => void;
+  onSectorBreadth?: (breadth: MarketSectorBreadth | undefined) => void;
+  onHeatmapAsOf?: (asOf: string | null) => void;
 }) {
-  const { data, loading, error, tileLookup, meta, reload } = useHeatmap(universe, maxTiles);
+  const { data, loading, error, tileLookup, topMovers, sectorBreadth, meta, reload } = useHeatmap(
+    universe,
+    maxTiles
+  );
+
+  useEffect(() => {
+    onTopMovers?.(topMovers);
+    onSectorBreadth?.(sectorBreadth);
+    onHeatmapAsOf?.(meta?.asOf ?? null);
+  }, [onTopMovers, onSectorBreadth, onHeatmapAsOf, topMovers, sectorBreadth, meta?.asOf]);
 
   return (
     <div className={`${MARKET_PANEL} flex flex-col`}>
       <div className="flex items-start justify-between gap-2 mb-2">
         <h3 className="card-title mb-0">{title}</h3>
-        {meta?.asOf ? (
-          <p className="text-[10px] text-text-s/70 font-mono tabular-nums shrink-0" title="Quote snapshot time">
-            {new Date(meta.asOf).toLocaleString('fi-FI', {
-              day: 'numeric',
-              month: 'short',
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-            {meta.cached ? ' · cached' : ''}
-          </p>
-        ) : null}
       </div>
       <div className={chartClassName}>
         {loading && data.length === 0 ? (
@@ -892,7 +983,7 @@ function HeatmapPanel({
           <TreemapChart
             data={data}
             tileLookup={tileLookup}
-            showSectorHeaders={universe !== 'omxh25'}
+            showSectorHeaders={false}
           />
         )}
       </div>
@@ -903,6 +994,18 @@ function HeatmapPanel({
 export function MarketIntelligence() {
   const { overview, loading: overviewLoading, error: overviewError, reload: reloadOverview } =
     useMarketOverview();
+  const [usTopMovers, setUsTopMovers] = useState<{
+    gainers: MarketHeatmapMover[];
+    losers: MarketHeatmapMover[];
+  }>({ gainers: [], losers: [] });
+  const [fiTopMovers, setFiTopMovers] = useState<{
+    gainers: MarketHeatmapMover[];
+    losers: MarketHeatmapMover[];
+  }>({ gainers: [], losers: [] });
+  const [usSectorBreadth, setUsSectorBreadth] = useState<MarketSectorBreadth | undefined>();
+  const [fiSectorBreadth, setFiSectorBreadth] = useState<MarketSectorBreadth | undefined>();
+  const [usHeatmapAsOf, setUsHeatmapAsOf] = useState<string | null>(null);
+  const [fiHeatmapAsOf, setFiHeatmapAsOf] = useState<string | null>(null);
 
   return (
     <div className="space-y-4">
@@ -930,6 +1033,9 @@ export function MarketIntelligence() {
             universe="sp500"
             chartClassName="w-full h-[min(38vh,380px)] overflow-visible"
             maxTiles={SP500_DISPLAY_CAP}
+            onTopMovers={setUsTopMovers}
+            onSectorBreadth={setUsSectorBreadth}
+            onHeatmapAsOf={setUsHeatmapAsOf}
           />
         </div>
         <div className="xl:col-span-4 min-h-0 flex flex-col">
@@ -937,6 +1043,10 @@ export function MarketIntelligence() {
             quote={overview?.sp500}
             overviewLoading={overviewLoading}
             variant="us"
+            asOf={overview?.asOf}
+            heatmapAsOf={usHeatmapAsOf}
+            topMovers={usTopMovers}
+            sectorBreadth={usSectorBreadth}
             panelMinHeight="min-h-[min(38vh,380px)]"
             aiMinHeight="min-h-[min(24vh,260px)]"
           />
@@ -947,6 +1057,9 @@ export function MarketIntelligence() {
             title="OMX Helsinki 25"
             universe="omxh25"
             chartClassName="w-full h-[min(32vh,300px)] overflow-visible"
+            onTopMovers={setFiTopMovers}
+            onSectorBreadth={setFiSectorBreadth}
+            onHeatmapAsOf={setFiHeatmapAsOf}
           />
         </div>
         <div className="xl:col-span-4 min-h-0 flex flex-col">
@@ -954,6 +1067,10 @@ export function MarketIntelligence() {
             quote={overview?.omxhpi}
             overviewLoading={overviewLoading}
             variant="fi"
+            asOf={overview?.asOf}
+            heatmapAsOf={fiHeatmapAsOf}
+            topMovers={fiTopMovers}
+            sectorBreadth={fiSectorBreadth}
             panelMinHeight="min-h-[min(32vh,300px)]"
             aiMinHeight="min-h-[min(18vh,200px)]"
           />

@@ -1,5 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
 import { MARKET_INDEX_AI_CONFIG } from "../../src/marketAiPrompt";
+
+const GEMINI_MARKET_CONFIG = {
+  ...MARKET_INDEX_AI_CONFIG,
+  tools: [{ googleSearch: {} }],
+};
 import { getGeminiApiKey } from "../aiSettings";
 import { generateWithFallback } from "./generateWithFallback";
 import {
@@ -89,10 +94,11 @@ export async function generateGeminiMarketSummary(
       const response = await ai.models.generateContent({
         model,
         contents: prompt,
-        config: MARKET_INDEX_AI_CONFIG,
+        config: GEMINI_MARKET_CONFIG,
       });
       return extractSummaryText(response);
     },
-    request.prompt
+    request.prompt,
+    request.validation
   );
 }

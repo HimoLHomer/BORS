@@ -1,4 +1,9 @@
 import {
+  buildMarketSummaryRetrySuffix,
+  validateMarketSummary,
+  type MarketSummaryValidationContext,
+} from "../../src/marketAiValidation";
+import {
   countBullets,
   parseAiError,
   shouldTryNextModel,
@@ -19,7 +24,8 @@ export async function generateWithFallback(
     model: string,
     prompt: string
   ) => Promise<{ summary: string; finishReason?: string }>,
-  prompt: string
+  prompt: string,
+  validation?: MarketSummaryValidationContext
 ): Promise<GenerateResult> {
   if (models.length === 0) {
     return {
@@ -43,6 +49,18 @@ export async function generateWithFallback(
         if (retry.summary.length > summary.length) {
           summary = retry.summary;
           finishReason = retry.finishReason;
+        }
+      }
+
+      if (validation) {
+        const check = validateMarketSummary(summary, validation);
+        if (!check.ok) {
+          const suffix = buildMarketSummaryRetrySuffix(check.reasons, validation);
+          const retry = await generate(model, prompt + suffix);
+          if (retry.summary.trim()) {
+            summary = retry.summary;
+            finishReason = retry.finishReason;
+          }
         }
       }
 

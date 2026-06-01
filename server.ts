@@ -180,7 +180,10 @@ async function startServer() {
       return res.status(400).json({ error: "Search query required" });
     }
     try {
-      const results = await yahooFinance.search(q);
+      // Yahoo changed casing (e.g. typeDisp "Equity"); skip strict schema validation.
+      const results = (await yahooFinance.search(q, {}, { validateResult: false })) as {
+        quotes?: unknown[];
+      };
       const rawQuotes = Array.isArray(results.quotes) ? results.quotes : [];
       const quotes = rawQuotes.filter((quote) => {
         const s = (quote as { symbol?: string }).symbol;
@@ -226,10 +229,19 @@ async function startServer() {
                 : typeof d.regularMarketPrice === "number" && Number.isFinite(d.regularMarketPrice)
                   ? d.regularMarketPrice
                   : undefined;
+            const qRec = quote as Record<string, unknown>;
             return {
               ...quote,
-              shortName: p?.shortName || (d.shortName as string) || quote.shortName,
-              longName: p?.longName || (d.longName as string) || quote.longName,
+              shortName:
+                p?.shortName ||
+                (d.shortName as string) ||
+                (qRec.shortname as string) ||
+                (quote.shortName as string | undefined),
+              longName:
+                p?.longName ||
+                (d.longName as string) ||
+                (qRec.longname as string) ||
+                (quote.longName as string | undefined),
               price: priceVal,
               currency: p?.currency || (d.currency as string) || quote.currency,
               dividendYieldPercent,

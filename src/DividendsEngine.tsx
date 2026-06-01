@@ -32,7 +32,11 @@ import {
 } from './manualDividends';
 import { DividendPayoutCalendar } from './DividendPayoutCalendar';
 import { SkeletonBarChart, buildTableSkeletonRows } from './SkeletonPulse';
-import type { ApiDividendPaymentInput, ManualDividendPaymentInput } from './dividendRedemptions';
+import {
+  resolveApiNextPayDate,
+  type ApiDividendPaymentInput,
+  type ManualDividendPaymentInput,
+} from './dividendRedemptions';
 
 export type { ManualDividendPosition, DividendPayoutFrequency } from './manualDividends';
 
@@ -450,12 +454,19 @@ export function DividendsEngine({
   const calendarApiRows = useMemo((): ApiDividendPaymentInput[] => {
     return dividendPayingRows.map(({ row, index }) => {
       const a = assets[index];
+      const resolved = resolveApiNextPayDate({
+        calendarPayoutDates: row.calendarPayoutDates,
+        dividendDate: row.dividendDate,
+        calendarPayoutSource: row.calendarPayoutSource,
+      });
       return {
         symbol: row.symbol,
         name: a?.name?.trim() || row.name || row.symbol,
         ticker: a ? displayTickerForAsset(a) : shortYahooSymbol(row.symbol),
         estimatedAnnualIncomeEur: row.estimatedAnnualIncomeEur,
         payoutFrequency: row.payoutFrequency,
+        nextPayDateYmd: resolved?.nextPayDateYmd ?? null,
+        payDateSource: resolved?.payDateSource ?? row.calendarPayoutSource ?? 'none',
       };
     });
   }, [dividendPayingRows, assets]);
@@ -475,6 +486,7 @@ export function DividendsEngine({
         ticker: a ? displayTickerForAsset(a) : shortYahooSymbol(m.linkedSymbol),
         annualIncomeEur: m.annualIncomeEur,
         payoutFrequency: effectivePayoutFrequency(m, apiRowForSymbol(data, m.linkedSymbol)),
+        payoutAnchorDate: m.payoutAnchorDate,
       };
     });
   }, [manualRowsForBlended, assets, data]);

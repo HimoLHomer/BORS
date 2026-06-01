@@ -13,6 +13,7 @@ import {
   groupRedeemedByMonth,
   groupScheduledByMonth,
   loadRedeemed,
+  payDateLabel,
   redeemPayment,
   saveRedeemed,
   unredeemPayment,
@@ -56,6 +57,17 @@ const HISTORY_COLUMNS = [
 
 const MONTH_LABEL =
   'text-[9px] font-bold text-text-s uppercase tracking-[0.2em] opacity-50';
+
+function payoutSubline(payment: ScheduledDividendPayment): string | undefined {
+  const label = payDateLabel(payment.payDateSource);
+  if (payment.payDateYmd) {
+    return `${formatDateFi(payment.payDateYmd)} · ${label}`;
+  }
+  if (payment.payDateSource === 'fallback') {
+    return label;
+  }
+  return undefined;
+}
 
 function MonthSectionHeader({
   monthKey,
@@ -161,7 +173,14 @@ export function DividendPayoutCalendar({
       const rows = group.payments.map((p) => {
         stripe += 1;
         return {
-          asset: <AssetNameCell name={p.name} ticker={p.ticker} variant="dense" />,
+          asset: (
+            <AssetNameCell
+              name={p.name}
+              ticker={p.ticker}
+              variant="dense"
+              subline={payoutSubline(p)}
+            />
+          ),
           amount: formatCurrency(p.amountEur, 'EUR'),
           action: (
             <span className="text-[8px] font-black uppercase tracking-widest text-green opacity-0 group-hover:opacity-100 transition-opacity">

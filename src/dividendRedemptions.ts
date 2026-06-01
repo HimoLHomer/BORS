@@ -1,5 +1,5 @@
 import type { DividendPayoutFrequency } from './manualDividends';
-import { perPaymentAmountEur } from './manualDividends';
+import { nextManualPayoutDateYmd, perPaymentAmountEur } from './manualDividends';
 import { todayIsoDateHelsinki } from './formatDate';
 
 export const REDEEMED_DIVIDENDS_STORAGE_KEY = 'bors_redeemed_dividend_payments';
@@ -7,6 +7,8 @@ export const REDEEMED_DIVIDENDS_STORAGE_KEY = 'bors_redeemed_dividend_payments';
 export const REDEEMED_DIVIDENDS_CHANGED_EVENT = 'bors-redeemed-dividends-changed';
 
 export type DividendPaymentSource = 'api' | 'manual';
+
+export type PayDateSource = 'yahoo' | 'estimated' | 'manual' | 'fallback';
 
 export type ScheduledDividendPayment = {
   id: string;
@@ -16,6 +18,8 @@ export type ScheduledDividendPayment = {
   amountEur: number;
   source: DividendPaymentSource;
   frequency: DividendPayoutFrequency;
+  payDateYmd?: string;
+  payDateSource?: PayDateSource;
 };
 
 export type RedeemedDividendPayment = {
@@ -41,7 +45,6 @@ export type MonthRedeemedGroup = {
   totalEur: number;
 };
 
-const HORIZON_MONTHS = 12;
 const DEFAULT_FREQUENCY: DividendPayoutFrequency = 'quarterly';
 
 export type ApiDividendPaymentInput = {
@@ -50,6 +53,8 @@ export type ApiDividendPaymentInput = {
   ticker: string;
   estimatedAnnualIncomeEur: number;
   payoutFrequency?: DividendPayoutFrequency | null;
+  nextPayDateYmd?: string | null;
+  payDateSource?: 'yahoo' | 'estimated' | 'none';
 };
 
 export type ManualDividendPaymentInput = {
@@ -58,7 +63,22 @@ export type ManualDividendPaymentInput = {
   ticker: string;
   annualIncomeEur: number;
   payoutFrequency: DividendPayoutFrequency;
+  payoutAnchorDate?: string | null;
 };
+
+export function payDateLabel(source: PayDateSource | undefined): string {
+  switch (source) {
+    case 'yahoo':
+      return 'Official';
+    case 'manual':
+      return 'Manual';
+    case 'estimated':
+    case 'fallback':
+      return 'Estimated';
+    default:
+      return 'Estimated';
+  }
+}
 
 export function notifyRedeemedDividendsChanged(): void {
   window.dispatchEvent(new Event(REDEEMED_DIVIDENDS_CHANGED_EVENT));
@@ -130,19 +150,73 @@ export function addMonthsToMonthKey(monthKey: string, months: number): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-function monthOffsetForSlot(freq: DividendPayoutFrequency, slot: number): number {
-  if (freq === 'monthly') return slot;
-  if (freq === 'quarterly') return slot * 3;
-  return slot * 12;
+/** First upcoming ISO date from a sorted or unsorted list. */
+export function firstUpcomingPayDateYmd(
+  dates: string[] | undefined,
+  todayYmd: string = todayIsoDateHelsinki()
+): string | null {
+  if (!dates?.length) return null;
+  const valid = dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  return valid.find((d) => d >= todayYmd) ?? null;
 }
 
-function maxSlotsForFrequency(freq: DividendPayoutFrequency): number {
-  if (freq === 'monthly') return HORIZON_MONTHS;
-  if (freq === 'quarterly') return Math.ceil(HORIZON_MONTHS / 3);
-  return 1;
+export function resolveApiNextPayDate(input: {
+  calendarPayoutDates?: string[];
+  dividendDate?: string | null;
+  calendarPayoutSource?: 'yahoo' | 'estimated' | 'none';
+  todayYmd?: string;
+}): { nextPayDateYmd: string; payDateSource: 'yahoo' | 'estimated' } | null {
+  const today = input.todayYmd ?? todayIsoDateHelsinki();
+  const fromList = firstUpcomingPayDateYmd(input.calendarPayoutDates, today);
+  const dividendDate =
+    input.dividendDate && /^\d{4}-\d{2}-\d{2}$/.test(input.dividendDate) && input.dividendDate >= today
+      ? input.dividendDate
+      : null;
+  const nextPayDateYmd = fromList ?? dividendDate;
+  if (!nextPayDateYmd) return null;
+  const payDateSource = input.calendarPayoutSource === 'yahoo' ? 'yahoo' : 'estimated';
+  return { nextPayDateYmd, payDateSource };
 }
 
-function projectForHolding(
+function mapApiPayDateSource(
+  source: ApiDividendPaymentInput['payDateSource']
+): PayDateSource {
+  if (source === 'yahoo') return 'yahoo';
+  if (source === 'estimated') return 'estimated';
+  return 'fallback';
+}
+
+function scheduleOnePayment(
+  source: DividendPaymentSource,
+  sourceId: string,
+  name: string,
+  ticker: string,
+  annualIncomeEur: number,
+  frequency: DividendPayoutFrequency,
+  payDateYmd: string,
+  payDateSource: PayDateSource,
+  redeemedIds: Set<string>
+): ScheduledDividendPayment | null {
+  if (!Number.isFinite(annualIncomeEur) || annualIncomeEur <= 0) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(payDateYmd)) return null;
+  const amountEur = Math.round(perPaymentAmountEur(annualIncomeEur, frequency) * 100) / 100;
+  const monthKey = payDateYmd.slice(0, 7);
+  const id = `${source}-${sourceId}-${payDateYmd}`;
+  if (redeemedIds.has(id)) return null;
+  return {
+    id,
+    monthKey,
+    name,
+    ticker,
+    amountEur,
+    source,
+    frequency,
+    payDateYmd,
+    payDateSource,
+  };
+}
+
+function projectFallbackNextSlot(
   source: DividendPaymentSource,
   sourceId: string,
   name: string,
@@ -151,28 +225,22 @@ function projectForHolding(
   frequency: DividendPayoutFrequency,
   startMonthKey: string,
   redeemedIds: Set<string>
-): ScheduledDividendPayment[] {
-  if (!Number.isFinite(annualIncomeEur) || annualIncomeEur <= 0) return [];
+): ScheduledDividendPayment | null {
+  if (!Number.isFinite(annualIncomeEur) || annualIncomeEur <= 0) return null;
   const amountEur = Math.round(perPaymentAmountEur(annualIncomeEur, frequency) * 100) / 100;
-  const out: ScheduledDividendPayment[] = [];
-  const slots = maxSlotsForFrequency(frequency);
-  for (let slot = 0; slot < slots; slot++) {
-    const offset = monthOffsetForSlot(frequency, slot);
-    if (offset >= HORIZON_MONTHS) break;
-    const monthKey = addMonthsToMonthKey(startMonthKey, offset);
-    const id = `${source}-${sourceId}-${monthKey}-${slot}`;
-    if (redeemedIds.has(id)) continue;
-    out.push({
-      id,
-      monthKey,
-      name,
-      ticker,
-      amountEur,
-      source,
-      frequency,
-    });
-  }
-  return out;
+  const monthKey = startMonthKey;
+  const id = `${source}-${sourceId}-${monthKey}-0`;
+  if (redeemedIds.has(id)) return null;
+  return {
+    id,
+    monthKey,
+    name,
+    ticker,
+    amountEur,
+    source,
+    frequency,
+    payDateSource: 'fallback',
+  };
 }
 
 export function buildProjectedPayments(
@@ -183,35 +251,79 @@ export function buildProjectedPayments(
 ): ScheduledDividendPayment[] {
   const redeemedIds = new Set(redeemed.map((r) => r.id));
   const out: ScheduledDividendPayment[] = [];
+
   for (const row of apiRows) {
-    out.push(
-      ...projectForHolding(
+    const frequency = parseFrequency(row.payoutFrequency);
+    const payDateYmd = row.nextPayDateYmd ?? null;
+    if (payDateYmd) {
+      const payment = scheduleOnePayment(
         'api',
         row.symbol,
         row.name,
         row.ticker,
         row.estimatedAnnualIncomeEur,
-        parseFrequency(row.payoutFrequency),
+        frequency,
+        payDateYmd,
+        mapApiPayDateSource(row.payDateSource),
+        redeemedIds
+      );
+      if (payment) out.push(payment);
+    } else {
+      const payment = projectFallbackNextSlot(
+        'api',
+        row.symbol,
+        row.name,
+        row.ticker,
+        row.estimatedAnnualIncomeEur,
+        frequency,
         startMonthKey,
         redeemedIds
-      )
-    );
+      );
+      if (payment) out.push(payment);
+    }
   }
+
   for (const m of manualRows) {
-    out.push(
-      ...projectForHolding(
+    const frequency = m.payoutFrequency;
+    const payDateYmd = nextManualPayoutDateYmd(m.payoutAnchorDate, frequency);
+    if (payDateYmd) {
+      const payment = scheduleOnePayment(
         'manual',
         m.id,
         m.name,
         m.ticker,
         m.annualIncomeEur,
-        m.payoutFrequency,
+        frequency,
+        payDateYmd,
+        'manual',
+        redeemedIds
+      );
+      if (payment) out.push(payment);
+    } else {
+      const payment = projectFallbackNextSlot(
+        'manual',
+        m.id,
+        m.name,
+        m.ticker,
+        m.annualIncomeEur,
+        frequency,
         startMonthKey,
         redeemedIds
-      )
-    );
+      );
+      if (payment) out.push(payment);
+    }
   }
+
   return out;
+}
+
+function compareScheduledPayments(a: ScheduledDividendPayment, b: ScheduledDividendPayment): number {
+  const da = a.payDateYmd ?? '';
+  const db = b.payDateYmd ?? '';
+  if (da && db && da !== db) return da.localeCompare(db);
+  if (da && !db) return -1;
+  if (!da && db) return 1;
+  return a.name.localeCompare(b.name);
 }
 
 export function groupScheduledByMonth(
@@ -226,7 +338,7 @@ export function groupScheduledByMonth(
   }
   const keys = [...map.keys()].sort((a, b) => (descending ? b.localeCompare(a) : a.localeCompare(b)));
   return keys.map((monthKey) => {
-    const list = [...(map.get(monthKey) ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+    const list = [...(map.get(monthKey) ?? [])].sort(compareScheduledPayments);
     const totalEur = list.reduce((s, p) => s + p.amountEur, 0);
     return { monthKey, payments: list, totalEur };
   });

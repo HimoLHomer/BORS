@@ -28,7 +28,9 @@ import {
   buildAllocationPieCalloutMap,
   renderAllocationPieCalloutFromLayout,
   ALLOCATION_PIE_CHART_MARGIN,
+  ALLOCATION_PIE_NUDGE_LIMITS,
   allocationPieMarginsWithNudge,
+  clampAllocationChromePrefs,
   loadAllocationLabelOffsets,
   saveAllocationLabelOffsets,
   loadAllocationChromePrefs,
@@ -167,8 +169,18 @@ function mergeAllocationChromeFromRemote(
     return Math.min(max, Math.max(min, n));
   };
   return {
-    pieNudgeX: clamp(o.pieNudgeX, -120, 120, prev.pieNudgeX),
-    pieNudgeY: clamp(o.pieNudgeY, -120, 120, prev.pieNudgeY),
+    pieNudgeX: clamp(
+      o.pieNudgeX,
+      -ALLOCATION_PIE_NUDGE_LIMITS.x,
+      ALLOCATION_PIE_NUDGE_LIMITS.x,
+      prev.pieNudgeX
+    ),
+    pieNudgeY: clamp(
+      o.pieNudgeY,
+      ALLOCATION_PIE_NUDGE_LIMITS.yMin,
+      ALLOCATION_PIE_NUDGE_LIMITS.yMax,
+      prev.pieNudgeY
+    ),
     labelFontPx: clamp(o.labelFontPx, 8, 18, prev.labelFontPx),
   };
 }
@@ -881,6 +893,8 @@ export default function App() {
   }, []);
 
   const [allocChrome, setAllocChrome] = useState<AllocationChromePrefs>(() => loadAllocationChromePrefs());
+  const allocChromeRef = useRef(allocChrome);
+  allocChromeRef.current = allocChrome;
 
   useEffect(() => {
     saveAllocationChromePrefs(allocChrome);
@@ -968,6 +982,46 @@ export default function App() {
       return changed ? next : prev;
     });
   }, [allocationSlices]);
+
+  const onAllocationPieDragPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (!target.closest('.recharts-pie-sector')) return;
+    e.preventDefault();
+    const wrap = allocationPieWrapRef.current;
+    if (!wrap) return;
+    try {
+      wrap.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const { pieNudgeX: nx0, pieNudgeY: ny0 } = allocChromeRef.current;
+
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      setAllocChrome((c) =>
+        clampAllocationChromePrefs({
+          ...c,
+          pieNudgeX: nx0 + dx,
+          pieNudgeY: ny0 + dy,
+        })
+      );
+    };
+    const up = () => {
+      try {
+        wrap.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }, []);
 
   const onAllocCalloutPointerDown = useCallback((sliceKey: string, e: React.PointerEvent<SVGGElement>) => {
     if (e.button !== 0) return;
@@ -1554,12 +1608,17 @@ export default function App() {
                                 </span>
                                 <input
                                   type="range"
-                                  min={-80}
-                                  max={80}
+                                  min={-ALLOCATION_PIE_NUDGE_LIMITS.x}
+                                  max={ALLOCATION_PIE_NUDGE_LIMITS.x}
                                   step={2}
                                   value={allocChrome.pieNudgeX}
                                   onChange={(e) =>
-                                    setAllocChrome((c) => ({ ...c, pieNudgeX: Number(e.target.value) }))
+                                    setAllocChrome((c) =>
+                                      clampAllocationChromePrefs({
+                                        ...c,
+                                        pieNudgeX: Number(e.target.value),
+                                      })
+                                    )
                                   }
                                   className="w-full h-1.5"
                                   style={{ accentColor: 'var(--color-accent)' }}
@@ -1567,16 +1626,21 @@ export default function App() {
                               </label>
                               <label className="flex flex-col gap-1.5 min-w-0">
                                 <span className="uppercase tracking-widest font-bold opacity-50">
-                                  Pie vertical
+                                  Pie vertical (right = lower)
                                 </span>
                                 <input
                                   type="range"
-                                  min={-80}
-                                  max={80}
+                                  min={ALLOCATION_PIE_NUDGE_LIMITS.yMin}
+                                  max={ALLOCATION_PIE_NUDGE_LIMITS.yMax}
                                   step={2}
                                   value={allocChrome.pieNudgeY}
                                   onChange={(e) =>
-                                    setAllocChrome((c) => ({ ...c, pieNudgeY: Number(e.target.value) }))
+                                    setAllocChrome((c) =>
+                                      clampAllocationChromePrefs({
+                                        ...c,
+                                        pieNudgeY: Number(e.target.value),
+                                      })
+                                    )
                                   }
                                   className="w-full h-1.5"
                                   style={{ accentColor: 'var(--color-accent)' }}
@@ -1599,6 +1663,10 @@ export default function App() {
                                   style={{ accentColor: 'var(--color-accent)' }}
                                 />
                               </label>
+                              <p className="text-[9px] text-text-s/70 leading-relaxed">
+                                Drag the pie to reposition, or use the sliders. Layout is saved
+                                automatically.
+                              </p>
                             </div>
                             <button
                               type="button"
@@ -1625,8 +1693,10 @@ export default function App() {
                     </div>
                     <div
                       ref={allocationPieWrapRef}
-                      className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0"
+                      className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0 cursor-grab active:cursor-grabbing"
                       aria-busy={feedMetricsLoading}
+                      title="Drag pie slices to move the chart; drag labels to adjust callouts"
+                      onPointerDown={onAllocationPieDragPointerDown}
                     >
                       {feedMetricsLoading ? (
                         <div className="absolute inset-0 flex items-center justify-center z-[1]">
@@ -2078,6 +2148,15 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
+      if (!res.ok) {
+        const msg =
+          typeof data === 'object' && data && 'error' in data
+            ? String((data as { error?: string }).error)
+            : 'Search failed';
+        setSearchResults([]);
+        setError(msg);
+        return;
+      }
       const raw = Array.isArray(data) ? data : [];
       const cleaned = raw.filter(
         (row: { symbol?: unknown }) =>
@@ -2086,8 +2165,11 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
           row.symbol.trim().length > 0
       );
       setSearchResults(cleaned);
+      if (query.length >= 2) setError(null);
     } catch (e) {
       console.error("Search failed:", e);
+      setSearchResults([]);
+      setError('Search failed — check your connection and try again.');
     } finally {
       setIsSearching(false);
     }
@@ -2226,7 +2308,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
         initial={{ scale: 0.95, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 20 }}
-        className="glass-panel p-10 w-full max-w-lg relative bg-card/50 border-accent/20 shadow-2xl overflow-hidden"
+        className="glass-panel p-10 w-full max-w-lg relative bg-card/50 border-accent/20 shadow-2xl overflow-y-auto max-h-[min(92vh,900px)]"
       >
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent/50 to-transparent"></div>
         <button onClick={onClose} className="absolute top-6 right-6 p-2 text-text-s hover:text-text-p transition-colors rounded-full hover:bg-white/5">

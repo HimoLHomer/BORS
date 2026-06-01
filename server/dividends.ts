@@ -278,8 +278,69 @@ export function inferExToPayLagDays(
   return null;
 }
 
+/** Typical pay day of month for monthly distributors (JEPG ~5–8, VUCP ~1–7). */
+const MONTHLY_PAY_DAY_OF_MONTH = 5;
+
+/**
+ * Heuristic pay date from an ex-date when only chart history exists.
+ * Monthly UCITS funds often pay in the first week of the month after ex-month.
+ */
+export function estimatePayDateFromExUtc(
+  exUtc: Date,
+  freq: InferredDividendPayoutFrequency
+): Date {
+  if (freq === "monthly") {
+    let m = exUtc.getUTCMonth() + 1;
+    let y = exUtc.getUTCFullYear();
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+    let pay = new Date(Date.UTC(y, m, MONTHLY_PAY_DAY_OF_MONTH));
+    if (pay.getTime() <= exUtc.getTime()) {
+      m += 1;
+      if (m > 11) {
+        m = 0;
+        y += 1;
+      }
+      pay = new Date(Date.UTC(y, m, MONTHLY_PAY_DAY_OF_MONTH));
+    }
+    return pay;
+  }
+  if (freq === "quarterly") return addDaysUtc(exUtc, 21);
+  return addDaysUtc(exUtc, 30);
+}
+
+const MIN_EX_TO_PAY_LAG = 10;
+const MAX_EX_TO_PAY_LAG = 45;
+
+/** Median ex→pay lag inferred from chart ex-dates (JEPG/VUCP-style monthly ~13–15d). */
+export function inferExToPayLagFromChartExDates(
+  divs: { date?: Date | string }[] | undefined | null,
+  freq: InferredDividendPayoutFrequency | null
+): number | null {
+  if (!freq || !divs?.length) return null;
+  const times = divs
+    .map((d) => new Date(d.date as Date).getTime())
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (times.length < 2) return null;
+
+  const lags: number[] = [];
+  for (const t of times.slice(-8)) {
+    const ex = new Date(t);
+    const exUtc = new Date(Date.UTC(ex.getUTCFullYear(), ex.getUTCMonth(), ex.getUTCDate()));
+    const payUtc = estimatePayDateFromExUtc(exUtc, freq);
+    const lag = Math.round((payUtc.getTime() - exUtc.getTime()) / 86400000);
+    if (lag >= MIN_EX_TO_PAY_LAG && lag <= MAX_EX_TO_PAY_LAG) lags.push(lag);
+  }
+  if (lags.length === 0) return null;
+  lags.sort((a, b) => a - b);
+  return lags[Math.floor(lags.length / 2)]!;
+}
+
 function defaultExToPayLagDays(freq: InferredDividendPayoutFrequency): number {
-  if (freq === "monthly") return 28;
+  if (freq === "monthly") return 14;
   if (freq === "quarterly") return 21;
   return 30;
 }
@@ -323,7 +384,8 @@ function projectedPayoutDatesFromAnchor(
 
 /**
  * Yahoo chart `events.dividends` are ex-dividend dates, not payment dates.
- * Shift the last ex-date by a typical ex→pay lag, then project forward.
+ * Monthly: pay ~first week of month after ex-month (not a flat +N from last ex).
+ * Quarterly/annual: last ex + inferred lag days.
  */
 function projectedPayoutDatesFromChartDividends(
   divList: { date?: Date | string }[] | undefined,
@@ -339,7 +401,10 @@ function projectedPayoutDatesFromChartDividends(
   if (times.length === 0) return [];
   const lastEx = new Date(times[times.length - 1]!);
   const lastExUtc = new Date(Date.UTC(lastEx.getUTCFullYear(), lastEx.getUTCMonth(), lastEx.getUTCDate()));
-  const payAnchor = addDaysUtc(lastExUtc, exToPayLagDays);
+  const payAnchor =
+    freq === "monthly"
+      ? estimatePayDateFromExUtc(lastExUtc, freq)
+      : addDaysUtc(lastExUtc, exToPayLagDays);
   return projectedPayoutDatesFromAnchor(formatYmdUtc(payAnchor), freq, count);
 }
 
@@ -353,6 +418,7 @@ function buildCalendarPayoutSchedule(
     freq ?? (divList && divList.length >= 2 ? inferPayoutFrequencyFromChartDividends(divList) : null);
   const lag =
     inferExToPayLagDays(officialEx, officialPay) ??
+    inferExToPayLagFromChartExDates(divList, effectiveFreq) ??
     (effectiveFreq ? defaultExToPayLagDays(effectiveFreq) : null);
 
   if (officialPay && effectiveFreq) {

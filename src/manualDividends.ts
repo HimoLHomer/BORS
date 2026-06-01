@@ -156,6 +156,17 @@ function advanceToUpcomingOrToday(anchor: Date, freq: DividendPayoutFrequency): 
 
 export type PayoutCalendarEvent = { name: string; kind: string; date: string };
 
+/** Next upcoming pay date (YYYY-MM-DD) from a manual anchor and frequency. */
+export function nextManualPayoutDateYmd(
+  payoutAnchorDate: string | null | undefined,
+  frequency: DividendPayoutFrequency
+): string | null {
+  if (!payoutAnchorDate) return null;
+  const anchor = parseYMD(payoutAnchorDate);
+  if (!anchor) return null;
+  return formatYMD(advanceToUpcomingOrToday(anchor, frequency));
+}
+
 /** Synthetic pay events for manual rows (same shape as feed-backed calendar entries). */
 export function manualPositionPayoutEvents(m: ManualDividendPosition): PayoutCalendarEvent[] {
   if (!m.payoutAnchorDate) return [];

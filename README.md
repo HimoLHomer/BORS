@@ -37,11 +37,13 @@ Developers who clone the repo can still run from source — see [First-time setu
    npm install
    ```
 
-3. **Configure Gemini (optional, for Market AI summaries)**
+3. **Configure Market AI (optional)**
 
-   In the app: **Options → Market AI** → paste your key from [Google AI Studio](https://aistudio.google.com/apikey) → **Save key**.
+   In the app: **Options → Market AI** → choose **Gemini** (recommended) or **OpenAI** → paste your API key → **Save**.
 
-   For development you can instead copy [.env.example](.env.example) to `.env.local` in the project root. Without a key, the rest of BÖRS works; only the Market AI panel is disabled.
+   **Gemini** uses [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search) for same-day market headlines. **OpenAI** has no live web in this app — summaries infer plausible drivers from the index move only. Model is optional: leave **Automatic** unless you want a specific model from the dropdown.
+
+   For development you can copy [.env.example](.env.example) to `.env.local`. Without a key, the rest of BÖRS works; only the Market AI panels are disabled.
 
 4. **Start the app**
 
@@ -131,7 +133,7 @@ Output: `release/BORS-Setup-0.1.0.exe` (requires `npm run build` inside the scri
 | Empty dashboard but you had holdings | Open [http://localhost:3000/api/portfolio/assets](http://localhost:3000/api/portfolio/assets) — if JSON lists assets, data is on disk; refresh the page. |
 | `better-sqlite3` / DLL errors | `npm run rebuild:native` with server stopped. |
 | Port already in use | Stop the other process on 3000 (or 3847 for Electron dev). |
-| Market AI errors | Check `GEMINI_API_KEY` in `.env.local` (or AppData `.env.local` for Electron). |
+| Market AI errors | Check API keys in **Options → Market AI** (or `GEMINI_API_KEY` / `OPENAI_API_KEY` in `.env.local`). Prefer Gemini for factual “today” summaries. Summaries refresh automatically when heatmap movers change or after the ~45‑minute server cache expires. |
 | Desktop app won't start | See `%APPDATA%\BÖRS\bors-startup.log`. End all `BÖRS.exe` in Task Manager, reinstall from latest Release. |
 | FIRE data missing after import | Re-export JSON from **Options** (must include `clientSettings`), or copy full `portfolio.db`. |
 

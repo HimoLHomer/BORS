@@ -1,5 +1,8 @@
 import OpenAI from "openai";
-import { MARKET_INDEX_AI_CONFIG } from "../../src/marketAiPrompt";
+import {
+  MARKET_INDEX_AI_CONFIG,
+  OPENAI_MARKET_SYSTEM_INSTRUCTION,
+} from "../../src/marketAiPrompt";
 import { getOpenAiApiKey } from "../aiSettings";
 import { generateWithFallback } from "./generateWithFallback";
 import {
@@ -12,9 +15,7 @@ import {
 } from "./modelSelection";
 import type { GenerateResult, MarketSummaryRequest } from "./types";
 
-const SYSTEM_INSTRUCTION =
-  MARKET_INDEX_AI_CONFIG.systemInstruction ??
-  "Output exactly three markdown bullet lines. No headings, no intro sentence, no paragraph.";
+const SYSTEM_INSTRUCTION = OPENAI_MARKET_SYSTEM_INSTRUCTION;
 
 async function discoverOpenAiModels(apiKey: string): Promise<string[]> {
   const cached = getCachedModels("openai");
@@ -86,6 +87,7 @@ export async function generateOpenAiMarketSummary(
         finishReason: response.choices[0]?.finish_reason ?? undefined,
       };
     },
-    request.prompt
+    request.prompt,
+    request.validation
   );
 }
