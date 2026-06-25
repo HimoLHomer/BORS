@@ -153,7 +153,10 @@ export function buildTopStoriesPromptForVariant(
 
 export type GroundingChunkRef = { uri?: string; title?: string };
 
-export function parseTopStoriesJson(text: string): MarketTopStory[] | null {
+export const EMPTY_TOP_STORIES_USER_MESSAGE =
+  "No top stories found for this market date. Try refresh in a few minutes.";
+
+function extractTopStoriesJsonString(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
@@ -163,30 +166,141 @@ export function parseTopStoriesJson(text: string): MarketTopStory[] | null {
   else {
     const start = trimmed.indexOf("{");
     const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) jsonStr = trimmed.slice(start, end + 1);
+    if (start < 0 || end <= start) return null;
+    jsonStr = trimmed.slice(start, end + 1);
   }
+  return jsonStr;
+}
+
+/** True when text is a top-stories JSON object (including `{"stories":[]}`). */
+export function isTopStoriesJsonEnvelope(text: string): boolean {
+  const jsonStr = extractTopStoriesJsonString(text);
+  if (!jsonStr) return false;
+  try {
+    const parsed = JSON.parse(jsonStr) as { stories?: unknown };
+    return Array.isArray(parsed.stories);
+  } catch {
+    return false;
+  }
+}
+
+function unescapeJsonString(s: string): string {
+  return s
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
+}
+
+function pushParsedTopStory(
+  out: MarketTopStory[],
+  seen: Set<string>,
+  headline: string,
+  source: string,
+  url?: string
+): void {
+  const h = headline.trim();
+  if (!h) return;
+  const key = h.toLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({
+    headline: h.slice(0, TOP_STORIES_HEADLINE_MAX),
+    source: source.trim() || "News",
+    ...(url ? { url } : {}),
+  });
+}
+
+export function parseTopStoriesJson(text: string): MarketTopStory[] | null {
+  const jsonStr = extractTopStoriesJsonString(text);
+  if (!jsonStr) return null;
 
   try {
     const parsed = JSON.parse(jsonStr) as { stories?: unknown };
     if (!Array.isArray(parsed.stories)) return null;
     const out: MarketTopStory[] = [];
+    const seen = new Set<string>();
     for (const item of parsed.stories) {
       if (!item || typeof item !== "object") continue;
       const o = item as Record<string, unknown>;
-      const headline = typeof o.headline === "string" ? o.headline.trim() : "";
-      const source = typeof o.source === "string" ? o.source.trim() : "";
+      const headline = typeof o.headline === "string" ? o.headline : "";
+      const source = typeof o.source === "string" ? o.source : "";
       const url = typeof o.url === "string" ? o.url.trim() : undefined;
-      if (!headline) continue;
-      out.push({
-        headline: headline.slice(0, TOP_STORIES_HEADLINE_MAX),
-        source: source || "News",
-        ...(url ? { url } : {}),
-      });
+      pushParsedTopStory(out, seen, headline, source, url);
+      if (out.length >= TOP_STORIES_MAX) break;
     }
     return out.length > 0 ? out : null;
   } catch {
     return null;
   }
+}
+
+/** Recover stories from truncated or malformed top-stories JSON (e.g. MAX_TOKENS). */
+export function parseTopStoriesJsonLenient(text: string): MarketTopStory[] {
+  const out: MarketTopStory[] = [];
+  const seen = new Set<string>();
+  const completePairRe =
+    /"headline"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"source"\s*:\s*"((?:\\.|[^"\\])*)"/gi;
+  let match: RegExpExecArray | null;
+  while ((match = completePairRe.exec(text)) !== null) {
+    pushParsedTopStory(
+      out,
+      seen,
+      unescapeJsonString(match[1] ?? ""),
+      unescapeJsonString(match[2] ?? "")
+    );
+    if (out.length >= TOP_STORIES_MAX) break;
+  }
+  if (out.length > 0) return out;
+
+  const objectRe =
+    /\{\s*"headline"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"source"\s*:\s*"((?:\\.|[^"\\])*)"\s*\}/gi;
+  while ((match = objectRe.exec(text)) !== null) {
+    pushParsedTopStory(
+      out,
+      seen,
+      unescapeJsonString(match[1] ?? ""),
+      unescapeJsonString(match[2] ?? "")
+    );
+    if (out.length >= TOP_STORIES_MAX) break;
+  }
+  return out;
+}
+
+export function coalesceTopStoriesFromText(
+  stories: MarketTopStory[] | null | undefined,
+  summary: string
+): MarketTopStory[] {
+  if (stories && stories.length > 0) return stories;
+  const strict = parseTopStoriesJson(summary);
+  if (strict && strict.length > 0) return strict;
+  return parseTopStoriesJsonLenient(summary);
+}
+
+/** True when text looks like a top-stories JSON payload that must not be shown raw. */
+export function isRawTopStoriesPayload(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (isTopStoriesJsonEnvelope(t)) return true;
+
+  const unfenced = t
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  if (unfenced !== t && isTopStoriesJsonEnvelope(unfenced)) return true;
+
+  const probe = unfenced || t;
+  if (!/"stories"\s*:/i.test(probe)) return false;
+  if (/"headline"\s*:/.test(probe)) return true;
+  return probe.startsWith("{") || probe.includes("[");
+}
+
+export function sanitizeTopStoriesFallback(summary: string): string {
+  const trimmed = summary.trim();
+  if (!trimmed) return "";
+  if (isRawTopStoriesPayload(trimmed)) return EMPTY_TOP_STORIES_USER_MESSAGE;
+  return trimmed;
 }
 
 export function enrichStoriesWithGrounding(

@@ -1,3 +1,5 @@
+import { formatCurrency } from './formatCurrency';
+import { APP_LOCALE } from './formatNumber';
 import { formatShortMonthDayEn, parseIsoDateOnly, todayIsoDateHelsinki } from './formatDate';
 
 export type PortfolioChartRangeId = '1D' | '5D' | '1M' | '6M' | 'YTD' | '1Y' | '5Y' | 'Max';
@@ -93,31 +95,71 @@ export function isPortfolioChartRangeAvailable(
   return portfolioChartRangePointCount(data, range, referenceIso) >= 2;
 }
 
-/** Prefer 1Y when enough history exists; otherwise the widest range that still charts. */
+/** Prefer 1D when enough history exists; otherwise the widest range that still charts. */
 export function pickDefaultPortfolioChartRange(
   data: PortfolioChartPoint[],
   referenceIso: string = todayIsoDateHelsinki()
 ): PortfolioChartRangeId {
   if (data.length < 2) return 'Max';
-  const preference: PortfolioChartRangeId[] = ['1Y', '6M', '1M', '5D', '1D', 'YTD', '5Y', 'Max'];
+  const preference: PortfolioChartRangeId[] = ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'Max'];
   for (const range of preference) {
     if (isPortfolioChartRangeAvailable(data, range, referenceIso)) return range;
   }
   return 'Max';
 }
 
+/** Label for the range gain under Portfolio Capital (Google Finance–style). */
+export function portfolioChartRangeGainLabel(range: PortfolioChartRangeId): string {
+  switch (range) {
+    case '1D':
+      return 'Today';
+    case '5D':
+      return 'Past 5 days';
+    case '1M':
+      return 'Past month';
+    case '6M':
+      return 'Past 6 months';
+    case 'YTD':
+      return 'Year to date';
+    case '1Y':
+      return 'Past year';
+    case '5Y':
+      return 'Past 5 years';
+    case 'Max':
+      return 'All time';
+    default:
+      return 'Today';
+  }
+}
+
+/** Gain from first to last point in the visible chart range. */
+export function computePortfolioRangeGain(visibleData: PortfolioChartPoint[]): {
+  gainEur: number;
+  gainPercent: number;
+} {
+  if (visibleData.length < 2) {
+    return { gainEur: 0, gainPercent: 0 };
+  }
+  const first = visibleData[0]!.value;
+  const last = visibleData[visibleData.length - 1]!.value;
+  const gainEur = last - first;
+  const gainPercent = first > 0 ? (gainEur / first) * 100 : 0;
+  return { gainEur, gainPercent };
+}
+
 export function formatPortfolioChartXTick(isoDate: string, range: PortfolioChartRangeId): string {
   const d = parseIsoDateOnly(isoDate);
   if (!d) return isoDate;
   if (range === '5Y' || range === 'Max') {
-    return new Intl.DateTimeFormat('en-US', { month: 'short', year: '2-digit' }).format(d);
+    return new Intl.DateTimeFormat(APP_LOCALE, { month: 'short', year: '2-digit' }).format(d);
   }
   return formatShortMonthDayEn(isoDate);
 }
 
 /** Y-axis currency labels for the portfolio capital chart. */
 export function formatPortfolioChartYTick(value: number): string {
-  return new Intl.NumberFormat('en-US', {
+  if (!Number.isFinite(value)) return '—';
+  return new Intl.NumberFormat(APP_LOCALE, {
     style: 'currency',
     currency: 'EUR',
     maximumFractionDigits: 0,
@@ -126,10 +168,5 @@ export function formatPortfolioChartYTick(value: number): string {
 
 /** Tooltip value for the portfolio capital chart. */
 export function formatPortfolioChartTooltipValue(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'EUR',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+  return formatCurrency(value, 'EUR');
 }

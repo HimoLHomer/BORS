@@ -54,7 +54,7 @@ function extractFromResponse(response: {
 }
 
 async function discoverGeminiModels(apiKey: string): Promise<string[]> {
-  const cached = getCachedModels("gemini");
+  const cached = getCachedModels();
   if (cached) return cached;
 
   try {
@@ -68,7 +68,7 @@ async function discoverGeminiModels(apiKey: string): Promise<string[]> {
     }
     const sorted = sortGeminiModels(ids);
     if (sorted.length > 0) {
-      setCachedModels("gemini", sorted);
+      setCachedModels(sorted);
       return sorted;
     }
   } catch (e) {
@@ -80,12 +80,7 @@ async function discoverGeminiModels(apiKey: string): Promise<string[]> {
 
 export async function geminiModelsToTry(apiKey: string): Promise<string[]> {
   const discovered = await discoverGeminiModels(apiKey);
-  return mergeModelLists(
-    "gemini",
-    discovered,
-    GEMINI_FALLBACK_MODELS,
-    process.env.GEMINI_MODEL
-  );
+  return mergeModelLists(discovered, GEMINI_FALLBACK_MODELS);
 }
 
 export async function generateGeminiMarketSummary(
@@ -96,7 +91,6 @@ export async function generateGeminiMarketSummary(
     return {
       ok: false,
       error: {
-        provider: "gemini",
         httpStatus: 503,
         message: "Gemini API key not configured. Add one under Options → Market AI.",
       },
@@ -107,7 +101,6 @@ export async function generateGeminiMarketSummary(
   const models = await geminiModelsToTry(apiKey);
 
   return generateWithFallback(
-    "gemini",
     models,
     async (model, prompt) => {
       const response = await ai.models.generateContent({

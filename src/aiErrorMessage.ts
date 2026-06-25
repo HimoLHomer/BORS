@@ -23,7 +23,7 @@ export function friendlyAiErrorMessage(raw: string): string {
 
   const lower = text.toLowerCase();
   if (lower.includes('quota') || lower.includes('429') || lower.includes('rate limit')) {
-    return 'AI provider quota or rate limit reached. Wait a few minutes and try again.';
+    return 'Gemini quota or rate limit reached. Wait a few minutes and try again.';
   }
   if (lower.includes('api key') || lower.includes('403') || lower.includes('401')) {
     return 'API key was rejected. Update it under **Options → Market AI**.';
@@ -35,10 +35,25 @@ export function friendlyAiErrorMessage(raw: string): string {
     lower.includes('model unavailable') ||
     (lower.includes('no ') && lower.includes('models available'))
   ) {
-    return 'AI model unavailable. The app will try other models automatically on the next refresh. If this persists, check your provider and key under **Options → Market AI**.';
+    return 'Gemini model unavailable. The app will try other models automatically on the next refresh. If this persists, check your key under **Options → Market AI**.';
   }
   if (lower.includes('not configured') || lower.includes('no api key')) {
-    return 'Add an API key under **Options → Market AI** for the provider you selected.';
+    return 'Add a Gemini API key under **Options → Market AI**.';
+  }
+  if (
+    lower.includes('high demand') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('overloaded') ||
+    lower.includes('all gemini models are busy') ||
+    (lower.includes('try again later') &&
+      !lower.includes('api key') &&
+      !lower.includes('invalid_api_key'))
+  ) {
+    return 'All Gemini models are busy. Try again in a few minutes.';
+  }
+
+  if (text.startsWith('{') && /"stories"\s*:/i.test(text)) {
+    return 'No top stories found for this market date. Try refresh in a few minutes.';
   }
 
   if (text.startsWith('{')) {

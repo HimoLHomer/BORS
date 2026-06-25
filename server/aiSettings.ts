@@ -1,22 +1,18 @@
 import type { Express, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
-import {
-  clearCachedModels,
-  getAiModelOptions,
-  openAiSupportsChat,
-  type ModelOption,
-} from "./ai/modelSelection";
+import { clearCachedModels } from "./ai/modelSelection";
 import { appRoot } from "./appRoot";
-import type { AiProviderId } from "./ai/types";
-
-export type { AiProviderId };
 
 const GEMINI_KEY = "GEMINI_API_KEY";
-const OPENAI_KEY = "OPENAI_API_KEY";
-const GEMINI_MODEL_KEY = "GEMINI_MODEL";
-const OPENAI_MODEL_KEY = "OPENAI_MODEL";
-const PROVIDER_KEY = "AI_PROVIDER";
+
+/** Legacy keys stripped when saving settings. */
+const LEGACY_ENV_KEYS = [
+  "AI_PROVIDER",
+  "OPENAI_API_KEY",
+  "OPENAI_MODEL",
+  "GEMINI_MODEL",
+] as const;
 
 export function aiEnvFilePath(): string {
   const userData = process.env.BORS_USER_DATA?.trim();
@@ -34,22 +30,8 @@ export function getGeminiApiKey(): string | undefined {
   return k || undefined;
 }
 
-export function getOpenAiApiKey(): string | undefined {
-  const k = process.env.OPENAI_API_KEY?.trim();
-  return k || undefined;
-}
-
-export function getActiveProvider(): AiProviderId {
-  const raw = process.env.AI_PROVIDER?.trim().toLowerCase();
-  if (raw === "openai") return "openai";
-  if (raw === "gemini") return "gemini";
-  if (getGeminiApiKey()) return "gemini";
-  if (getOpenAiApiKey()) return "openai";
-  return "gemini";
-}
-
-export function isProviderConfigured(provider: AiProviderId): boolean {
-  return provider === "openai" ? Boolean(getOpenAiApiKey()) : Boolean(getGeminiApiKey());
+export function isGeminiConfigured(): boolean {
+  return Boolean(getGeminiApiKey());
 }
 
 function parseEnvLines(text: string): string[] {
@@ -77,72 +59,50 @@ function upsertEnvLine(lines: string[], key: string, value: string | null): stri
   return next;
 }
 
+function stripLegacyEnvKeys(lines: string[]): string[] {
+  return lines.filter((line) => {
+    const t = line.trim();
+    return !LEGACY_ENV_KEYS.some((key) => t.startsWith(`${key}=`) || t === `# ${key}=`);
+  });
+}
+
+function clearLegacyEnvFromProcess(): void {
+  for (const key of LEGACY_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
 export type SaveAiSettingsInput = {
-  provider?: AiProviderId;
   geminiApiKey?: string;
-  openaiApiKey?: string;
-  geminiModel?: string;
-  openaiModel?: string;
 };
 
 export type AiSettingsSnapshot = {
-  provider: AiProviderId;
   configured: boolean;
   gemini: {
     configured: boolean;
     maskedKey: string | null;
-    model: string | null;
   };
-  openai: {
-    configured: boolean;
-    maskedKey: string | null;
-    model: string | null;
-    modelChatSupported: boolean;
-  };
-  modelOptions: { openai: ModelOption[]; gemini: ModelOption[] };
   envFile: string;
 };
 
 function readEnvFileLines(envPath: string): string[] {
   if (fs.existsSync(envPath)) return parseEnvLines(fs.readFileSync(envPath, "utf8"));
   return [
-    "# Market AI — keys stored locally (never sent to GitHub)",
+    "# Market AI — Gemini key stored locally (never sent to GitHub)",
     "# Gemini: https://aistudio.google.com/apikey",
-    "# OpenAI: https://platform.openai.com/api-keys",
     "",
   ];
 }
 
-function getGeminiModelOverride(): string | null {
-  const v = process.env.GEMINI_MODEL?.trim();
-  return v || null;
-}
-
-function getOpenAiModelOverride(): string | null {
-  const v = process.env.OPENAI_MODEL?.trim();
-  return v || null;
-}
-
 export function loadAiSettingsSnapshot(): AiSettingsSnapshot {
-  const provider = getActiveProvider();
+  clearLegacyEnvFromProcess();
   const geminiKey = getGeminiApiKey();
-  const openaiKey = getOpenAiApiKey();
-  const openaiModel = getOpenAiModelOverride();
   return {
-    provider,
-    configured: isProviderConfigured(provider),
+    configured: Boolean(geminiKey),
     gemini: {
       configured: Boolean(geminiKey),
       maskedKey: geminiKey ? maskApiKey(geminiKey) : null,
-      model: getGeminiModelOverride(),
     },
-    openai: {
-      configured: Boolean(openaiKey),
-      maskedKey: openaiKey ? maskApiKey(openaiKey) : null,
-      model: openaiModel,
-      modelChatSupported: openaiModel ? openAiSupportsChat(openaiModel) : true,
-    },
-    modelOptions: getAiModelOptions(),
     envFile: aiEnvFilePath(),
   };
 }
@@ -152,12 +112,7 @@ export function saveAiSettings(input: SaveAiSettingsInput): AiSettingsSnapshot {
   const dir = path.dirname(envPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  let lines = readEnvFileLines(envPath);
-
-  if (input.provider === "gemini" || input.provider === "openai") {
-    lines = upsertEnvLine(lines, PROVIDER_KEY, input.provider);
-    process.env.AI_PROVIDER = input.provider;
-  }
+  let lines = stripLegacyEnvKeys(readEnvFileLines(envPath));
 
   if (typeof input.geminiApiKey === "string") {
     const trimmed = input.geminiApiKey.trim();
@@ -166,33 +121,7 @@ export function saveAiSettings(input: SaveAiSettingsInput): AiSettingsSnapshot {
     else delete process.env.GEMINI_API_KEY;
   }
 
-  if (typeof input.openaiApiKey === "string") {
-    const trimmed = input.openaiApiKey.trim();
-    lines = upsertEnvLine(lines, OPENAI_KEY, trimmed || null);
-    if (trimmed) process.env.OPENAI_API_KEY = trimmed;
-    else delete process.env.OPENAI_API_KEY;
-  }
-
-  if (typeof input.geminiModel === "string") {
-    const trimmed = input.geminiModel.trim();
-    lines = upsertEnvLine(lines, GEMINI_MODEL_KEY, trimmed || null);
-    if (trimmed) process.env.GEMINI_MODEL = trimmed;
-    else delete process.env.GEMINI_MODEL;
-  }
-
-  if (typeof input.openaiModel === "string") {
-    const trimmed = input.openaiModel.trim();
-    if (trimmed) {
-      if (!openAiSupportsChat(trimmed)) {
-        throw new Error(
-          `"${trimmed}" is not available on Chat Completions. Use gpt-4o-mini, gpt-4o, or gpt-4.1-mini.`
-        );
-      }
-    }
-    lines = upsertEnvLine(lines, OPENAI_MODEL_KEY, trimmed || null);
-    if (trimmed) process.env.OPENAI_MODEL = trimmed;
-    else delete process.env.OPENAI_MODEL;
-  }
+  clearLegacyEnvFromProcess();
 
   clearCachedModels();
 
@@ -220,22 +149,10 @@ export function registerAiSettingsRoutes(app: Express): void {
 
   app.put("/api/settings/ai", (req: Request, res: Response) => {
     const body = req.body as {
-      provider?: unknown;
       geminiApiKey?: unknown;
-      openaiApiKey?: unknown;
-      geminiModel?: unknown;
-      openaiModel?: unknown;
     };
 
     const input: SaveAiSettingsInput = {};
-
-    if (body.provider !== undefined) {
-      if (body.provider !== "gemini" && body.provider !== "openai") {
-        res.status(400).json({ error: "provider must be gemini or openai" });
-        return;
-      }
-      input.provider = body.provider;
-    }
 
     if (body.geminiApiKey !== undefined) {
       if (typeof body.geminiApiKey !== "string") {
@@ -243,30 +160,6 @@ export function registerAiSettingsRoutes(app: Express): void {
         return;
       }
       input.geminiApiKey = body.geminiApiKey;
-    }
-
-    if (body.openaiApiKey !== undefined) {
-      if (typeof body.openaiApiKey !== "string") {
-        res.status(400).json({ error: "openaiApiKey must be a string" });
-        return;
-      }
-      input.openaiApiKey = body.openaiApiKey;
-    }
-
-    if (body.geminiModel !== undefined) {
-      if (typeof body.geminiModel !== "string") {
-        res.status(400).json({ error: "geminiModel must be a string" });
-        return;
-      }
-      input.geminiModel = body.geminiModel;
-    }
-
-    if (body.openaiModel !== undefined) {
-      if (typeof body.openaiModel !== "string") {
-        res.status(400).json({ error: "openaiModel must be a string" });
-        return;
-      }
-      input.openaiModel = body.openaiModel;
     }
 
     try {

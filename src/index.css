@@ -18,6 +18,35 @@
   body {
     @apply bg-bg text-text-p antialiased font-sans;
   }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #3f3f46 #141416;
+  }
+
+  *::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #141416;
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+    border-radius: 999px;
+    border: 2px solid #141416;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #52525b;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: #141416;
+  }
 }
 
 .bento-grid {
@@ -113,15 +142,5 @@
 
 .allocation-pie-callout path[stroke]:not([stroke='rgba(255,255,255,0.012)']) {
   filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.28));
-}
-
-/* Scrollable regions without visible scrollbar */
-.scrollbar-hidden {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.scrollbar-hidden::-webkit-scrollbar {
-  display: none;
 }
 

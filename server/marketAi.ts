@@ -9,7 +9,6 @@ import {
 import type { MarketTopStoriesValidationContext } from "../src/marketTopStoriesValidation";
 import { generateMarketSummary, getAiStatusDetail } from "./ai/providerRouter";
 import type { MarketSummaryResult } from "./ai/types";
-import { getActiveProvider } from "./aiSettings";
 import {
   getCachedMarketSummary,
   marketAiCacheKey,
@@ -126,9 +125,7 @@ export function registerMarketAiRoutes(app: Express): void {
         variant === "fi" ? buildFiTopStoriesPrompt(ctx) : buildUsTopStoriesPrompt(ctx);
       const validation = buildValidationContext(ctx, variant);
 
-      const provider = getActiveProvider();
       const cacheKey = marketAiCacheKey({
-        provider,
         variant,
         marketDate,
       });
@@ -152,7 +149,6 @@ export function registerMarketAiRoutes(app: Express): void {
         res.status(error.httpStatus).json({
           error: error.message,
           code: error.code,
-          provider: error.provider,
         });
         return;
       }

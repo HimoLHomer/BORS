@@ -6,7 +6,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from 'react';
-import { formatDecimalFi, formatWholeNumber, parseDecimalInput } from './formatNumber';
+import { formatDecimalEn, formatWholeNumber, parseDecimalInput } from './formatNumber';
 
 type Options = {
   fractionDigits?: number;
@@ -31,7 +31,7 @@ function formatDraftValue(
   const num =
     !groupThousands && fractionDigits === 0
       ? formatWholeNumber(value)
-      : formatDecimalFi(value, fractionDigits);
+      : formatDecimalEn(value, fractionDigits);
   if (!num) return '';
   return trailingSuffix === '%' ? `${num}\u00a0%` : num;
 }
@@ -40,7 +40,7 @@ function parseDraftValue(raw: string, fallback: number): number {
   return parseDecimalInput(raw.replace(/%/g, ''), fallback);
 }
 
-/** Controlled text input that displays Finnish decimals (comma, spaced thousands). */
+/** Controlled text input that displays en-US decimals on blur. */
 export function useFiDecimalDraft(
   value: number,
   onChange: ((n: number) => void) | undefined,

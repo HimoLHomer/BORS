@@ -24,7 +24,6 @@ export {
 export const MARKET_AI_GENERATION_CONFIG = MARKET_TOP_STORIES_AI_CONFIG;
 export const MARKET_INDEX_SYSTEM_INSTRUCTION = MARKET_TOP_STORIES_SYSTEM_INSTRUCTION;
 export const MARKET_INDEX_AI_CONFIG = MARKET_TOP_STORIES_AI_CONFIG;
-export const OPENAI_MARKET_SYSTEM_INSTRUCTION = MARKET_TOP_STORIES_SYSTEM_INSTRUCTION;
 
 /** @deprecated Use buildUsTopStoriesPrompt */
 export function buildUsMarketAiPrompt(ctx: MarketAiQuoteContext): string {

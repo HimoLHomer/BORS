@@ -35,9 +35,9 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts';
-import { formatCurrency, formatCurrencyEn, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
+import { formatCurrency, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
 import { mergeHoldingPurchase } from './mergeHoldingPurchase';
-import { formatDecimalEn, formatDecimalFi, formatDecimalInputEn, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
+import { formatDecimalEn, formatDecimalInputEn, formatPercentEn, parseDecimalInput, parseShareInput, formatShareInput, formatShares, sanitizeShareDraft } from './formatNumber';
 import { formatDateEn, formatShortMonthDayEn, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
@@ -60,43 +60,18 @@ import {
 } from './clientSettings';
 import {
   PORTFOLIO_CHART_RANGE_OPTIONS,
+  computePortfolioRangeGain,
   filterPortfolioChartByRange,
   formatPortfolioChartXTick,
   formatPortfolioChartYTick,
   formatPortfolioChartTooltipValue,
   isPortfolioChartRangeAvailable,
   pickDefaultPortfolioChartRange,
+  portfolioChartRangeGainLabel,
   type PortfolioChartRangeId,
 } from './portfolioChartRange';
 
 // --- Types & Enums ---
-
-const BROWSER_ASSETS_KEY = 'alpha_os_assets';
-const BROWSER_HISTORY_KEY = 'alpha_os_history';
-
-function readBrowserPortfolioBackup(): { assets: Asset[]; history: HistoryPoint[] } | null {
-  try {
-    const raw = localStorage.getItem(BROWSER_ASSETS_KEY);
-    const rawH = localStorage.getItem(BROWSER_HISTORY_KEY);
-    if (!raw && !rawH) return null;
-    const assets = raw ? (JSON.parse(raw) as Asset[]) : [];
-    const history = rawH ? (JSON.parse(rawH) as HistoryPoint[]) : [];
-    if (!Array.isArray(assets) || !Array.isArray(history)) return null;
-    return { assets, history };
-  } catch {
-    return null;
-  }
-}
-
-function shouldMigrateBrowserStorage(
-  sqliteAssetCount: number,
-  sqliteHistoryCount: number,
-  browser: { assets: Asset[]; history: HistoryPoint[] }
-): boolean {
-  if (browser.assets.length === 0 && browser.history.length === 0) return false;
-  if (sqliteAssetCount === 0 && sqliteHistoryCount === 0) return true;
-  return browser.assets.length > sqliteAssetCount || browser.history.length > sqliteHistoryCount;
-}
 
 enum View {
   DASHBOARD = 'DASHBOARD',
@@ -389,7 +364,6 @@ export default function App() {
   const apiStatusRef = useRef(apiStatus);
   apiStatusRef.current = apiStatus;
   const [portfolioLoadError, setPortfolioLoadError] = useState<string | null>(null);
-  const [browserRecoverMsg, setBrowserRecoverMsg] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
   const importBackupRef = useRef<HTMLInputElement>(null);
   /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
@@ -529,25 +503,6 @@ export default function App() {
           }
           assetsData = await fetchJson<Asset[]>(assetsRes);
           historyData = await fetchJson<HistoryPoint[]>(historyRes);
-
-          const browser = readBrowserPortfolioBackup();
-          if (browser && shouldMigrateBrowserStorage(assetsData.length, historyData.length, browser)) {
-            await fetch('/api/portfolio/import?mode=merge', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(browser),
-              ...pf,
-            });
-            const assetsRes2 = await fetch('/api/portfolio/assets', pf);
-            const historyRes2 = await fetch('/api/portfolio/history', pf);
-            assetsData = await fetchJson<Asset[]>(assetsRes2);
-            historyData = await fetchJson<HistoryPoint[]>(historyRes2);
-            if (!cancelled) {
-              setBrowserRecoverMsg(
-                `Imported ${browser.assets.length} holding(s) and ${browser.history.length} history point(s) from this browser’s saved copy.`
-              );
-            }
-          }
 
           if (cancelled) return;
           if (portfolioMutationEpochRef.current === snapshot) {
@@ -806,6 +761,22 @@ export default function App() {
     return { todayGainEur, todayGainPercent };
   }, [assets, marketPrices, quoteCurrencies, exchangeRates, marketChanges, cashLineEur]);
 
+  const portfolioRangeGain = useMemo(() => {
+    const fromChart = computePortfolioRangeGain(portfolioChartVisibleData);
+    if (activePortfolioChartRange === '1D' && portfolioChartVisibleData.length < 2) {
+      return {
+        gainEur: portfolioTodayGain.todayGainEur,
+        gainPercent: portfolioTodayGain.todayGainPercent,
+      };
+    }
+    return { gainEur: fromChart.gainEur, gainPercent: fromChart.gainPercent };
+  }, [
+    portfolioChartVisibleData,
+    activePortfolioChartRange,
+    portfolioTodayGain.todayGainEur,
+    portfolioTodayGain.todayGainPercent,
+  ]);
+
   const allocationSlices = useMemo(() => {
     const assetRows = assets.map((a) => {
       const val =
@@ -963,39 +934,6 @@ export default function App() {
     }
   };
 
-  const recoverFromBrowserStorage = async () => {
-    const browser = readBrowserPortfolioBackup();
-    if (!browser || (browser.assets.length === 0 && browser.history.length === 0)) {
-      setBrowserRecoverMsg(
-        'No older portfolio found in this browser (keys alpha_os_assets / alpha_os_history). Try Import JSON or another browser profile.'
-      );
-      return;
-    }
-    try {
-      const res = await fetch('/api/portfolio/import?mode=merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(browser),
-      });
-      if (!res.ok) throw new Error(`Import failed (HTTP ${res.status})`);
-      const pf = { cache: 'no-store' as RequestCache };
-      const [a, h] = await Promise.all([
-        fetch('/api/portfolio/assets', pf).then((r) => fetchJson<Asset[]>(r)),
-        fetch('/api/portfolio/history', pf).then((r) => fetchJson<HistoryPoint[]>(r)),
-      ]);
-      setAssets(a);
-      setHistory(dedupeHistoryByDate(h));
-      portfolioMutationEpochRef.current += 1;
-      setPortfolioLoadError(null);
-      setBrowserRecoverMsg(
-        `Recovered ${browser.assets.length} holding(s) and ${browser.history.length} history point(s) from this browser.`
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setBrowserRecoverMsg(`Recovery failed: ${msg}`);
-    }
-  };
-
   const exportPortfolioBackup = async () => {
     try {
       const snap = collectClientSettingsFromLocalStorage();
@@ -1145,21 +1083,14 @@ export default function App() {
         onRetryFeed={retryYahooFeed}
         feedRetrying={feedRetrying || apiStatus === 'connecting'}
       />
-      {(portfolioLoadError || browserRecoverMsg) && (
+      {(portfolioLoadError) && (
         <div
-          className={`mx-4 mt-2 px-4 py-3 rounded-xl border text-xs leading-relaxed ${
-            portfolioLoadError
-              ? 'border-red-500/40 bg-red-500/10 text-red-200'
-              : 'border-accent/40 bg-accent/10 text-text-p'
-          }`}
+          className="mx-4 mt-2 px-4 py-3 rounded-xl border text-xs leading-relaxed border-red-500/40 bg-red-500/10 text-red-200"
         >
-          {portfolioLoadError && (
-            <p>
-              <span className="font-bold uppercase tracking-widest text-[10px]">Portfolio not loaded — </span>
-              {portfolioLoadError}
-            </p>
-          )}
-          {browserRecoverMsg && <p className={portfolioLoadError ? 'mt-2' : ''}>{browserRecoverMsg}</p>}
+          <p>
+            <span className="font-bold uppercase tracking-widest text-[10px]">Portfolio not loaded — </span>
+            {portfolioLoadError}
+          </p>
         </div>
       )}
 
@@ -1198,7 +1129,7 @@ export default function App() {
         </aside>
 
         <main
-          className={`flex-1 overflow-y-auto scrollbar-hidden p-6 ${
+          className={`flex-1 overflow-y-auto p-6 ${
             activeView === View.OPTIONS ? 'bg-bg' : 'technical-grid'
           }`}
         >
@@ -1274,7 +1205,7 @@ export default function App() {
                                         {row.id === '__bors_live_today__' && feedMetricsLoading ? (
                                           <SkeletonCurrency className="h-4 w-24" />
                                         ) : (
-                                          formatCurrencyEn(row.value, 'EUR')
+                                          formatCurrency(row.value, 'EUR')
                                         )}
                                       </td>
                                       <td className="px-3 py-2 text-right">
@@ -1314,26 +1245,28 @@ export default function App() {
                     {feedMetricsLoading ? (
                       <SkeletonCurrency className="h-14 w-52" />
                     ) : (
-                      formatCurrencyEn(stats.totalValue, 'EUR')
+                      formatCurrency(stats.totalValue, 'EUR')
                     )}
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                     <div>
-                      <p className="micro-label mb-1">Today</p>
+                      <p className="micro-label mb-1">
+                        {portfolioChartRangeGainLabel(activePortfolioChartRange)}
+                      </p>
                       <GainDisplay
-                        amountEur={portfolioTodayGain.todayGainEur}
-                        percent={portfolioTodayGain.todayGainPercent}
+                        amountEur={portfolioRangeGain.gainEur}
+                        percent={portfolioRangeGain.gainPercent}
                         loading={feedMetricsLoading}
-                        locale="en"
                       />
                     </div>
                     <div>
-                      <p className="micro-label mb-1">Total gain</p>
+                      <p className="micro-label mb-1" title="vs average cost (EUR)">
+                        Unrealized gain
+                      </p>
                       <GainDisplay
                         amountEur={stats.totalGain}
                         percent={stats.totalGainPercent}
                         loading={feedMetricsLoading}
-                        locale="en"
                       />
                     </div>
                     <div className="border-l border-border/40 pl-6 shrink-0">
@@ -1618,7 +1551,7 @@ export default function App() {
                       { key: 'price', label: 'Share price', align: 'right' },
                       { key: 'value', label: 'Total value', align: 'right' },
                       { key: 'cost', label: 'Cost basis', align: 'right' },
-                      { key: 'gain', label: 'Total gain', align: 'right' },
+                      { key: 'gain', label: 'Unrealized gain', align: 'right' },
                       { key: 'today', label: 'Today Gain', align: 'right' },
                       {
                         key: 'actions',
@@ -1671,7 +1604,7 @@ export default function App() {
                               type={item.type}
                             />
                           ),
-                          shares: item.quantity,
+                          shares: formatShares(item.quantity),
                           price: formatCurrency(priceInEur, 'EUR'),
                           value: formatCurrency(totalValue, 'EUR'),
                           cost: (
@@ -1780,9 +1713,6 @@ export default function App() {
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio data (SQLite)
                       </h3>
-                      <p className="text-xs text-text-s leading-relaxed mb-3">
-                        Holdings and history live in a local database. Copy the path, then back up the file while the server is stopped.
-                      </p>
                       {(dataStorePath ?? dataStoreHint) && (
                         <div className="space-y-2">
                           <p className="text-[10px] font-mono text-accent/90 break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
@@ -1826,17 +1756,7 @@ export default function App() {
                             }}
                           />
                         </label>
-                        <button
-                          type="button"
-                          onClick={() => void recoverFromBrowserStorage()}
-                          className="btn-secondary w-full justify-center py-2.5"
-                        >
-                          <History className="w-4 h-4" /> Recover from browser
-                        </button>
                       </div>
-                      <p className="text-[11px] text-text-s mt-4 leading-relaxed">
-                        Import merges with existing data. Recover restores a browser-only backup from this profile.
-                      </p>
                     </div>
                   </div>
                 </div>
@@ -1926,9 +1846,9 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
     name: editAsset?.name || '',
     type: editAsset?.type || 'etf',
     quantity:
-      editAsset?.quantity != null ? formatDecimalFi(editAsset.quantity, 2) : '',
+      editAsset?.quantity != null ? formatShares(editAsset.quantity) : '',
     averagePrice:
-      editAsset?.averagePrice != null ? formatDecimalFi(editAsset.averagePrice, 2) : '',
+      editAsset?.averagePrice != null ? formatDecimalEn(editAsset.averagePrice, 2) : '',
     currency: editAsset?.currency || 'EUR'
   });
   const [purchaseExpanded, setPurchaseExpanded] = useState(Boolean(editAsset));
@@ -2012,7 +1932,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
     const newAsset: Asset = {
       ...(editAsset?.id ? { id: editAsset.id } : {}),
       ...formData,
-      quantity: parseDecimalInput(formData.quantity, 0),
+      quantity: parseShareInput(formData.quantity, 0),
       averagePrice: parseDecimalInput(formData.averagePrice, 0),
       updatedAt: new Date().toISOString()
     } as Asset;
@@ -2058,11 +1978,11 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
 
   const purchasePreview = useMemo(() => {
     if (!editAsset) return null;
-    const addQty = parseDecimalInput(purchaseAddQty, 0);
+    const addQty = parseShareInput(purchaseAddQty, 0);
     if (!(addQty > 0) || purchaseAddPrice.trim() === '') return null;
     const addPrice = parseDecimalInput(purchaseAddPrice, 0);
     return mergeHoldingPurchase({
-      quantity: parseDecimalInput(formData.quantity, 0),
+      quantity: parseShareInput(formData.quantity, 0),
       averagePrice: parseDecimalInput(formData.averagePrice, 0),
       holdingCurrency: formData.currency,
       addQuantity: addQty,
@@ -2082,10 +2002,10 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
   ]);
 
   const handleApplyPurchase = () => {
-    const addQty = parseDecimalInput(purchaseAddQty, 0);
+    const addQty = parseShareInput(purchaseAddQty, 0);
     const addPrice = parseDecimalInput(purchaseAddPrice, 0);
     const result = mergeHoldingPurchase({
-      quantity: parseDecimalInput(formData.quantity, 0),
+      quantity: parseShareInput(formData.quantity, 0),
       averagePrice: parseDecimalInput(formData.averagePrice, 0),
       holdingCurrency: formData.currency,
       addQuantity: addQty,
@@ -2096,8 +2016,8 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
     if ('error' in result) return;
     setFormData((f) => ({
       ...f,
-      quantity: formatDecimalFi(result.quantity, 2),
-      averagePrice: formatDecimalFi(result.averagePrice, 2),
+      quantity: formatShares(result.quantity),
+      averagePrice: formatDecimalEn(result.averagePrice, 2),
     }));
     setPurchaseAddQty('');
     setPurchaseAddPrice('');
@@ -2181,7 +2101,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
                           className="text-[10px] font-mono font-bold text-emerald-400/95 tabular-nums tracking-tight"
                           title="Trailing / indicated dividend yield (Yahoo)"
                         >
-                          Div {formatPercentFi(result.dividendYieldPercent, 2)}
+                          Div {formatPercentEn(result.dividendYieldPercent, 2)}
                         </div>
                       ) : (
                         <div className="text-[9px] font-mono text-text-s/35 uppercase tracking-widest" title="No yield from Yahoo for this listing">
@@ -2282,11 +2202,11 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
                   <p className="text-[10px] text-text-s font-mono pt-4">
                     Current:{' '}
                     <span className="text-text-p font-bold">
-                      {formatDecimalFi(parseDecimalInput(formData.quantity, 0), 2)}
+                      {formatShares(parseShareInput(formData.quantity, 0))}
                     </span>
                     {' @ '}
                     <span className="text-text-p font-bold">
-                      {formatDecimalFi(parseDecimalInput(formData.averagePrice, 0), 2)}
+                      {formatDecimalEn(parseDecimalInput(formData.averagePrice, 0), 2)}
                     </span>
                     {' '}
                     {formData.currency}
@@ -2298,14 +2218,12 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
                       </label>
                       <input
                         type="text"
-                        inputMode="decimal"
+                        inputMode="numeric"
                         className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                        placeholder="0,00"
+                        placeholder="0"
                         value={purchaseAddQty}
-                        onChange={(e) => setPurchaseAddQty(e.target.value)}
-                        onBlur={() =>
-                          setPurchaseAddQty((v) => formatDecimalInputFi(v, 2))
-                        }
+                        onChange={(e) => setPurchaseAddQty(sanitizeShareDraft(e.target.value))}
+                        onBlur={() => setPurchaseAddQty((v) => formatShareInput(v))}
                       />
                     </div>
                     <div className="space-y-2">
@@ -2316,11 +2234,11 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
                         type="text"
                         inputMode="decimal"
                         className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                        placeholder="0,00"
+                        placeholder="0.00"
                         value={purchaseAddPrice}
                         onChange={(e) => setPurchaseAddPrice(e.target.value)}
                         onBlur={() =>
-                          setPurchaseAddPrice((v) => formatDecimalInputFi(v, 2))
+                          setPurchaseAddPrice((v) => formatDecimalInputEn(v, 2))
                         }
                       />
                     </div>
@@ -2352,11 +2270,11 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
                         </span>
                         {' — '}
                         <span className="text-text-p font-bold">
-                          {formatDecimalFi(purchasePreview.quantity, 2)}
+                          {formatShares(purchasePreview.quantity)}
                         </span>{' '}
                         shares · avg{' '}
                         <span className="text-text-p font-bold">
-                          {formatDecimalFi(purchasePreview.averagePrice, 2)}
+                          {formatDecimalEn(purchasePreview.averagePrice, 2)}
                         </span>{' '}
                         {formData.currency}
                       </p>
@@ -2391,15 +2309,15 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
               <input 
                 required
                 type="text"
-                inputMode="decimal"
+                inputMode="numeric"
                 className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                placeholder="0,00"
+                placeholder="0"
                 value={formData.quantity}
-                onChange={e => setFormData({ ...formData, quantity: e.target.value })}
+                onChange={e => setFormData({ ...formData, quantity: sanitizeShareDraft(e.target.value) })}
                 onBlur={() =>
                   setFormData((f) => ({
                     ...f,
-                    quantity: formatDecimalInputFi(f.quantity, 2),
+                    quantity: formatShareInput(f.quantity),
                   }))
                 }
               />
@@ -2409,13 +2327,13 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
               <EurAmountInput
                 required
                 className="py-4 text-sm transition-all placeholder:opacity-20"
-                placeholder="0,00"
+                placeholder="0.00"
                 value={formData.averagePrice}
                 onChange={(e) => setFormData({ ...formData, averagePrice: e.target.value })}
                 onBlur={() =>
                   setFormData((f) => ({
                     ...f,
-                    averagePrice: formatDecimalInputFi(f.averagePrice, 2),
+                    averagePrice: formatDecimalInputEn(f.averagePrice, 2),
                   }))
                 }
               />

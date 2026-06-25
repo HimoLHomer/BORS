@@ -1,4 +1,10 @@
-import { parseTopStoriesJson, type MarketTopStory } from "../src/marketTopStories.ts";
+import {
+  isRawTopStoriesPayload,
+  parseTopStoriesJson,
+  parseTopStoriesJsonLenient,
+  sanitizeTopStoriesFallback,
+  type MarketTopStory,
+} from "../src/marketTopStories.ts";
 import { dedupeTopStories, validateTopStories } from "../src/marketTopStoriesValidation.ts";
 
 function assert(cond: boolean, msg: string): void {
@@ -41,5 +47,29 @@ const tooMany = Array.from({ length: 6 }, (_, i) => ({
 }));
 const manyCheck = validateTopStories(tooMany, ctx);
 assert(!manyCheck.ok, "reject more than 5 stories");
+
+const truncated = `{"stories":[{"headline":"Neste shares rise 3.5% following earnings","source":"Kauppalehti"},{"headline":"Elisa shares decline 1.1% amid sector weakness","source":"Nordnet"},{"headline":"OMX Helsinki PI gains 0.4% as`;
+const lenient = parseTopStoriesJsonLenient(truncated);
+assert(lenient.length === 2, "lenient parse recovers complete stories from truncated JSON");
+assert(parseTopStoriesJson(truncated) === null, "strict parse fails on truncated JSON");
+assert(isRawTopStoriesPayload(truncated), "truncated JSON is raw payload");
+assert(
+  sanitizeTopStoriesFallback(truncated).includes("No top stories found"),
+  "sanitize hides truncated JSON"
+);
+
+const prettyTruncated = `{
+"stories": [
+{
+"headline": "Micron Technology reports qua
+"source": "Reuters"`;
+assert(isRawTopStoriesPayload(prettyTruncated), "pretty-printed truncated JSON is raw payload");
+assert(
+  sanitizeTopStoriesFallback(prettyTruncated).includes("No top stories found"),
+  "sanitize hides pretty-printed truncated JSON"
+);
+
+const fenced = '```json\n{"stories":[{"headline":"Fed holds rates","source":"Reuters"}]}\n```';
+assert(isRawTopStoriesPayload(fenced), "fenced JSON is raw payload");
 
 console.log("test-top-stories-validation: all passed");

@@ -24,6 +24,7 @@ export function DataListTable({
   columns,
   rows,
   minWidth = 720,
+  horizontalScroll = true,
   highlightWhen,
   rowClassName,
   emptyState,
@@ -34,6 +35,8 @@ export function DataListTable({
   columns: DataListColumn[];
   rows: Record<string, React.ReactNode>[];
   minWidth?: number;
+  /** When false, table fits the container width (no nested horizontal scrollbar). */
+  horizontalScroll?: boolean;
   highlightWhen?: (rowIndex: number) => boolean;
   rowClassName?: (rowIndex: number) => string | undefined;
   emptyState?: React.ReactNode;
@@ -44,10 +47,16 @@ export function DataListTable({
   const colSpan = columns.length;
 
   return (
-    <div className="overflow-x-auto -mx-2 px-2">
+    <div
+      className={
+        horizontalScroll
+          ? 'overflow-x-auto -mx-2 px-2'
+          : 'min-w-0 -mx-2 px-2 overflow-x-hidden'
+      }
+    >
       <table
         className={`w-full border-separate border-spacing-y-1 text-xs font-mono${tableClassName ? ` ${tableClassName}` : ''}`}
-        style={{ minWidth }}
+        style={horizontalScroll && minWidth > 0 ? { minWidth } : undefined}
       >
         {showHeader ? (
           <thead>

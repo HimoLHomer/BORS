@@ -1,8 +1,6 @@
-import type { AiProviderId } from "./ai/types";
-
 const CACHE_TTL_MS = 10 * 60 * 1000;
 /** Bump when prompt contract changes so stale results are not reused. */
-const CACHE_PROMPT_VERSION = "v8-top-stories";
+const CACHE_PROMPT_VERSION = "v10-top-stories-scroll-sanitize";
 
 type CacheEntry = {
   expiresAt: number;
@@ -12,16 +10,10 @@ type CacheEntry = {
 const cache = new Map<string, CacheEntry>();
 
 export function marketAiCacheKey(parts: {
-  provider: AiProviderId;
   variant: string;
   marketDate: string;
 }): string {
-  return [
-    CACHE_PROMPT_VERSION,
-    parts.provider,
-    parts.variant,
-    parts.marketDate,
-  ].join("|");
+  return [CACHE_PROMPT_VERSION, parts.variant, parts.marketDate].join("|");
 }
 
 /** @deprecated Top-stories cache no longer keys on movers. */
@@ -48,6 +40,6 @@ export function setCachedMarketSummary(
 ): void {
   cache.set(key, {
     expiresAt: Date.now() + CACHE_TTL_MS,
-    result: { ...result, cached: false },
+    result,
   });
 }

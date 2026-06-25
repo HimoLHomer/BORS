@@ -9,7 +9,7 @@ import { friendlyAiErrorMessage } from './aiErrorMessage';
 import { MARKET_PANEL, MARKET_SUBCARD } from './marketTheme';
 import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
 import type { MarketHeatmapMover, MarketSectorBreadth } from './marketAiPrompt';
-import type { MarketTopStory } from './marketTopStories';
+import { EMPTY_TOP_STORIES_USER_MESSAGE, sanitizeTopStoriesFallback, type MarketTopStory } from './marketTopStories';
 
 export type MarketQuoteSnapshot = {
   id: string;
@@ -95,10 +95,19 @@ function TopStoriesList({
   fallbackText: string;
   searchEntryPointHtml?: string | null;
 }) {
+  const safeFallback = sanitizeTopStoriesFallback(fallbackText);
+
   if (stories.length === 0) {
+    const useMarkdown = /\*\*[^*]+\*\*/.test(safeFallback);
     return (
-      <div className="markdown-body text-text-p text-xs sm:text-sm leading-relaxed prose prose-sm prose-invert max-w-none">
-        <Markdown>{fallbackText || 'Top stories unavailable.'}</Markdown>
+      <div className="text-text-p text-xs sm:text-sm leading-relaxed">
+        {useMarkdown ? (
+          <div className="markdown-body prose prose-sm prose-invert max-w-none">
+            <Markdown>{safeFallback || 'Top stories unavailable.'}</Markdown>
+          </div>
+        ) : (
+          <p className="m-0">{safeFallback || 'Top stories unavailable.'}</p>
+        )}
       </div>
     );
   }
@@ -216,7 +225,10 @@ function useIndexTopStories(
         setSummaryDate(json.marketDate ?? marketDate);
         setStories(json.stories ?? []);
         setSearchEntryPointHtml(json.searchEntryPointHtml ?? null);
-        setFallbackText(json.summary?.trim() || '');
+        setFallbackText(
+          sanitizeTopStoriesFallback(json.summary?.trim() || '') ||
+            (json.stories?.length ? '' : EMPTY_TOP_STORIES_USER_MESSAGE)
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'AI request failed';
         setStories([]);
@@ -288,8 +300,6 @@ export function MarketIndexPanel({
   heatmapAsOf,
   topMovers,
   sectorBreadth,
-  panelMinHeight,
-  aiMinHeight = 'min-h-[220px]',
 }: {
   quote: MarketQuoteSnapshot | undefined;
   overviewLoading: boolean;
@@ -299,8 +309,6 @@ export function MarketIndexPanel({
   heatmapAsOf?: string | null;
   topMovers?: TopMoversPayload;
   sectorBreadth?: MarketSectorBreadth;
-  panelMinHeight?: string;
-  aiMinHeight?: string;
 }) {
   const {
     stories,
@@ -313,8 +321,8 @@ export function MarketIndexPanel({
   } = useIndexTopStories(quote, variant, asOf, heatmapAsOf, topMovers, sectorBreadth);
 
   return (
-    <div className={`${MARKET_PANEL} flex flex-col flex-1 min-h-0 ${panelMinHeight ?? ''}`}>
-      <div className="mb-2">
+    <div className={`${MARKET_PANEL} flex flex-col flex-1 min-h-0 h-full`}>
+      <div className="shrink-0 mb-2">
         <h3 className="card-title mb-0">{quote?.label ?? '—'}</h3>
         {overviewLoading && !quote ? (
           <div className="h-8 w-32 bg-white/5 rounded animate-pulse mt-2" />
@@ -331,8 +339,8 @@ export function MarketIndexPanel({
         )}
       </div>
 
-      <div className={`flex-1 min-h-0 overflow-y-auto scrollbar-hidden mt-3 pt-3 border-t border-border/40 ${aiMinHeight}`}>
-        <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem]">
+      <div className="flex flex-col flex-1 min-h-0 mt-3 pt-3 border-t border-border/40">
+        <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem] shrink-0">
           <p className="text-[10px] font-bold text-text-s uppercase tracking-widest">
             Top stories
           </p>
@@ -359,6 +367,7 @@ export function MarketIndexPanel({
             ) : null}
           </div>
         </div>
+        <div className="flex-1 min-h-0 overflow-y-auto pr-0.5">
         {aiLoading ? (
           <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -375,6 +384,7 @@ export function MarketIndexPanel({
             searchEntryPointHtml={searchEntryPointHtml}
           />
         )}
+        </div>
       </div>
     </div>
   );

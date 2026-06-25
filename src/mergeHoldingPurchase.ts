@@ -35,12 +35,17 @@ export function mergeHoldingPurchase(args: {
   if (!(args.addQuantity > 0)) {
     return { error: 'Enter a positive number of shares to add.' };
   }
+  const addQuantity = Math.floor(args.addQuantity + 1e-9);
+  if (!(addQuantity > 0)) {
+    return { error: 'Enter a positive number of shares to add.' };
+  }
   if (args.addPricePerUnit < 0 || !Number.isFinite(args.addPricePerUnit)) {
     return { error: 'Enter a valid purchase price per unit.' };
   }
   if (!Number.isFinite(args.quantity) || args.quantity < 0) {
     return { error: 'Current holding quantity is invalid.' };
   }
+  const baseQuantity = Math.floor(args.quantity + 1e-9);
   if (!Number.isFinite(args.averagePrice) || args.averagePrice < 0) {
     return { error: 'Current average cost is invalid.' };
   }
@@ -62,9 +67,9 @@ export function mergeHoldingPurchase(args: {
     return { error: missingRateMessage(addCcy !== holding ? addCcy : holding) };
   }
 
-  const costOld = args.quantity * args.averagePrice;
-  const costAdd = args.addQuantity * addPriceInHolding;
-  const quantity = args.quantity + args.addQuantity;
+  const costOld = baseQuantity * args.averagePrice;
+  const costAdd = addQuantity * addPriceInHolding;
+  const quantity = baseQuantity + addQuantity;
   if (!(quantity > 0)) {
     return { error: 'Total quantity must be greater than zero.' };
   }

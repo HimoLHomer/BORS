@@ -28,7 +28,7 @@ import {
 import { SkeletonDividendCalendar } from './SkeletonPulse';
 import { loadFireInputs, FIRE_INPUTS_CHANGED_EVENT } from './fireStorage';
 
-const CALENDAR_TABLE_MIN = 280;
+const CALENDAR_TABLE_MIN = 0;
 
 const CALENDAR_CELL_ASSET = 'px-2 py-1.5 text-left text-text-s/90';
 const CALENDAR_CELL_AMOUNT = 'px-2 py-1.5 text-right text-text-p text-[11px] tabular-nums';
@@ -251,7 +251,7 @@ export function DividendPayoutCalendar({
         className="sr-only"
       />
 
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {loading && !hasSources ? (
           <div role="status" aria-label="Loading dividend calendar">
             <SkeletonDividendCalendar />
@@ -274,6 +274,7 @@ export function DividendPayoutCalendar({
                   totalLabel="Month total"
                 />
                 <DataListTable
+                  horizontalScroll={false}
                   minWidth={CALENDAR_TABLE_MIN}
                   columns={UPCOMING_COLUMNS}
                   showHeader={false}
@@ -318,7 +319,7 @@ export function DividendPayoutCalendar({
           </button>
         </div>
         {historyOpen && (
-          <div className="mt-1.5 max-h-[7rem] overflow-y-auto scrollbar-hidden">
+          <div className="mt-1.5 max-h-[7rem] overflow-y-auto overflow-x-hidden">
             {historyGroups.length === 0 ? (
               <p className="text-text-s/50 text-[10px] font-bold uppercase tracking-widest text-center py-3">
                 Nothing redeemed yet
@@ -334,6 +335,7 @@ export function DividendPayoutCalendar({
                       totalClassName="text-green"
                     />
                     <DataListTable
+                      horizontalScroll={false}
                       minWidth={CALENDAR_TABLE_MIN}
                       columns={HISTORY_COLUMNS}
                       showHeader={false}

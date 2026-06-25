@@ -1,4 +1,4 @@
-import { FI_LOCALE } from './formatNumber';
+import { APP_LOCALE } from './formatNumber';
 
 /** FX rate to EUR (Yahoo `USDEUR=X` style: multiply amount in `currency` to get EUR). */
 export function fxToEur(currency: string | undefined, exchangeRates: Record<string, number>): number {
@@ -65,35 +65,25 @@ export function portfolioFxReady(
   return true;
 }
 
-/** Finnish currency display (e.g. `1 234,56 €`). */
-export function formatCurrency(value: number, currency: string = 'EUR'): string {
-  if (!Number.isFinite(value)) {
-    return new Intl.NumberFormat(FI_LOCALE, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(0);
-  }
-  return new Intl.NumberFormat(FI_LOCALE, {
-    style: 'currency',
+function currencyFormatOpts(currency: string) {
+  return {
+    style: 'currency' as const,
     currency: currency.toUpperCase(),
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  };
 }
 
-/** English currency display (e.g. `€1,234.56`). */
-export function formatCurrencyEn(value: number, currency: string = 'EUR'): string {
-  const ccy = currency.toUpperCase();
-  const opts = {
-    style: 'currency' as const,
-    currency: ccy,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  };
+/** Currency display (e.g. `€1,234.56`). */
+export function formatCurrency(value: number, currency: string = 'EUR'): string {
+  const opts = currencyFormatOpts(currency);
   if (!Number.isFinite(value)) {
-    return new Intl.NumberFormat('en-US', opts).format(0);
+    return new Intl.NumberFormat(APP_LOCALE, opts).format(0);
   }
-  return new Intl.NumberFormat('en-US', opts).format(value);
+  return new Intl.NumberFormat(APP_LOCALE, opts).format(value);
+}
+
+/** @deprecated Alias for formatCurrency. */
+export function formatCurrencyEn(value: number, currency: string = 'EUR'): string {
+  return formatCurrency(value, currency);
 }

@@ -934,6 +934,7 @@ function HeatmapPanel({
   onTopMovers,
   onSectorBreadth,
   onHeatmapAsOf,
+  className = '',
 }: {
   title: string;
   universe: HeatmapUniverse;
@@ -945,6 +946,7 @@ function HeatmapPanel({
   }) => void;
   onSectorBreadth?: (breadth: MarketSectorBreadth | undefined) => void;
   onHeatmapAsOf?: (asOf: string | null) => void;
+  className?: string;
 }) {
   const { data, loading, error, tileLookup, topMovers, sectorBreadth, meta, reload } = useHeatmap(
     universe,
@@ -958,11 +960,11 @@ function HeatmapPanel({
   }, [onTopMovers, onSectorBreadth, onHeatmapAsOf, topMovers, sectorBreadth, meta?.asOf]);
 
   return (
-    <div className={`${MARKET_PANEL} flex flex-col`}>
-      <div className="flex items-start justify-between gap-2 mb-2">
+    <div className={`${MARKET_PANEL} flex flex-col min-h-0 h-full ${className}`}>
+      <div className="flex items-start justify-between gap-2 mb-2 shrink-0">
         <h3 className="card-title mb-0">{title}</h3>
       </div>
-      <div className={chartClassName}>
+      <div className={`${chartClassName} min-h-0`}>
         {loading && data.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 opacity-50">
             <RefreshCcw className="w-7 h-7 animate-spin text-accent" />
@@ -1027,15 +1029,16 @@ export function MarketIntelligence() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-stretch min-h-0">
-        <div className="xl:col-span-8 min-h-0">
+        <div className="xl:col-span-8 min-h-0 flex flex-col">
           <HeatmapPanel
             title="S&P 500"
             universe="sp500"
-            chartClassName="w-full h-[min(38vh,380px)] overflow-visible"
+            chartClassName="w-full flex-1 min-h-[min(38vh,380px)] overflow-visible"
             maxTiles={SP500_DISPLAY_CAP}
             onTopMovers={setUsTopMovers}
             onSectorBreadth={setUsSectorBreadth}
             onHeatmapAsOf={setUsHeatmapAsOf}
+            className="flex-1 min-h-0"
           />
         </div>
         <div className="xl:col-span-4 min-h-0 flex flex-col">
@@ -1047,19 +1050,18 @@ export function MarketIntelligence() {
             heatmapAsOf={usHeatmapAsOf}
             topMovers={usTopMovers}
             sectorBreadth={usSectorBreadth}
-            panelMinHeight="min-h-[min(38vh,380px)]"
-            aiMinHeight="min-h-[min(24vh,260px)]"
           />
         </div>
 
-        <div className="xl:col-span-8">
+        <div className="xl:col-span-8 min-h-0 flex flex-col">
           <HeatmapPanel
             title="OMX Helsinki 25"
             universe="omxh25"
-            chartClassName="w-full h-[min(32vh,300px)] overflow-visible"
+            chartClassName="w-full flex-1 min-h-[min(32vh,300px)] overflow-visible"
             onTopMovers={setFiTopMovers}
             onSectorBreadth={setFiSectorBreadth}
             onHeatmapAsOf={setFiHeatmapAsOf}
+            className="flex-1 min-h-0"
           />
         </div>
         <div className="xl:col-span-4 min-h-0 flex flex-col">
@@ -1071,8 +1073,6 @@ export function MarketIntelligence() {
             heatmapAsOf={fiHeatmapAsOf}
             topMovers={fiTopMovers}
             sectorBreadth={fiSectorBreadth}
-            panelMinHeight="min-h-[min(32vh,300px)]"
-            aiMinHeight="min-h-[min(18vh,200px)]"
           />
         </div>
 

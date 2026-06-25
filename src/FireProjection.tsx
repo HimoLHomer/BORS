@@ -350,6 +350,8 @@ export function FireProjection({
 
   const progressPct =
     independenceCapital > 0 ? Math.min(100, (currentPortfolioEur / independenceCapital) * 100) : 0;
+  const independenceReached =
+    independenceCapital > 0 && currentPortfolioEur >= independenceCapital;
 
   return (
     <div className="space-y-4">
@@ -386,11 +388,19 @@ export function FireProjection({
             <div className="flex items-center gap-2.5">
               <div className="flex-1 h-1.5 bg-border/60 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-accent shadow-[0_0_10px_rgba(59,130,246,0.45)] transition-all duration-500"
+                  className={`h-full transition-all duration-500 ${
+                    independenceReached
+                      ? 'bg-green shadow-[0_0_8px_rgba(34,197,94,0.45)]'
+                      : 'bg-accent shadow-[0_0_10px_rgba(59,130,246,0.45)]'
+                  }`}
                   style={{ width: `${progressPct}%` }}
                 />
               </div>
-              <span className="text-xs font-mono font-bold tabular-nums text-accent shrink-0">
+              <span
+                className={`text-xs font-mono font-bold tabular-nums shrink-0 ${
+                  independenceReached ? 'text-green' : 'text-accent'
+                }`}
+              >
                 {formatPercentFi(progressPct, 1)}
               </span>
             </div>
@@ -483,7 +493,7 @@ export function FireProjection({
               <Plus className="w-3 h-3" /> Add
             </button>
           </div>
-          <div className="space-y-3 max-h-[320px] overflow-y-auto scrollbar-hidden">
+          <div className="space-y-3 max-h-[320px] overflow-y-auto">
             {stored.expenses.length === 0 ? (
               <p className="text-text-s/50 text-xs font-mono py-4 text-center">No entries yet</p>
             ) : (
@@ -537,7 +547,7 @@ export function FireProjection({
               <Plus className="w-3 h-3" /> Add
             </button>
           </div>
-          <div className="space-y-3 max-h-[320px] overflow-y-auto scrollbar-hidden">
+          <div className="space-y-3 max-h-[320px] overflow-y-auto">
             {savingsByYear.length === 0 && draftSavings.length === 0 ? (
               <p className="text-text-s/50 text-xs font-mono py-4 text-center">No entries yet</p>
             ) : (

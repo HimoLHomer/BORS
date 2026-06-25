@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
-import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
+import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput, parseShareInput, formatShareInput, formatShares, sanitizeShareDraft } from './formatNumber';
 import { EurAmountInput } from './EurAmountField';
 import {
   computeBlendedYieldSummary,
@@ -512,7 +512,7 @@ export function DividendsEngine({
     setDraftLinkedSymbol(
       m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0]?.symbol ?? m.linkedSymbol : ''
     );
-    setDraftUnits(m.units != null ? formatDecimalFi(m.units, 2) : '');
+    setDraftUnits(m.units != null ? formatShares(m.units) : '');
     const api = apiRowForSymbol(data, m.linkedSymbol);
     setDraftFrequency(effectivePayoutFrequency(m, api));
     setDraftPayoutDate(m.payoutAnchorDate ?? '');
@@ -522,7 +522,7 @@ export function DividendsEngine({
   const saveManual = () => {
     const annual = parseDecimalInput(draftAnnual, 0);
     const unitsRaw = draftUnits.trim();
-    const unitsParsed = unitsRaw === '' ? null : parseDecimalInput(unitsRaw, NaN);
+    const unitsParsed = unitsRaw === '' ? null : parseShareInput(unitsRaw, NaN);
     const units =
       unitsParsed != null && Number.isFinite(unitsParsed) && unitsParsed > 0 ? unitsParsed : null;
     if (!Number.isFinite(annual) || annual < 0) return;
@@ -903,7 +903,7 @@ export function DividendsEngine({
                   if (v) {
                     const matched = assetsMatchingLink(assets, v);
                     const q = matched.reduce((s, a) => s + (Number.isFinite(a.quantity) ? a.quantity : 0), 0);
-                    setDraftUnits(q > 0 ? formatDecimalFi(q, 2) : '');
+                    setDraftUnits(q > 0 ? formatShares(q) : '');
                   } else {
                     setDraftUnits('');
                   }
@@ -937,9 +937,9 @@ export function DividendsEngine({
               </label>
               <input
                 value={draftUnits}
-                onChange={(e) => setDraftUnits(e.target.value)}
-                onBlur={() => setDraftUnits((v) => (v.trim() === '' ? '' : formatDecimalInputFi(v, 2)))}
-                inputMode="decimal"
+                onChange={(e) => setDraftUnits(sanitizeShareDraft(e.target.value))}
+                onBlur={() => setDraftUnits((v) => (v.trim() === '' ? '' : formatShareInput(v)))}
+                inputMode="numeric"
                 className="w-full mb-2 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
                 placeholder={draftLinkedSymbol.trim() ? 'Leave blank to use holding quantity' : 'Optional override'}
               />
