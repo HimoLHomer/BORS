@@ -60,7 +60,8 @@
         "nsis"
       ],
       "icon": "resources/icon.ico",
-      "artifactName": "BORS-Setup-${version}.${ext}"
+      "artifactName": "BORS-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
