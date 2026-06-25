@@ -2,7 +2,6 @@
  * Browser settings stored in localStorage — synced to SQLite via /api/portfolio/client-settings
  * so Electron installs and JSON backup keep dividend/FIRE/logo data.
  */
-import { ALLOCATION_CHROME_STORAGE_KEY, ALLOCATION_LABEL_OFFSETS_STORAGE_KEY } from './allocationPieLabels';
 import { ASSET_LOGO_OVERRIDES_STORAGE_KEY } from './assetLogo';
 import { BLENDED_YIELD_KEY } from './blendedYieldCache';
 import { DIVIDEND_INFO_LINKS_STORAGE_KEY } from './dividendInfoLinks';
@@ -19,8 +18,6 @@ export const CLIENT_SETTINGS_KEYS = [
   REDEEM_MUTE_STORAGE_KEY,
   FIRE_STORAGE_KEY,
   BLENDED_YIELD_KEY,
-  ALLOCATION_LABEL_OFFSETS_STORAGE_KEY,
-  ALLOCATION_CHROME_STORAGE_KEY,
 ] as const;
 
 export type ClientSettingsSnapshot = Record<string, unknown>;

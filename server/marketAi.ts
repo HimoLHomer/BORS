@@ -1,27 +1,21 @@
 import type { Express, Request, Response } from "express";
 import {
-  buildFiMarketAiPrompt,
-  buildUsMarketAiPrompt,
+  buildFiTopStoriesPrompt,
+  buildUsTopStoriesPrompt,
   type MarketAiQuoteContext,
   type MarketHeatmapMover,
   type MarketSectorBreadth,
 } from "../src/marketAiPrompt";
-import {
-  sanitizeMarketSummary,
-  type MarketSummaryValidationContext,
-  type MoverQuote,
-} from "../src/marketAiValidation";
+import type { MarketTopStoriesValidationContext } from "../src/marketTopStoriesValidation";
 import { generateMarketSummary, getAiStatusDetail } from "./ai/providerRouter";
 import type { MarketSummaryResult } from "./ai/types";
 import { getActiveProvider } from "./aiSettings";
 import {
   getCachedMarketSummary,
   marketAiCacheKey,
-  moversFingerprint,
   setCachedMarketSummary,
 } from "./marketAiCache";
 import { todayIsoDateHelsinki } from "./marketAiDate";
-import { getMarketSessionStatus } from "../src/marketSession";
 
 function parseTopMovers(
   raw: unknown
@@ -70,20 +64,13 @@ function parseSectorBreadth(raw: unknown): MarketSectorBreadth | undefined {
 }
 
 function buildValidationContext(
-  ctx: MarketAiQuoteContext
-): MarketSummaryValidationContext {
-  const symbols: string[] = [];
-  const names: string[] = [];
-  for (const m of [...(ctx.topMovers?.gainers ?? []), ...(ctx.topMovers?.losers ?? [])]) {
-    if (m.symbol) symbols.push(m.symbol);
-    if (m.name?.trim()) names.push(m.name.trim());
-  }
+  ctx: MarketAiQuoteContext,
+  variant: "us" | "fi"
+): MarketTopStoriesValidationContext {
   return {
-    indexLabel: ctx.label,
-    changePercent: ctx.changePercent,
+    variant,
     marketDate: ctx.marketDate,
-    moverNames: names,
-    moverSymbols: symbols,
+    indexLabel: ctx.label,
   };
 }
 
@@ -125,17 +112,6 @@ export function registerMarketAiRoutes(app: Express): void {
         return;
       }
 
-      const session = getMarketSessionStatus(variant);
-      if (!session.showSummary) {
-        res.json({
-          summary: session.closedMessage,
-          marketDate,
-          model: "session",
-          provider: getActiveProvider(),
-        });
-        return;
-      }
-
       const ctx: MarketAiQuoteContext = {
         label,
         price,
@@ -147,51 +123,14 @@ export function registerMarketAiRoutes(app: Express): void {
         sectorBreadth,
       };
       const prompt =
-        variant === "fi" ? buildFiMarketAiPrompt(ctx) : buildUsMarketAiPrompt(ctx);
-      const validation = buildValidationContext(ctx);
-
-      const moverQuotes: MoverQuote[] = [
-        ...(ctx.topMovers?.gainers ?? []),
-        ...(ctx.topMovers?.losers ?? []),
-      ].map((m) => ({
-        symbol: m.symbol,
-        name: m.name,
-        changePercent: m.changePercent,
-      }));
-
-      const alignSummary = (summary: string) =>
-        sanitizeMarketSummary(summary, {
-          indexLabel: ctx.label,
-          changePercent: ctx.changePercent,
-          movers: moverQuotes,
-          topGainer: ctx.topMovers?.gainers[0]
-            ? {
-                symbol: ctx.topMovers.gainers[0].symbol,
-                name: ctx.topMovers.gainers[0].name,
-                changePercent: ctx.topMovers.gainers[0].changePercent,
-              }
-            : undefined,
-          topLoser: ctx.topMovers?.losers[0]
-            ? {
-                symbol: ctx.topMovers.losers[0].symbol,
-                name: ctx.topMovers.losers[0].name,
-                changePercent: ctx.topMovers.losers[0].changePercent,
-              }
-            : undefined,
-        });
+        variant === "fi" ? buildFiTopStoriesPrompt(ctx) : buildUsTopStoriesPrompt(ctx);
+      const validation = buildValidationContext(ctx, variant);
 
       const provider = getActiveProvider();
-      const fp = moversFingerprint(
-        topMovers?.gainers ?? [],
-        topMovers?.losers ?? []
-      );
       const cacheKey = marketAiCacheKey({
         provider,
         variant,
         marketDate,
-        changePercent,
-        label,
-        moversFingerprint: fp,
       });
 
       const withDate = (r: MarketSummaryResult): MarketSummaryResult => ({
@@ -202,17 +141,12 @@ export function registerMarketAiRoutes(app: Express): void {
       if (!refresh) {
         const cached = getCachedMarketSummary(cacheKey);
         if (cached) {
-          res.json(
-            withDate({ ...cached, summary: alignSummary(cached.summary) })
-          );
+          res.json(withDate(cached));
           return;
         }
       }
 
       const outcome = await generateMarketSummary({ prompt, validation });
-      if (outcome.ok === true) {
-        outcome.result.summary = alignSummary(outcome.result.summary);
-      }
       if (outcome.ok === false) {
         const { error } = outcome;
         res.status(error.httpStatus).json({

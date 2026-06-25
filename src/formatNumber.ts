@@ -122,6 +122,15 @@ export function formatDecimalFi(value: number, fractionDigits = 2): string {
 
 }
 
+/** Fixed decimal places in English locale (e.g. portfolio cash field). */
+export function formatDecimalEn(value: number, fractionDigits = 2): string {
+  if (!Number.isFinite(value)) return '';
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(value);
+}
+
 /** Whole number without thousands grouping (e.g. calendar year). */
 export function formatWholeNumber(value: number): string {
   if (!Number.isFinite(value)) return '';
@@ -142,6 +151,15 @@ export function formatDecimalInputFi(raw: string, fractionDigits = 2): string {
 
   return formatDecimalFi(n, fractionDigits);
 
+}
+
+/** Reformat a raw display string to English decimals. */
+export function formatDecimalInputEn(raw: string, fractionDigits = 2): string {
+  const t = raw.trim();
+  if (t === '') return '';
+  const n = parseDecimalInput(t, NaN);
+  if (!Number.isFinite(n)) return raw;
+  return formatDecimalEn(n, fractionDigits);
 }
 
 
@@ -166,6 +184,21 @@ export function formatPercentFi(
 
   return `${prefix}${formatted}\u00a0%`;
 
+}
+
+/** Percent in English locale; optional leading + for positive values. */
+export function formatPercentEn(
+  value: number,
+  fractionDigits = 2,
+  options: { showPlus?: boolean } = {}
+): string {
+  if (!Number.isFinite(value)) return '—';
+  const formatted = new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(value);
+  const prefix = options.showPlus && value > 0 ? '+' : '';
+  return `${prefix}${formatted}%`;
 }
 
 

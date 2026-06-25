@@ -41,7 +41,7 @@ Developers who clone the repo can still run from source — see [First-time setu
 
    In the app: **Options → Market AI** → choose **Gemini** (recommended) or **OpenAI** → paste your API key → **Save**.
 
-   **Gemini** uses [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search) for same-day market headlines. **OpenAI** has no live web in this app — summaries infer plausible drivers from the index move only. Model is optional: leave **Automatic** unless you want a specific model from the dropdown.
+   **Top Stories** on the Market screen (S&P 500 and OMX Helsinki) use **Gemini** with [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search) for up to five factual headlines per index. **OpenAI** cannot power Top Stories (no live web). Model is optional: leave **Automatic** unless you want a specific Gemini model.
 
    For development you can copy [.env.example](.env.example) to `.env.local`. Without a key, the rest of BÖRS works; only the Market AI panels are disabled.
 

@@ -1,5 +1,6 @@
 import type { DividendPayoutFrequency } from './manualDividends';
 import { nextManualPayoutDateYmd, perPaymentAmountEur } from './manualDividends';
+import { dividendNetEur } from './fireProjectionEngine';
 import { todayIsoDateHelsinki } from './formatDate';
 
 export const REDEEMED_DIVIDENDS_STORAGE_KEY = 'bors_redeemed_dividend_payments';
@@ -186,6 +187,11 @@ function mapApiPayDateSource(
   return 'fallback';
 }
 
+function paymentAmountEur(annualIncomeEur: number, frequency: DividendPayoutFrequency, taxRatePercent: number): number {
+  const gross = perPaymentAmountEur(annualIncomeEur, frequency);
+  return dividendNetEur(gross, taxRatePercent);
+}
+
 function scheduleOnePayment(
   source: DividendPaymentSource,
   sourceId: string,
@@ -195,11 +201,12 @@ function scheduleOnePayment(
   frequency: DividendPayoutFrequency,
   payDateYmd: string,
   payDateSource: PayDateSource,
-  redeemedIds: Set<string>
+  redeemedIds: Set<string>,
+  dividendTaxRatePercent: number
 ): ScheduledDividendPayment | null {
   if (!Number.isFinite(annualIncomeEur) || annualIncomeEur <= 0) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(payDateYmd)) return null;
-  const amountEur = Math.round(perPaymentAmountEur(annualIncomeEur, frequency) * 100) / 100;
+  const amountEur = paymentAmountEur(annualIncomeEur, frequency, dividendTaxRatePercent);
   const monthKey = payDateYmd.slice(0, 7);
   const id = `${source}-${sourceId}-${payDateYmd}`;
   if (redeemedIds.has(id)) return null;
@@ -224,10 +231,11 @@ function projectFallbackNextSlot(
   annualIncomeEur: number,
   frequency: DividendPayoutFrequency,
   startMonthKey: string,
-  redeemedIds: Set<string>
+  redeemedIds: Set<string>,
+  dividendTaxRatePercent: number
 ): ScheduledDividendPayment | null {
   if (!Number.isFinite(annualIncomeEur) || annualIncomeEur <= 0) return null;
-  const amountEur = Math.round(perPaymentAmountEur(annualIncomeEur, frequency) * 100) / 100;
+  const amountEur = paymentAmountEur(annualIncomeEur, frequency, dividendTaxRatePercent);
   const monthKey = startMonthKey;
   const id = `${source}-${sourceId}-${monthKey}-0`;
   if (redeemedIds.has(id)) return null;
@@ -247,7 +255,8 @@ export function buildProjectedPayments(
   apiRows: ApiDividendPaymentInput[],
   manualRows: ManualDividendPaymentInput[],
   redeemed: RedeemedDividendPayment[],
-  startMonthKey: string = helsinkiMonthKeyFromToday()
+  startMonthKey: string = helsinkiMonthKeyFromToday(),
+  dividendTaxRatePercent = 0
 ): ScheduledDividendPayment[] {
   const redeemedIds = new Set(redeemed.map((r) => r.id));
   const out: ScheduledDividendPayment[] = [];
@@ -265,7 +274,8 @@ export function buildProjectedPayments(
         frequency,
         payDateYmd,
         mapApiPayDateSource(row.payDateSource),
-        redeemedIds
+        redeemedIds,
+        dividendTaxRatePercent
       );
       if (payment) out.push(payment);
     } else {
@@ -277,7 +287,8 @@ export function buildProjectedPayments(
         row.estimatedAnnualIncomeEur,
         frequency,
         startMonthKey,
-        redeemedIds
+        redeemedIds,
+        dividendTaxRatePercent
       );
       if (payment) out.push(payment);
     }
@@ -296,7 +307,8 @@ export function buildProjectedPayments(
         frequency,
         payDateYmd,
         'manual',
-        redeemedIds
+        redeemedIds,
+        dividendTaxRatePercent
       );
       if (payment) out.push(payment);
     } else {
@@ -308,7 +320,8 @@ export function buildProjectedPayments(
         m.annualIncomeEur,
         frequency,
         startMonthKey,
-        redeemedIds
+        redeemedIds,
+        dividendTaxRatePercent
       );
       if (payment) out.push(payment);
     }

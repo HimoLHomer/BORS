@@ -1,5 +1,5 @@
-import { formatCurrency } from './formatCurrency';
-import { formatPercentFi } from './formatNumber';
+import { formatCurrency, formatCurrencyEn } from './formatCurrency';
+import { formatPercentEn, formatPercentFi } from './formatNumber';
 import { SkeletonGain } from './SkeletonPulse';
 
 /** EUR gain from a prior close given current market value and % change. */
@@ -14,20 +14,24 @@ export function GainDisplay({
   amountEur,
   percent,
   loading = false,
+  locale = 'fi',
 }: {
   amountEur: number;
   percent: number;
   loading?: boolean;
+  locale?: 'fi' | 'en';
 }) {
   if (loading) return <SkeletonGain />;
   const positive = amountEur >= 0;
+  const formatAmount = locale === 'en' ? formatCurrencyEn : formatCurrency;
+  const formatPercent = locale === 'en' ? formatPercentEn : formatPercentFi;
   return (
     <div className={`inline-block text-right ${positive ? 'text-green' : 'text-red'}`}>
       <div className="text-[11px] font-sans font-bold tabular-nums">
-        {formatCurrency(amountEur, 'EUR')}
+        {formatAmount(amountEur, 'EUR')}
       </div>
       <div className="text-xs opacity-60 font-bold">
-        {formatPercentFi(percent, 2, { showPlus: true })}
+        {formatPercent(percent, 2, { showPlus: true })}
       </div>
     </div>
   );

@@ -26,27 +26,19 @@ import { BorsMark } from './BorsMark';
 import { Asset, PortfolioStats, HistoryPoint } from './types';
 import {
   buildAllocationPieCalloutMap,
-  renderAllocationPieCalloutFromLayout,
+  AllocationPieCalloutLayer,
   ALLOCATION_PIE_CHART_MARGIN,
-  ALLOCATION_PIE_NUDGE_LIMITS,
-  allocationPieMarginsWithNudge,
-  clampAllocationChromePrefs,
-  loadAllocationLabelOffsets,
-  saveAllocationLabelOffsets,
-  loadAllocationChromePrefs,
-  saveAllocationChromePrefs,
-  type AllocationLabelOffset,
-  type AllocationChromePrefs,
+  ALLOCATION_PIE_PADDING_ANGLE,
 } from './allocationPieLabels';
 import { AllocationPieDefs, allocationPieSliceChrome } from './allocationPieChrome';
 import { 
-  AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts';
-import { formatCurrency, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
+import { formatCurrency, formatCurrencyEn, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
 import { mergeHoldingPurchase } from './mergeHoldingPurchase';
-import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
-import { formatDateFi, formatShortMonthDayFi, todayIsoDateHelsinki } from './formatDate';
+import { formatDecimalEn, formatDecimalFi, formatDecimalInputEn, formatDecimalInputFi, formatPercentFi, parseDecimalInput } from './formatNumber';
+import { formatDateEn, formatShortMonthDayEn, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
 import { AiSettingsPanel } from './AiSettingsPanel';
@@ -66,6 +58,16 @@ import {
   applyClientSettingsToLocalStorage,
   collectClientSettingsFromLocalStorage,
 } from './clientSettings';
+import {
+  PORTFOLIO_CHART_RANGE_OPTIONS,
+  filterPortfolioChartByRange,
+  formatPortfolioChartXTick,
+  formatPortfolioChartYTick,
+  formatPortfolioChartTooltipValue,
+  isPortfolioChartRangeAvailable,
+  pickDefaultPortfolioChartRange,
+  type PortfolioChartRangeId,
+} from './portfolioChartRange';
 
 // --- Types & Enums ---
 
@@ -134,7 +136,7 @@ function parseCashInputEur(raw: string): number | null {
 }
 
 function formatCashEurTwoDecimals(n: number): string {
-  return formatDecimalFi(n, 2);
+  return formatDecimalEn(n, 2);
 }
 
 function isAbortError(e: unknown): boolean {
@@ -142,47 +144,6 @@ function isAbortError(e: unknown): boolean {
     (e instanceof DOMException && e.name === 'AbortError') ||
     (e instanceof Error && e.name === 'AbortError')
   );
-}
-
-function coerceRemoteLabelOffsets(raw: unknown): Record<string, AllocationLabelOffset> | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const out: Record<string, AllocationLabelOffset> = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!k.trim() || !v || typeof v !== 'object') continue;
-    const o = v as { dx?: unknown; dy?: unknown };
-    const dx = typeof o.dx === 'number' && Number.isFinite(o.dx) ? o.dx : 0;
-    const dy = typeof o.dy === 'number' && Number.isFinite(o.dy) ? o.dy : 0;
-    out[k] = { dx, dy };
-  }
-  return Object.keys(out).length > 0 ? out : null;
-}
-
-function mergeAllocationChromeFromRemote(
-  raw: unknown,
-  prev: AllocationChromePrefs
-): AllocationChromePrefs {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return prev;
-  const o = raw as Record<string, unknown>;
-  const clamp = (v: unknown, min: number, max: number, def: number) => {
-    const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
-    if (!Number.isFinite(n)) return def;
-    return Math.min(max, Math.max(min, n));
-  };
-  return {
-    pieNudgeX: clamp(
-      o.pieNudgeX,
-      -ALLOCATION_PIE_NUDGE_LIMITS.x,
-      ALLOCATION_PIE_NUDGE_LIMITS.x,
-      prev.pieNudgeX
-    ),
-    pieNudgeY: clamp(
-      o.pieNudgeY,
-      ALLOCATION_PIE_NUDGE_LIMITS.yMin,
-      ALLOCATION_PIE_NUDGE_LIMITS.yMax,
-      prev.pieNudgeY
-    ),
-    labelFontPx: clamp(o.labelFontPx, 8, 18, prev.labelFontPx),
-  };
 }
 
 const HistoryPointModal = ({
@@ -198,7 +159,7 @@ const HistoryPointModal = ({
     modal.type === 'edit' ? modal.point.date : todayIsoDateHelsinki()
   );
   const [valueStr, setValueStr] = useState(
-    modal.type === 'edit' ? formatDecimalFi(modal.point.value, 2) : ''
+    modal.type === 'edit' ? formatDecimalEn(modal.point.value, 2) : ''
   );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -292,10 +253,10 @@ const HistoryPointModal = ({
               Total portfolio value (EUR)
             </label>
             <EurAmountInput
-              placeholder="esim. 125 000,50"
+              placeholder="e.g. 125,000.50"
               value={valueStr}
               onChange={(e) => setValueStr(e.target.value)}
-              onBlur={() => setValueStr((v) => formatDecimalInputFi(v, 2))}
+              onBlur={() => setValueStr((v) => formatDecimalInputEn(v, 2))}
             />
           </div>
           {err && (
@@ -410,6 +371,7 @@ export default function App() {
   const [dbPathCopied, setDbPathCopied] = useState(false);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [portfolioChartRange, setPortfolioChartRange] = useState<PortfolioChartRangeId | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [historyModal, setHistoryModal] = useState<
     null | { type: 'edit'; point: HistoryPoint } | { type: 'add' }
@@ -623,18 +585,6 @@ export default function App() {
             }
           }
           try {
-            const ur = await fetch('/api/portfolio/ui-prefs', pf);
-            if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
-            if (ur.ok) {
-              const ui = (await ur.json()) as Record<string, unknown>;
-              const lo = coerceRemoteLabelOffsets(ui.allocationLabelOffsets);
-              if (lo) setAllocLabelOffsets(lo);
-              setAllocChrome((c) => mergeAllocationChromeFromRemote(ui.allocationChrome, c));
-            }
-          } catch (e) {
-            if (!isAbortError(e)) console.warn('UI prefs load failed:', e);
-          }
-          try {
             const csr = await fetch('/api/portfolio/client-settings', pf);
             if (cancelled || portfolioBootstrapGenerationRef.current !== gen) return;
             if (csr.ok) {
@@ -811,7 +761,7 @@ export default function App() {
       .filter((p, i, self) => i === self.findIndex((t) => t.date === p.date))
       .map((p) => ({
         date: p.date,
-        name: formatShortMonthDayFi(p.date),
+        name: formatShortMonthDayEn(p.date),
         value: p.value,
       }));
     const hasStoredToday = history.some((p) => p.date === todayStr);
@@ -820,6 +770,26 @@ export default function App() {
     }
     return baseData;
   }, [history, stats.totalValue]);
+
+  const defaultPortfolioChartRange = useMemo(
+    () => pickDefaultPortfolioChartRange(portfolioChartData),
+    [portfolioChartData]
+  );
+  const activePortfolioChartRange = portfolioChartRange ?? defaultPortfolioChartRange;
+
+  useEffect(() => {
+    if (
+      portfolioChartRange != null &&
+      !isPortfolioChartRangeAvailable(portfolioChartData, portfolioChartRange)
+    ) {
+      setPortfolioChartRange(null);
+    }
+  }, [portfolioChartData, portfolioChartRange]);
+
+  const portfolioChartVisibleData = useMemo(
+    () => filterPortfolioChartByRange(portfolioChartData, activePortfolioChartRange),
+    [portfolioChartData, activePortfolioChartRange]
+  );
 
   const portfolioTodayGain = useMemo(() => {
     let todayGainEur = 0;
@@ -842,7 +812,12 @@ export default function App() {
         a.quantity *
         (marketPrices[a.symbol] || a.averagePrice) *
         holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
-      return { key: a.id || a.symbol, name: a.name, value: val };
+      return {
+        key: a.id || a.symbol,
+        name: a.name,
+        label: displayTickerForAsset(a),
+        value: val,
+      };
     });
     const c = cashLineEur;
     const assetSum = assetRows.reduce((s, r) => s + r.value, 0);
@@ -852,7 +827,7 @@ export default function App() {
       .map((r) => ({ ...r, percent: (r.value / t) * 100 }))
       .sort((a, b) => b.value - a.value);
     if (c > 0) {
-      rows.push({ key: 'cash', name: 'Cash', value: c, percent: (c / t) * 100 });
+      rows.push({ key: 'cash', name: 'Cash', label: 'Cash', value: c, percent: (c / t) * 100 });
       rows.sort((a, b) => b.value - a.value);
     }
     return rows;
@@ -892,191 +867,6 @@ export default function App() {
     };
   }, []);
 
-  const [allocChrome, setAllocChrome] = useState<AllocationChromePrefs>(() => loadAllocationChromePrefs());
-  const allocChromeRef = useRef(allocChrome);
-  allocChromeRef.current = allocChrome;
-
-  useEffect(() => {
-    saveAllocationChromePrefs(allocChrome);
-  }, [allocChrome]);
-
-  const allocChartMargins = useMemo(
-    () =>
-      allocationPieMarginsWithNudge(
-        ALLOCATION_PIE_CHART_MARGIN,
-        allocChrome.pieNudgeX,
-        allocChrome.pieNudgeY
-      ),
-    [allocChrome.pieNudgeX, allocChrome.pieNudgeY]
-  );
-
-  const allocationPieCalloutMap = useMemo(
-    () =>
-      buildAllocationPieCalloutMap(
-        allocationPieBox.width,
-        allocationPieBox.height,
-        allocationSlices,
-        allocChartMargins
-      ),
-    [allocationPieBox.width, allocationPieBox.height, allocationSlices, allocChartMargins]
-  );
-
-  const [allocLabelOffsets, setAllocLabelOffsets] = useState<
-    Record<string, AllocationLabelOffset>
-  >(() => loadAllocationLabelOffsets());
-  const allocLabelOffsetsRef = useRef(allocLabelOffsets);
-  allocLabelOffsetsRef.current = allocLabelOffsets;
-
-  const [allocLabelDragging, setAllocLabelDragging] = useState<string | null>(null);
-  const [allocPieMenuOpen, setAllocPieMenuOpen] = useState(false);
-  const allocPieMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!allocPieMenuOpen) return;
-    const close = (e: MouseEvent) => {
-      const el = allocPieMenuRef.current;
-      if (el && !el.contains(e.target as Node)) setAllocPieMenuOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [allocPieMenuOpen]);
-
-  useEffect(() => {
-    saveAllocationLabelOffsets(allocLabelOffsets);
-  }, [allocLabelOffsets]);
-
-  useEffect(() => {
-    if (!uiPrefsRemoteHydratedRef.current) return;
-    const ac = new AbortController();
-    const t = window.setTimeout(() => {
-      void fetch('/api/portfolio/ui-prefs', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          allocationLabelOffsets: allocLabelOffsets,
-          allocationChrome: allocChrome,
-        }),
-        signal: ac.signal,
-        cache: 'no-store',
-      }).catch(() => {});
-    }, 450);
-    return () => {
-      ac.abort();
-      window.clearTimeout(t);
-    };
-  }, [allocLabelOffsets, allocChrome]);
-
-  useEffect(() => {
-    if (allocationSlices.length === 0) return;
-    const keep = new Set(allocationSlices.map((s) => s.key));
-    setAllocLabelOffsets((prev) => {
-      const next: Record<string, AllocationLabelOffset> = { ...prev };
-      let changed = false;
-      for (const k of Object.keys(next)) {
-        if (k === 'cash') continue;
-        if (!keep.has(k)) {
-          delete next[k];
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [allocationSlices]);
-
-  const onAllocationPieDragPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (!target.closest('.recharts-pie-sector')) return;
-    e.preventDefault();
-    const wrap = allocationPieWrapRef.current;
-    if (!wrap) return;
-    try {
-      wrap.setPointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const { pieNudgeX: nx0, pieNudgeY: ny0 } = allocChromeRef.current;
-
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      setAllocChrome((c) =>
-        clampAllocationChromePrefs({
-          ...c,
-          pieNudgeX: nx0 + dx,
-          pieNudgeY: ny0 + dy,
-        })
-      );
-    };
-    const up = () => {
-      try {
-        wrap.releasePointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  }, []);
-
-  const onAllocCalloutPointerDown = useCallback((sliceKey: string, e: React.PointerEvent<SVGGElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const el = e.currentTarget;
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    const cur = allocLabelOffsetsRef.current[sliceKey] ?? { dx: 0, dy: 0 };
-    const x0 = e.clientX;
-    const y0 = e.clientY;
-    setAllocLabelDragging(sliceKey);
-
-    const move = (ev: PointerEvent) => {
-      setAllocLabelOffsets((prev) => ({
-        ...prev,
-        [sliceKey]: {
-          dx: cur.dx + ev.clientX - x0,
-          dy: cur.dy + ev.clientY - y0,
-        },
-      }));
-    };
-    const up = () => {
-      try {
-        el.releasePointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      setAllocLabelDragging(null);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  }, []);
-
-  const allocationPieLabelRenderer = useCallback(
-    (p: Parameters<typeof renderAllocationPieCalloutFromLayout>[0]) =>
-      renderAllocationPieCalloutFromLayout(p, allocationPieCalloutMap, allocLabelOffsets, {
-        draggingKey: allocLabelDragging,
-        onPointerDown: onAllocCalloutPointerDown,
-        labelFontPx: allocChrome.labelFontPx,
-      }),
-    [
-      allocationPieCalloutMap,
-      allocLabelOffsets,
-      allocLabelDragging,
-      onAllocCalloutPointerDown,
-      allocChrome.labelFontPx,
-    ]
-  );
-
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
   /** Wait for first quote fetch + FX rates before trusting EUR totals for SQLite history. */
@@ -1093,6 +883,31 @@ export default function App() {
     if (apiStatus === 'connecting') return true;
     return !portfolioValuationReady;
   }, [assets.length, apiStatus, portfolioValuationReady]);
+
+  useLayoutEffect(() => {
+    if (feedMetricsLoading) return;
+    const el = allocationPieWrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    let width = Math.round(rect.width) || el.clientWidth || 0;
+    let height = Math.round(rect.height) || el.clientHeight || 0;
+    if (width < 32) width = 320;
+    if (height < 32) height = 300;
+    setAllocationPieBox((prev) =>
+      prev.width === width && prev.height === height ? prev : { width, height }
+    );
+  }, [feedMetricsLoading]);
+
+  const allocationPieCalloutMap = useMemo(
+    () =>
+      buildAllocationPieCalloutMap(
+        allocationPieBox.width,
+        allocationPieBox.height,
+        allocationSlices,
+        { ...ALLOCATION_PIE_CHART_MARGIN }
+      ),
+    [allocationPieBox.width, allocationPieBox.height, allocationSlices]
+  );
 
   /** Persist today's total once FX/quotes are ready; upsert if an early save was wrong. */
   useEffect(() => {
@@ -1239,21 +1054,16 @@ export default function App() {
         body: JSON.stringify(payload),
       });
       const pf = { cache: 'no-store' as RequestCache };
-      const [a, h, cashRes, uiRes] = await Promise.all([
+      const [a, h, cashRes] = await Promise.all([
         fetch('/api/portfolio/assets', pf).then((r) => r.json()),
         fetch('/api/portfolio/history', pf).then((r) => r.json()),
         fetch('/api/portfolio/cash', pf).then((r) => (r.ok ? r.json() : { amountEur: 0 })),
-        fetch('/api/portfolio/ui-prefs', pf).then((r) => (r.ok ? r.json() : {})),
       ]);
       setAssets(a);
       setHistory(dedupeHistoryByDate(h));
       const cv = normalizeCashAmountEur(cashRes.amountEur) ?? 0;
       setCashEur(Number(cv));
       setCashInput(formatCashEurTwoDecimals(cv));
-      const ui = uiRes as Record<string, unknown>;
-      const lo = coerceRemoteLabelOffsets(ui.allocationLabelOffsets);
-      if (lo) setAllocLabelOffsets(lo);
-      setAllocChrome((c) => mergeAllocationChromeFromRemote(ui.allocationChrome, c));
       const csRes = await fetch('/api/portfolio/client-settings', pf);
       if (csRes.ok) {
         applyClientSettingsToLocalStorage((await csRes.json()) as Record<string, unknown>);
@@ -1453,7 +1263,7 @@ export default function App() {
                                       className="border-b border-border/30 hover:bg-white/[0.03]"
                                     >
                                       <td className="px-3 py-2 font-mono text-text-p tabular-nums">
-                                        {formatDateFi(row.date)}
+                                        {formatDateEn(row.date)}
                                         {row.id === '__bors_live_today__' ? (
                                           <span className="ml-2 text-[8px] uppercase text-text-s/45 font-bold tracking-widest">
                                             (live)
@@ -1464,7 +1274,7 @@ export default function App() {
                                         {row.id === '__bors_live_today__' && feedMetricsLoading ? (
                                           <SkeletonCurrency className="h-4 w-24" />
                                         ) : (
-                                          formatCurrency(row.value, 'EUR')
+                                          formatCurrencyEn(row.value, 'EUR')
                                         )}
                                       </td>
                                       <td className="px-3 py-2 text-right">
@@ -1504,7 +1314,7 @@ export default function App() {
                     {feedMetricsLoading ? (
                       <SkeletonCurrency className="h-14 w-52" />
                     ) : (
-                      formatCurrency(stats.totalValue, 'EUR')
+                      formatCurrencyEn(stats.totalValue, 'EUR')
                     )}
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
@@ -1514,6 +1324,7 @@ export default function App() {
                         amountEur={portfolioTodayGain.todayGainEur}
                         percent={portfolioTodayGain.todayGainPercent}
                         loading={feedMetricsLoading}
+                        locale="en"
                       />
                     </div>
                     <div>
@@ -1522,6 +1333,7 @@ export default function App() {
                         amountEur={stats.totalGain}
                         percent={stats.totalGainPercent}
                         loading={feedMetricsLoading}
+                        locale="en"
                       />
                     </div>
                     <div className="border-l border-border/40 pl-6 shrink-0">
@@ -1530,7 +1342,7 @@ export default function App() {
                         <EurAmountInput
                           compact
                           wrapperClassName="w-[6.75rem]"
-                          placeholder="0,00"
+                          placeholder="0.00"
                           value={cashInput}
                           onChange={(e) => setCashInput(e.target.value)}
                           onBlur={() => normalizeCashInputOnBlur()}
@@ -1547,156 +1359,140 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex-1 mt-8 min-h-[160px] relative">
-                    {portfolioChartData.length < 2 && (
-                      <p className="absolute inset-0 flex items-center justify-center text-center text-[11px] text-text-s px-6 z-[2] pointer-events-none">
-                        History builds as daily totals are recorded. Open the history icon above to add past dates.
-                      </p>
-                    )}
-                    <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={portfolioChartData}>
+                  <div className="mt-8 space-y-3 flex-1 flex flex-col min-h-[220px]">
+                    <div
+                      className="flex flex-wrap items-center gap-x-1 gap-y-1 border-b border-border/40 pb-1"
+                      role="tablist"
+                      aria-label="Portfolio chart time range"
+                    >
+                      {PORTFOLIO_CHART_RANGE_OPTIONS.map(({ id, label }) => {
+                        const available = isPortfolioChartRangeAvailable(portfolioChartData, id);
+                        const active = activePortfolioChartRange === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            role="tab"
+                            aria-selected={active}
+                            disabled={!available}
+                            title={
+                              available
+                                ? `Show ${label} range`
+                                : 'Not enough history for this range'
+                            }
+                            onClick={() => setPortfolioChartRange(id)}
+                            className={`relative px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                              active ? 'text-accent' : 'text-text-s hover:text-text-p'
+                            }`}
+                          >
+                            {label}
+                            {active && (
+                              <span
+                                className="absolute inset-x-1 -bottom-1 h-0.5 rounded-full bg-accent"
+                                aria-hidden
+                              />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex-1 min-h-[180px] relative">
+                      {portfolioChartData.length < 2 && (
+                        <p className="absolute inset-0 flex items-center justify-center text-center text-[11px] text-text-s px-6 z-[2] pointer-events-none">
+                          History builds as daily totals are recorded. Open the history icon above to add past dates.
+                        </p>
+                      )}
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart
+                          data={portfolioChartVisibleData}
+                          margin={{ top: 8, right: 12, left: 0, bottom: 4 }}
+                        >
                           <defs>
                             <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="var(--color-accent)" stopOpacity={0.2}/>
-                              <stop offset="95%" stopColor="var(--color-accent)" stopOpacity={0}/>
+                              <stop offset="5%" stopColor="var(--color-accent)" stopOpacity={0.2} />
+                              <stop offset="95%" stopColor="var(--color-accent)" stopOpacity={0} />
                             </linearGradient>
                           </defs>
-                          <XAxis dataKey="name" hide />
-                          <Tooltip 
-                            formatter={(value: number) => [formatCurrency(value, 'EUR'), '']}
-                            separator=""
-                            labelStyle={{ color: 'var(--color-text-s)', fontSize: '11px', marginBottom: '4px', textTransform: 'uppercase', fontWeight: 'bold', opacity: 0.5 }}
-                            contentStyle={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: '12px', padding: '12px' }}
-                            itemStyle={{ color: 'var(--color-accent)', fontWeight: '900', fontSize: '14px' }}
-                            cursor={{ stroke: 'var(--color-accent)', strokeWidth: 1, strokeDasharray: '4 4' }}
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke="rgba(255,255,255,0.06)"
+                            vertical={false}
                           />
-                          <Area type="monotone" dataKey="value" stroke="var(--color-accent)" fillOpacity={1} fill="url(#colorValue)" strokeWidth={3} animationDuration={1000} />
+                          <XAxis
+                            dataKey="date"
+                            tickFormatter={(iso) =>
+                              formatPortfolioChartXTick(String(iso), activePortfolioChartRange)
+                            }
+                            tick={{ fill: 'var(--color-text-s)', fontSize: 10, fontWeight: 600 }}
+                            tickMargin={8}
+                            minTickGap={24}
+                            axisLine={{ stroke: 'var(--color-border)', strokeOpacity: 0.4 }}
+                            tickLine={{ stroke: 'var(--color-border)', strokeOpacity: 0.25 }}
+                          />
+                          <YAxis
+                            tick={{ fill: 'var(--color-text-s)', fontSize: 10, opacity: 0.7 }}
+                            tickFormatter={(v) => formatPortfolioChartYTick(Number(v))}
+                            width={80}
+                            axisLine={false}
+                            tickLine={false}
+                          />
+                          <Tooltip
+                            formatter={(value: number) => [
+                              formatPortfolioChartTooltipValue(Number(value)),
+                              '',
+                            ]}
+                            labelFormatter={(iso) => formatDateEn(String(iso))}
+                            separator=""
+                            labelStyle={{
+                              color: 'var(--color-text-s)',
+                              fontSize: '11px',
+                              marginBottom: '4px',
+                              textTransform: 'uppercase',
+                              fontWeight: 'bold',
+                              opacity: 0.5,
+                            }}
+                            contentStyle={{
+                              backgroundColor: 'var(--color-card)',
+                              border: '1px solid var(--color-border)',
+                              borderRadius: '12px',
+                              padding: '12px',
+                            }}
+                            itemStyle={{
+                              color: 'var(--color-accent)',
+                              fontWeight: '900',
+                              fontSize: '14px',
+                            }}
+                            cursor={{
+                              stroke: 'var(--color-accent)',
+                              strokeWidth: 1,
+                              strokeDasharray: '4 4',
+                            }}
+                          />
+                          <Area
+                            type="linear"
+                            dataKey="value"
+                            stroke="var(--color-accent)"
+                            fillOpacity={1}
+                            fill="url(#colorValue)"
+                            strokeWidth={3}
+                            animationDuration={1000}
+                          />
                         </AreaChart>
-                    </ResponsiveContainer>
+                      </ResponsiveContainer>
+                    </div>
                   </div>
                 </div>
 
                 <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4">
                   <div className="glass-panel !overflow-visible p-6 flex flex-col flex-1 min-h-[480px] lg:min-h-[520px]">
-                    <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="mb-3">
                       <h3 className="card-title mb-0">Allocation</h3>
-                      <div className="relative shrink-0" ref={allocPieMenuRef}>
-                        <button
-                          type="button"
-                          title="Chart options"
-                          aria-expanded={allocPieMenuOpen}
-                          aria-haspopup="true"
-                          onClick={() => setAllocPieMenuOpen((o) => !o)}
-                          className={`p-2 rounded-lg border transition-colors ${
-                            allocPieMenuOpen
-                              ? 'bg-accent text-white border-accent shadow-lg shadow-accent/20'
-                              : 'bg-white/5 text-text-s border-border/60 hover:bg-white/10'
-                          }`}
-                        >
-                          <Settings className="w-4 h-4" aria-hidden />
-                        </button>
-                        {allocPieMenuOpen && (
-                          <div
-                            className="absolute right-0 top-full mt-2 w-[min(calc(100vw-3rem),18rem)] rounded-xl border border-border bg-card shadow-2xl z-[80] p-3 space-y-3"
-                            style={{ backgroundColor: 'var(--color-card)' }}
-                            role="menu"
-                          >
-                            <div className="space-y-3 text-[10px] text-text-s">
-                              <label className="flex flex-col gap-1.5 min-w-0">
-                                <span className="uppercase tracking-widest font-bold opacity-50">
-                                  Pie horizontal
-                                </span>
-                                <input
-                                  type="range"
-                                  min={-ALLOCATION_PIE_NUDGE_LIMITS.x}
-                                  max={ALLOCATION_PIE_NUDGE_LIMITS.x}
-                                  step={2}
-                                  value={allocChrome.pieNudgeX}
-                                  onChange={(e) =>
-                                    setAllocChrome((c) =>
-                                      clampAllocationChromePrefs({
-                                        ...c,
-                                        pieNudgeX: Number(e.target.value),
-                                      })
-                                    )
-                                  }
-                                  className="w-full h-1.5"
-                                  style={{ accentColor: 'var(--color-accent)' }}
-                                />
-                              </label>
-                              <label className="flex flex-col gap-1.5 min-w-0">
-                                <span className="uppercase tracking-widest font-bold opacity-50">
-                                  Pie vertical (right = lower)
-                                </span>
-                                <input
-                                  type="range"
-                                  min={ALLOCATION_PIE_NUDGE_LIMITS.yMin}
-                                  max={ALLOCATION_PIE_NUDGE_LIMITS.yMax}
-                                  step={2}
-                                  value={allocChrome.pieNudgeY}
-                                  onChange={(e) =>
-                                    setAllocChrome((c) =>
-                                      clampAllocationChromePrefs({
-                                        ...c,
-                                        pieNudgeY: Number(e.target.value),
-                                      })
-                                    )
-                                  }
-                                  className="w-full h-1.5"
-                                  style={{ accentColor: 'var(--color-accent)' }}
-                                />
-                              </label>
-                              <label className="flex flex-col gap-1.5 min-w-0">
-                                <span className="uppercase tracking-widest font-bold opacity-50">
-                                  Label size
-                                </span>
-                                <input
-                                  type="range"
-                                  min={8}
-                                  max={18}
-                                  step={1}
-                                  value={allocChrome.labelFontPx}
-                                  onChange={(e) =>
-                                    setAllocChrome((c) => ({ ...c, labelFontPx: Number(e.target.value) }))
-                                  }
-                                  className="w-full h-1.5"
-                                  style={{ accentColor: 'var(--color-accent)' }}
-                                />
-                              </label>
-                              <p className="text-[9px] text-text-s/70 leading-relaxed">
-                                Drag the pie to reposition, or use the sliders. Layout is saved
-                                automatically.
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setAllocLabelOffsets({});
-                                saveAllocationLabelOffsets({});
-                                const defaults: AllocationChromePrefs = {
-                                  pieNudgeX: 0,
-                                  pieNudgeY: 0,
-                                  labelFontPx: 11,
-                                };
-                                setAllocChrome(defaults);
-                                saveAllocationChromePrefs(defaults);
-                                setAllocPieMenuOpen(false);
-                              }}
-                              className="w-full px-2 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest text-text-s hover:text-accent hover:bg-white/5 border border-border/60 transition-colors"
-                            >
-                              Reset layout
-                            </button>
-                          </div>
-                        )}
-                      </div>
                     </div>
                     <div
                       ref={allocationPieWrapRef}
-                      className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0 cursor-grab active:cursor-grabbing"
+                      className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0"
                       aria-busy={feedMetricsLoading}
-                      title="Drag pie slices to move the chart; drag labels to adjust callouts"
-                      onPointerDown={onAllocationPieDragPointerDown}
                     >
                       {feedMetricsLoading ? (
                         <div className="absolute inset-0 flex items-center justify-center z-[1]">
@@ -1708,7 +1504,7 @@ export default function App() {
                         height="100%"
                         className={feedMetricsLoading ? 'opacity-0 pointer-events-none' : undefined}
                       >
-                        <PieChart margin={{ ...allocChartMargins }}>
+                        <PieChart margin={{ ...ALLOCATION_PIE_CHART_MARGIN }}>
                           <AllocationPieDefs />
                           <Pie
                             key={
@@ -1723,19 +1519,17 @@ export default function App() {
                             }
                             cx="50%"
                             cy="50%"
-                            innerRadius="36%"
-                            outerRadius="58%"
+                            innerRadius="0%"
+                            outerRadius="75%"
                             dataKey="value"
                             nameKey="name"
                             startAngle={90}
                             endAngle={-270}
-                            paddingAngle={1.2}
+                            paddingAngle={ALLOCATION_PIE_PADDING_ANGLE}
                             stroke="rgba(15, 23, 42, 0.85)"
                             strokeWidth={1.5}
                             isAnimationActive={false}
-                            label={
-                              allocationSlices.length > 0 ? allocationPieLabelRenderer : false
-                            }
+                            label={false}
                             labelLine={false}
                           >
                             {allocationSlices.length > 0 ? (
@@ -1781,6 +1575,21 @@ export default function App() {
                           />
                         </PieChart>
                       </ResponsiveContainer>
+                      {!feedMetricsLoading &&
+                      allocationSlices.length > 0 &&
+                      allocationPieCalloutMap.size > 0 &&
+                      allocationPieBox.width > 0 &&
+                      allocationPieBox.height > 0 ? (
+                        <svg
+                          className="absolute left-0 top-0 z-[2] pointer-events-none"
+                          width={allocationPieBox.width}
+                          height={allocationPieBox.height}
+                          style={{ overflow: 'visible' }}
+                          aria-hidden
+                        >
+                          <AllocationPieCalloutLayer layout={allocationPieCalloutMap} />
+                        </svg>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -2308,7 +2117,7 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
         initial={{ scale: 0.95, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 20 }}
-        className="glass-panel p-10 w-full max-w-lg relative bg-card/50 border-accent/20 shadow-2xl overflow-y-auto max-h-[min(92vh,900px)]"
+        className="glass-panel p-10 w-full max-w-lg relative bg-card/50 border-accent/20 shadow-2xl flex flex-col max-h-[min(92vh,900px)] overflow-hidden"
       >
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent/50 to-transparent"></div>
         <button onClick={onClose} className="absolute top-6 right-6 p-2 text-text-s hover:text-text-p transition-colors rounded-full hover:bg-white/5">
@@ -2396,7 +2205,8 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
         </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-8">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-8 pr-1">
           {error && (
             <div className="p-4 bg-red/10 border border-red/20 rounded-xl text-red text-[10px] uppercase font-bold tracking-widest animate-pulse">
               System Error: {error}
@@ -2611,11 +2421,12 @@ const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
               />
             </div>
           </div>
-          
+          </div>
+
           <button 
             type="submit"
             disabled={isSubmitting}
-            className="w-full py-5 bg-accent hover:bg-accent/90 disabled:opacity-50 text-white font-black uppercase tracking-[0.2em] text-[11px] rounded-xl transition-all shadow-xl shadow-accent/20 active:scale-[0.98] mt-4 flex items-center justify-center gap-3"
+            className="w-full shrink-0 py-5 bg-accent hover:bg-accent/90 disabled:opacity-50 text-white font-black uppercase tracking-[0.2em] text-[11px] rounded-xl transition-all shadow-xl shadow-accent/20 active:scale-[0.98] mt-4 flex items-center justify-center gap-3"
           >
             {isSubmitting ? (
               <RefreshCcw className="w-4 h-4 animate-spin" />

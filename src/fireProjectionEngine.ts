@@ -31,6 +31,12 @@ export const FIRE_HORIZON_YEARS = 30;
 
 export const DEFAULT_FIRE_EXPENSES: FireExpenseLine[] = [];
 
+/** Net dividend payment after withholding tax (0–100%). */
+export function dividendNetEur(grossEur: number, dividendTaxRatePercent: number): number {
+  const tax = Math.min(100, Math.max(0, dividendTaxRatePercent)) / 100;
+  return Math.round(grossEur * (1 - tax) * 100) / 100;
+}
+
 export function monthlyExpensesTotal(lines: FireExpenseLine[]): number {
   return lines.reduce((s, l) => s + (Number.isFinite(l.monthlyEur) ? Math.max(0, l.monthlyEur) : 0), 0);
 }

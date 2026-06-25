@@ -1,10 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
-import { MARKET_INDEX_AI_CONFIG } from "../../src/marketAiPrompt";
-
-const GEMINI_MARKET_CONFIG = {
-  ...MARKET_INDEX_AI_CONFIG,
-  tools: [{ googleSearch: {} }],
-};
+import { MARKET_TOP_STORIES_AI_CONFIG } from "../../src/marketAiPrompt";
+import {
+  enrichStoriesWithGrounding,
+  extractGroundingChunks,
+  extractSearchEntryPointHtml,
+  parseTopStoriesJson,
+} from "../../src/marketTopStories";
 import { getGeminiApiKey } from "../aiSettings";
 import { generateWithFallback } from "./generateWithFallback";
 import {
@@ -18,20 +19,38 @@ import {
 } from "./modelSelection";
 import type { GenerateResult, MarketSummaryRequest } from "./types";
 
-function extractSummaryText(response: {
+const GEMINI_MARKET_CONFIG = {
+  ...MARKET_TOP_STORIES_AI_CONFIG,
+  tools: [{ googleSearch: {} }],
+};
+
+function extractFromResponse(response: {
   text?: string;
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
     finishReason?: string;
+    groundingMetadata?: unknown;
   }>;
-}): { summary: string; finishReason?: string } {
+}): {
+  summary: string;
+  stories?: ReturnType<typeof parseTopStoriesJson>;
+  searchEntryPointHtml?: string;
+  finishReason?: string;
+} {
   const candidate = response.candidates?.[0];
   const parts =
-    candidate?.content?.parts
-      ?.map((p) => p.text ?? "")
-      .join("") ?? "";
+    candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   const summary = response.text?.trim() || parts.trim() || "";
-  return { summary, finishReason: candidate?.finishReason };
+  const metadata = candidate?.groundingMetadata;
+  const chunks = extractGroundingChunks(metadata);
+  const parsed = parseTopStoriesJson(summary);
+  const stories = parsed ? enrichStoriesWithGrounding(parsed, chunks) : undefined;
+  return {
+    summary,
+    stories: stories ?? undefined,
+    searchEntryPointHtml: extractSearchEntryPointHtml(metadata),
+    finishReason: candidate?.finishReason,
+  };
 }
 
 async function discoverGeminiModels(apiKey: string): Promise<string[]> {
@@ -96,7 +115,7 @@ export async function generateGeminiMarketSummary(
         contents: prompt,
         config: GEMINI_MARKET_CONFIG,
       });
-      return extractSummaryText(response);
+      return extractFromResponse(response);
     },
     request.prompt,
     request.validation

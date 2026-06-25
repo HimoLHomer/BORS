@@ -1,12 +1,13 @@
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { PieLabelRenderProps } from 'recharts';
 import { formatPercentFi } from './formatNumber';
 
-/** Must match default <PieChart margin> for the allocation card (before pie nudge). */
-export const ALLOCATION_PIE_CHART_MARGIN = { top: 28, right: 48, bottom: 28, left: 48 } as const;
-export const ALLOCATION_PIE_OUTER_RADIUS_FRAC = 0.58;
-export const ALLOCATION_LABEL_OFFSETS_STORAGE_KEY = 'bors_allocation_callout_offsets_v1';
-export const ALLOCATION_CHROME_STORAGE_KEY = 'bors_allocation_chrome_v1';
+/** Must match default <PieChart margin> for the allocation card. */
+export const ALLOCATION_PIE_CHART_MARGIN = { top: 46, right: 72, bottom: 14, left: 72 } as const;
+export const ALLOCATION_PIE_PADDING_ANGLE = 1.2;
+export const ALLOCATION_PIE_OUTER_RADIUS_FRAC = 0.75;
+/** Shift left legend rows up from the chart top margin (negative = higher). */
+export const LEFT_LEGEND_Y_OFFSET_PX = -28;
 
 export type AllocationPieMargin = {
   top: number;
@@ -15,148 +16,57 @@ export type AllocationPieMargin = {
   left: number;
 };
 
-export type AllocationChromePrefs = {
-  pieNudgeX: number;
-  pieNudgeY: number;
-  labelFontPx: number;
+const RADIAL_STUB = 18;
+const TEXT_PAD = 6;
+const LABEL_FONT_PX = 9;
+const LABEL_EDGE_PAD = 6;
+/** Fixed vertical gap between legend rows (px). */
+const LEGEND_SLOT_GAP = 28;
+const LEGEND_SLOT_GAP_MIN = 20;
+/** Left-column legend slots — dynamic up to available chart height. */
+const LEFT_LEGEND_SLOTS_MAX = 16;
+const PIE_START_ANGLE = 90;
+const PIE_END_ANGLE = -270;
+
+export type AllocationSliceRow = {
+  key: string;
+  name: string;
+  /** Short ticker shown in pie callouts. */
+  label: string;
+  value: number;
+  percent: number;
 };
 
-/** Drag / slider limits for pie position (positive Y = lower in the card). */
-export const ALLOCATION_PIE_NUDGE_LIMITS = {
-  x: 80,
-  yMin: -40,
-  yMax: 100,
-} as const;
-
-const CHROME_DEFAULTS: AllocationChromePrefs = { pieNudgeX: 0, pieNudgeY: 0, labelFontPx: 11 };
-
-function clampNum(v: unknown, min: number, max: number, fallback: number): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
-
-export function loadAllocationChromePrefs(): AllocationChromePrefs {
-  try {
-    const raw = localStorage.getItem(ALLOCATION_CHROME_STORAGE_KEY);
-    if (!raw) return { ...CHROME_DEFAULTS };
-    const o = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      pieNudgeX: clampNum(
-        o.pieNudgeX,
-        -ALLOCATION_PIE_NUDGE_LIMITS.x,
-        ALLOCATION_PIE_NUDGE_LIMITS.x,
-        CHROME_DEFAULTS.pieNudgeX
-      ),
-      pieNudgeY: clampNum(
-        o.pieNudgeY,
-        ALLOCATION_PIE_NUDGE_LIMITS.yMin,
-        ALLOCATION_PIE_NUDGE_LIMITS.yMax,
-        CHROME_DEFAULTS.pieNudgeY
-      ),
-      labelFontPx: clampNum(o.labelFontPx, 8, 18, CHROME_DEFAULTS.labelFontPx),
-    };
-  } catch {
-    return { ...CHROME_DEFAULTS };
-  }
-}
-
-export function saveAllocationChromePrefs(prefs: AllocationChromePrefs): void {
-  try {
-    localStorage.setItem(ALLOCATION_CHROME_STORAGE_KEY, JSON.stringify(prefs));
-  } catch {
-    /* ignore */
-  }
-}
-
-const MIN_CHART_MARGIN = 8;
-
-function clampPieNudgeX(nudgeX: number): number {
-  const { x } = ALLOCATION_PIE_NUDGE_LIMITS;
-  return Math.min(x, Math.max(-x, nudgeX));
-}
-
-function clampPieNudgeY(nudgeY: number): number {
-  const { yMin, yMax } = ALLOCATION_PIE_NUDGE_LIMITS;
-  return Math.min(yMax, Math.max(yMin, nudgeY));
-}
-
-export function clampAllocationChromePrefs(prefs: AllocationChromePrefs): AllocationChromePrefs {
-  return {
-    pieNudgeX: clampPieNudgeX(prefs.pieNudgeX),
-    pieNudgeY: clampPieNudgeY(prefs.pieNudgeY),
-    labelFontPx: clampNum(prefs.labelFontPx, 8, 18, CHROME_DEFAULTS.labelFontPx),
-  };
-}
-
-/** Apply pie nudge via asymmetric margins (positive Y moves the pie down). */
-export function allocationPieMarginsWithNudge(
-  base: typeof ALLOCATION_PIE_CHART_MARGIN,
-  nudgeX: number,
-  nudgeY: number
-): AllocationPieMargin {
-  const nx = clampPieNudgeX(nudgeX);
-  const ny = clampPieNudgeY(nudgeY);
-  return {
-    top: Math.max(MIN_CHART_MARGIN, base.top + ny),
-    bottom: Math.max(MIN_CHART_MARGIN, base.bottom - ny),
-    left: Math.max(MIN_CHART_MARGIN, base.left + nx),
-    right: Math.max(MIN_CHART_MARGIN, base.right - nx),
-  };
-}
-
-const RADIAL_STUB = 18;
-const HORIZ_ARM = 58;
-const TEXT_PAD = 8;
-const MIN_STACK_GAP = 38;
-const NAME_MAX_LEN = 28;
-
-export type AllocationSliceRow = { key: string; name: string; value: number; percent: number };
-
-/** Base geometry before user drag offset (dx, dy). */
 export type AllocationCalloutLayout = {
   pEdge: { x: number; y: number };
   pKink: { x: number; y: number };
   pJoint: { x: number; y: number };
   yCenter: number;
+  side: 'L' | 'R';
   sign: 1 | -1;
   displayName: string;
   pctLine: string;
   anchor: 'start' | 'end';
 };
 
-export type AllocationLabelOffset = { dx: number; dy: number };
+const STRAIGHT_Y_EPS = 8;
 
-export function loadAllocationLabelOffsets(): Record<string, AllocationLabelOffset> {
-  try {
-    const raw = localStorage.getItem(ALLOCATION_LABEL_OFFSETS_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, AllocationLabelOffset> = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (!k.trim() || !v || typeof v !== 'object') continue;
-      const o = v as { dx?: unknown; dy?: unknown };
-      const dx = typeof o.dx === 'number' && Number.isFinite(o.dx) ? o.dx : 0;
-      const dy = typeof o.dy === 'number' && Number.isFinite(o.dy) ? o.dy : 0;
-      out[k] = { dx, dy };
-    }
-    return out;
-  } catch {
-    return {};
+/** At most one bend: straight when aligned, else elbow at horizontal midpoint. */
+function calloutPathD(
+  side: 'L' | 'R',
+  pEdge: { x: number; y: number },
+  jx: number,
+  yc: number
+): string {
+  if (side === 'R') {
+    return `M ${pEdge.x} ${pEdge.y} L ${jx} ${pEdge.y}`;
   }
-}
-
-export function saveAllocationLabelOffsets(offsets: Record<string, AllocationLabelOffset>): void {
-  try {
-    localStorage.setItem(ALLOCATION_LABEL_OFFSETS_STORAGE_KEY, JSON.stringify(offsets));
-  } catch {
-    /* ignore */
+  if (Math.abs(pEdge.y - yc) <= STRAIGHT_Y_EPS) {
+    return `M ${pEdge.x} ${pEdge.y} L ${jx} ${pEdge.y}`;
   }
-}
-
-function mathSign(n: number): number {
-  if (n === 0) return 0;
-  return n > 0 ? 1 : -1;
+  const span = Math.max(16, pEdge.x - jx);
+  const ex = jx + span * 0.5;
+  return `M ${pEdge.x} ${pEdge.y} L ${ex} ${yc} L ${jx} ${yc}`;
 }
 
 function polar(cx: number, cy: number, radius: number, angleDeg: number) {
@@ -167,12 +77,16 @@ function polar(cx: number, cy: number, radius: number, angleDeg: number) {
   };
 }
 
+function mathSign(n: number): number {
+  if (n === 0) return 0;
+  return n > 0 ? 1 : -1;
+}
+
 function allocationPieMidAngles(
   slices: { key: string; value: number }[],
-  startAngle = 90,
-  endAngle = -270,
-  paddingAngle = 0.6,
-  minAngle = 0
+  startAngle = PIE_START_ANGLE,
+  endAngle = PIE_END_ANGLE,
+  paddingAngle = ALLOCATION_PIE_PADDING_ANGLE
 ): { key: string; midAngle: number }[] {
   const deltaAngle = endAngle - startAngle;
   const absDelta = Math.abs(deltaAngle);
@@ -181,15 +95,7 @@ function allocationPieMidAngles(
   const sum = slices.reduce((a, s) => a + (Number.isFinite(s.value) && s.value > 0 ? s.value : 0), 0);
   if (sum <= 0) return [];
 
-  const needsMin =
-    minAngle > 0 &&
-    slices.some((entry) => {
-      const v = Number.isFinite(entry.value) && entry.value > 0 ? entry.value : 0;
-      return v !== 0 && (v / sum) * absDelta < minAngle;
-    });
-  const effectiveMinAngle = needsMin ? minAngle : 0;
-  const realTotalAngle = absDelta - notZero * effectiveMinAngle - totalPadding;
-
+  const realTotalAngle = absDelta - totalPadding;
   const out: { key: string; midAngle: number }[] = [];
   let prevEnd: number | undefined;
 
@@ -200,8 +106,7 @@ function allocationPieMidAngles(
       i === 0
         ? startAngle
         : (prevEnd as number) + mathSign(deltaAngle) * paddingAngle * (val !== 0 ? 1 : 0);
-    const tempEnd =
-      tempStart + mathSign(deltaAngle) * ((val !== 0 ? effectiveMinAngle : 0) + pct * realTotalAngle);
+    const tempEnd = tempStart + mathSign(deltaAngle) * pct * realTotalAngle;
     out.push({ key: entry.key, midAngle: (tempStart + tempEnd) / 2 });
     prevEnd = tempEnd;
   });
@@ -209,66 +114,31 @@ function allocationPieMidAngles(
   return out;
 }
 
-function truncateName(name: string): string {
+function truncateName(name: string, maxChars: number): string {
   const t = name.trim() || '—';
-  return t.length > NAME_MAX_LEN ? `${t.slice(0, NAME_MAX_LEN - 2)}\u2026` : t;
+  const limit = Math.max(4, maxChars);
+  return t.length > limit ? `${t.slice(0, limit - 1)}\u2026` : t;
 }
 
-function stackNaturalCenters(
-  items: { key: string; yCenter: number }[],
-  minY: number,
-  maxY: number,
-  gap: number
-): Map<string, number> {
-  const map = new Map<string, number>();
-  if (items.length === 0) return map;
-  const sorted = [...items].sort((a, b) => a.yCenter - b.yCenter);
-  const assigned = sorted.map((s) => s.yCenter);
-
-  for (let i = 1; i < assigned.length; i++) {
-    assigned[i] = Math.max(sorted[i].yCenter, assigned[i - 1] + gap);
-  }
-
-  if (assigned[assigned.length - 1] > maxY) {
-    assigned[assigned.length - 1] = maxY;
-    for (let i = assigned.length - 2; i >= 0; i--) {
-      assigned[i] = Math.min(assigned[i], assigned[i + 1] - gap);
-    }
-  }
-
-  if (assigned[0] < minY) {
-    assigned[0] = minY;
-    for (let i = 1; i < assigned.length; i++) {
-      assigned[i] = Math.max(assigned[i], assigned[i - 1] + gap);
-    }
-  }
-
-  sorted.forEach((s, i) => map.set(s.key, assigned[i]));
-  return map;
+function maxLabelChars(maxPx: number, fontPx: number): number {
+  const avgCharPx = fontPx * 0.52;
+  return Math.max(4, Math.floor(maxPx / avgCharPx));
 }
 
-export function allocationCalloutRendered(
-  base: AllocationCalloutLayout,
-  dx: number,
-  dy: number,
-  labelFontPx: number
-) {
-  const jx = base.pJoint.x + dx;
-  const jy = base.pJoint.y + dy;
-  const yc = base.yCenter + dy;
-  const pathD = `M ${base.pEdge.x} ${base.pEdge.y} L ${base.pKink.x} ${base.pKink.y} L ${jx} ${jy} L ${jx} ${yc}`;
+function allocationCalloutRendered(base: AllocationCalloutLayout) {
+  const jx = base.pJoint.x;
+  const yc = base.yCenter;
+  const pathD = calloutPathD(base.side, base.pEdge, jx, yc);
   const tx = jx + base.sign * TEXT_PAD;
-  const nameFont = Math.round(Math.min(18, Math.max(8, labelFontPx)));
+  const nameFont = LABEL_FONT_PX;
   const pctFont = Math.max(8, nameFont - 1);
   const nameLift = Math.max(5, Math.round(nameFont * 0.58));
   const pctDrop = Math.max(6, Math.round(nameFont * 0.82));
-  const nameY = yc - nameLift;
-  const pctY = yc + pctDrop;
   return {
     pathD,
     tx,
-    nameY,
-    pctY,
+    nameY: yc - nameLift,
+    pctY: yc + pctDrop,
     anchor: base.anchor,
     displayName: base.displayName,
     pctLine: base.pctLine,
@@ -277,6 +147,46 @@ export function allocationCalloutRendered(
   };
 }
 
+/** Fixed Y centers for legend rows, top-aligned in the label band. */
+function fixedLegendSlotYs(slotCount: number, minY: number, gap: number): number[] {
+  if (slotCount <= 0) return [];
+  return Array.from({ length: slotCount }, (_, i) => minY + i * gap);
+}
+
+/** Fit all non-dominant holdings on the left; compress row gap before dropping smallest labels. */
+function planLeftLegendSlots(
+  othersCount: number,
+  minY: number,
+  chartBottom: number
+): { slotCount: number; gap: number; sliceFrom: number } {
+  if (othersCount <= 0) {
+    return { slotCount: 0, gap: LEGEND_SLOT_GAP, sliceFrom: 0 };
+  }
+
+  const available = Math.max(0, chartBottom - minY);
+  const cappedCount = Math.min(othersCount, LEFT_LEGEND_SLOTS_MAX);
+  let slotCount = cappedCount;
+  let gap = LEGEND_SLOT_GAP;
+
+  if (slotCount > 1) {
+    const maxAtDefaultGap = Math.max(1, Math.floor(available / gap) + 1);
+    if (slotCount > maxAtDefaultGap) {
+      slotCount = maxAtDefaultGap;
+      gap = Math.max(LEGEND_SLOT_GAP_MIN, available / (slotCount - 1));
+      const maxAtMinGap = Math.max(1, Math.floor(available / gap) + 1);
+      if (slotCount > maxAtMinGap) slotCount = maxAtMinGap;
+    }
+  }
+
+  slotCount = Math.min(slotCount, cappedCount);
+  const sliceFrom = Math.max(0, othersCount - slotCount);
+  return { slotCount, gap, sliceFrom };
+}
+
+/**
+ * Fixed-slot legend layout: largest holding on the right; others fill left slots with the
+ * smallest at the top and larger holdings lower. Slot Y positions and column X stay constant.
+ */
 export function buildAllocationPieCalloutMap(
   width: number,
   height: number,
@@ -300,154 +210,78 @@ export function buildAllocationPieCalloutMap(
   const cx = ml + cw / 2;
   const cy = mt + ch / 2;
   const or = ALLOCATION_PIE_OUTER_RADIUS_FRAC * maxR;
+  const pieLeft = cx - or;
+  const pieRight = cx + or;
+
+  const minY = Math.max(mt + LEFT_LEGEND_Y_OFFSET_PX, LABEL_FONT_PX + TEXT_PAD);
+
+  const leftLabelGap = 76;
+  const rightLabelGap = 58;
+  const leftJointX = Math.max(ml + 36, pieLeft - leftLabelGap);
+  const rightJointX = Math.min(width - mr - 48, pieRight + rightLabelGap);
+  const leftTextMaxPx = leftJointX - TEXT_PAD - ml - LABEL_EDGE_PAD;
+  const rightTextMaxPx = width - mr - LABEL_EDGE_PAD - (rightJointX + TEXT_PAD);
 
   const mids = allocationPieMidAngles(
     slices.map((s) => ({ key: s.key, value: s.value })),
-    90,
-    -270,
-    0.6,
-    0
+    PIE_START_ANGLE,
+    PIE_END_ANGLE,
+    ALLOCATION_PIE_PADDING_ANGLE
   );
   const midByKey = new Map(mids.map((m) => [m.key, m.midAngle]));
 
-  type Nom = {
-    key: string;
-    side: 'L' | 'R';
-    yNat: number;
-    pEdge: { x: number; y: number };
-    pKink: { x: number; y: number };
-    sign: 1 | -1;
-    pJoint: { x: number; y: number };
-    displayName: string;
-    pctLine: string;
-  };
+  const ranked = [...slices].sort((a, b) => b.value - a.value);
+  const dominant = ranked[0]!;
+  const others = ranked.slice(1);
+  const chartBottom = mt + ch - 8;
+  const { slotCount, gap, sliceFrom } = planLeftLegendSlots(others.length, minY, chartBottom);
+  const othersForLeft = others.slice(sliceFrom);
+  const leftSlotYs = fixedLegendSlotYs(othersForLeft.length, minY, gap);
 
-  const noms: Nom[] = [];
-  for (const sl of slices) {
+  const place = (
+    sl: AllocationSliceRow,
+    side: 'L' | 'R',
+    yCenter: number,
+    jointX: number,
+    textMaxPx: number
+  ) => {
     const midAngle = midByKey.get(sl.key);
-    if (midAngle == null) continue;
+    if (midAngle == null) return;
     const pEdge = polar(cx, cy, or, midAngle);
     const pKink = polar(cx, cy, or + RADIAL_STUB, midAngle);
-    const outwardRight = pKink.x >= cx;
-    const sign: 1 | -1 = outwardRight ? 1 : -1;
-    const pJoint = { x: pKink.x + sign * HORIZ_ARM, y: pKink.y };
-    noms.push({
-      key: sl.key,
-      side: outwardRight ? 'R' : 'L',
-      yNat: pJoint.y,
+    const sign: 1 | -1 = side === 'R' ? 1 : -1;
+    const anchor: 'start' | 'end' = side === 'R' ? 'start' : 'end';
+    const yc = side === 'R' ? pEdge.y : yCenter;
+    result.set(sl.key, {
       pEdge,
       pKink,
+      pJoint: { x: jointX, y: yc },
+      yCenter: yc,
+      side,
       sign,
-      pJoint,
-      displayName: truncateName(sl.name),
+      displayName: truncateName(sl.label, maxLabelChars(textMaxPx, LABEL_FONT_PX)),
       pctLine: formatPercentFi(sl.percent, 1),
-    });
-  }
-
-  const padY = 22;
-  const minY = mt + padY;
-  const maxY = height - mb - padY;
-
-  const left = noms.filter((n) => n.side === 'L').map((n) => ({ key: n.key, yCenter: n.yNat }));
-  const right = noms.filter((n) => n.side === 'R').map((n) => ({ key: n.key, yCenter: n.yNat }));
-  const yLeft = stackNaturalCenters(left, minY, maxY, MIN_STACK_GAP);
-  const yRight = stackNaturalCenters(right, minY, maxY, MIN_STACK_GAP);
-
-  for (const n of noms) {
-    const yCenter = (n.side === 'L' ? yLeft : yRight).get(n.key) ?? n.yNat;
-    const anchor: 'start' | 'end' = n.sign === 1 ? 'start' : 'end';
-    result.set(n.key, {
-      pEdge: n.pEdge,
-      pKink: n.pKink,
-      pJoint: n.pJoint,
-      yCenter,
-      sign: n.sign,
-      displayName: n.displayName,
-      pctLine: n.pctLine,
       anchor,
     });
-  }
+  };
+
+  place(dominant, 'R', 0, rightJointX, rightTextMaxPx);
+  [...othersForLeft].reverse().forEach((sl, i) => {
+    const yCenter = leftSlotYs[i];
+    if (yCenter == null) return;
+    place(sl, 'L', yCenter, leftJointX, leftTextMaxPx);
+  });
 
   return result;
 }
 
 const LINE_STROKE = 'rgba(96, 165, 250, 0.72)';
-const HIT_STROKE = 'rgba(255,255,255,0.012)';
 
-export function allocationPieSliceKey(props: PieLabelRenderProps): string | null {
-  const top = props as unknown as Record<string, unknown>;
-  if (typeof top.key === 'string' && top.key.length > 0) return top.key;
-  const pl = top.payload as Record<string, unknown> | undefined;
-  if (pl && typeof pl.key === 'string' && pl.key.length > 0) return pl.key;
-  return null;
-}
-
-export function allocationCalloutFromLabelProps(props: PieLabelRenderProps): AllocationCalloutLayout | null {
-  const { cx, cy, midAngle, outerRadius, percent, payload, name } = props;
-  if (cx == null || cy == null || midAngle == null || typeof outerRadius !== 'number') return null;
-  const pl = payload as { name?: string; percent?: number } | undefined;
-  const pct =
-    typeof pl?.percent === 'number'
-      ? pl.percent
-      : typeof percent === 'number'
-        ? percent * 100
-        : 0;
-  const displayName = truncateName(String(pl?.name ?? name ?? '—'));
-  const pctLine = formatPercentFi(pct, 1);
-
-  const pEdge = polar(cx, cy, outerRadius, midAngle);
-  const pKink = polar(cx, cy, outerRadius + RADIAL_STUB, midAngle);
-  const outwardRight = pKink.x >= cx;
-  const sign: 1 | -1 = outwardRight ? 1 : -1;
-  const pJoint = { x: pKink.x + sign * HORIZ_ARM, y: pKink.y };
-  const yCenter = pJoint.y;
-  const anchor: 'start' | 'end' = sign === 1 ? 'start' : 'end';
-  return {
-    pEdge,
-    pKink,
-    pJoint,
-    yCenter,
-    sign,
-    displayName,
-    pctLine,
-    anchor,
-  };
-}
-
-export function renderAllocationPieCalloutFromLayout(
-  props: PieLabelRenderProps,
-  layout: Map<string, AllocationCalloutLayout>,
-  offsets: Readonly<Record<string, AllocationLabelOffset | undefined>>,
-  opts: {
-    draggingKey: string | null;
-    onPointerDown: (sliceKey: string, e: ReactPointerEvent<SVGGElement>) => void;
-    labelFontPx: number;
-  }
-): ReactNode {
-  const key = allocationPieSliceKey(props);
-  if (key == null || key === 'empty') return null;
-  const base = layout.get(key) ?? allocationCalloutFromLabelProps(props);
-  if (!base) return null;
-
-  const off = offsets[key] ?? { dx: 0, dy: 0 };
-  const g = allocationCalloutRendered(base, off.dx, off.dy, opts.labelFontPx);
-  const dragging = opts.draggingKey === key;
+function renderOneCallout(sliceKey: string, base: AllocationCalloutLayout): ReactNode {
+  const g = allocationCalloutRendered(base);
 
   return (
-    <g
-      className="allocation-pie-callout"
-      style={{ cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none' }}
-      onPointerDown={(e) => opts.onPointerDown(key, e)}
-    >
-      <path
-        d={g.pathD}
-        fill="none"
-        stroke={HIT_STROKE}
-        strokeWidth={14}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        style={{ pointerEvents: 'stroke' }}
-      />
+    <g key={sliceKey} className="allocation-pie-callout">
       <path
         d={g.pathD}
         fill="none"
@@ -466,7 +300,7 @@ export function renderAllocationPieCalloutFromLayout(
         stroke="rgba(29, 78, 216, 0.55)"
         strokeWidth={0.5}
         paintOrder="stroke fill"
-        style={{ fontSize: g.nameFont, fontWeight: 700, pointerEvents: 'none', userSelect: 'none' }}
+        style={{ fontSize: g.nameFont, fontWeight: 600, pointerEvents: 'none', userSelect: 'none' }}
       >
         {g.displayName}
       </text>
@@ -491,4 +325,56 @@ export function renderAllocationPieCalloutFromLayout(
       </text>
     </g>
   );
+}
+
+/** Render all fixed-slot callouts in one SVG layer. */
+export function AllocationPieCalloutLayer({
+  layout,
+}: {
+  layout: Map<string, AllocationCalloutLayout>;
+}): ReactNode {
+  if (layout.size === 0) return null;
+  return (
+    <g className="allocation-pie-callouts">
+      {[...layout.entries()].map(([sliceKey, base]) => renderOneCallout(sliceKey, base))}
+    </g>
+  );
+}
+
+/** Pie `label` renderer — matches slices by index (Recharts 3 omits custom `key` from label props). */
+export function createAllocationPieLabelRenderer(
+  slices: AllocationSliceRow[],
+  layout: Map<string, AllocationCalloutLayout>
+): (props: PieLabelRenderProps) => ReactNode {
+  return (props) => {
+    const idx = props.index;
+    if (typeof idx !== 'number' || idx < 0 || idx >= slices.length) return null;
+    const slice = slices[idx]!;
+    const base = layout.get(slice.key);
+    if (!base) return null;
+    return renderOneCallout(slice.key, base);
+  };
+}
+
+export function allocationPieSliceKey(props: PieLabelRenderProps): string | null {
+  const top = props as unknown as Record<string, unknown>;
+  const pl = top.payload as Record<string, unknown> | undefined;
+  if (pl && typeof pl.key === 'string' && pl.key.length > 0) return pl.key;
+  if (typeof top.index === 'number' && pl && typeof pl.name === 'string') {
+    const name = pl.name;
+    if (name.length > 0) return name;
+  }
+  return null;
+}
+
+export function renderAllocationPieCalloutFromLayout(
+  props: PieLabelRenderProps,
+  layout: Map<string, AllocationCalloutLayout>
+): ReactNode {
+  const key = allocationPieSliceKey(props);
+  if (key == null || key === 'empty') return null;
+  const base = layout.get(key);
+  if (!base) return null;
+
+  return renderOneCallout(key, base);
 }

@@ -82,3 +82,18 @@ export function formatCurrency(value: number, currency: string = 'EUR'): string 
     maximumFractionDigits: 2,
   }).format(value);
 }
+
+/** English currency display (e.g. `€1,234.56`). */
+export function formatCurrencyEn(value: number, currency: string = 'EUR'): string {
+  const ccy = currency.toUpperCase();
+  const opts = {
+    style: 'currency' as const,
+    currency: ccy,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  };
+  if (!Number.isFinite(value)) {
+    return new Intl.NumberFormat('en-US', opts).format(0);
+  }
+  return new Intl.NumberFormat('en-US', opts).format(value);
+}

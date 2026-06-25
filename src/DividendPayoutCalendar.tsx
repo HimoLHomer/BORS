@@ -26,6 +26,7 @@ import {
   setRedeemMuted,
 } from './redeemDividendFeedback';
 import { SkeletonDividendCalendar } from './SkeletonPulse';
+import { loadFireInputs, FIRE_INPUTS_CHANGED_EVENT } from './fireStorage';
 
 const CALENDAR_TABLE_MIN = 280;
 
@@ -108,6 +109,9 @@ export function DividendPayoutCalendar({
   hasHoldings,
 }: DividendPayoutCalendarProps) {
   const [redeemed, setRedeemed] = useState<RedeemedDividendPayment[]>(() => loadRedeemed());
+  const [dividendTaxRatePercent, setDividendTaxRatePercent] = useState(
+    () => loadFireInputs().capital.dividendTaxRatePercent
+  );
   const [muted, setMuted] = useState(() => isRedeemMuted());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exitingId, setExitingId] = useState<string | null>(null);
@@ -119,9 +123,15 @@ export function DividendPayoutCalendar({
     return () => window.removeEventListener(REDEEMED_DIVIDENDS_CHANGED_EVENT, sync);
   }, []);
 
+  useEffect(() => {
+    const syncTax = () => setDividendTaxRatePercent(loadFireInputs().capital.dividendTaxRatePercent);
+    window.addEventListener(FIRE_INPUTS_CHANGED_EVENT, syncTax);
+    return () => window.removeEventListener(FIRE_INPUTS_CHANGED_EVENT, syncTax);
+  }, []);
+
   const projected = useMemo(
-    () => buildProjectedPayments(apiRows, manualRows, redeemed),
-    [apiRows, manualRows, redeemed]
+    () => buildProjectedPayments(apiRows, manualRows, redeemed, undefined, dividendTaxRatePercent),
+    [apiRows, manualRows, redeemed, dividendTaxRatePercent]
   );
 
   const upcomingGroups = useMemo(() => groupScheduledByMonth(projected, false), [projected]);

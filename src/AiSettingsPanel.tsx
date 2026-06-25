@@ -227,7 +227,7 @@ export function AiSettingsPanel() {
             Market AI
           </h3>
           <p className="text-xs text-text-s leading-relaxed">
-            Optional. Powers AI summaries on the Market screen. Keys are stored locally in{" "}
+            Optional. Powers Market Top Stories (Gemini + web search). Keys are stored locally in{" "}
             <span className="font-mono text-accent/90">{shortEnv ?? ".env.local"}</span> on this
             device and are never sent to GitHub.
           </p>
@@ -255,14 +255,12 @@ export function AiSettingsPanel() {
             <p className="mt-1.5 text-[11px] text-text-s leading-relaxed">
               {provider === "gemini" ? (
                 <>
-                  <strong className="text-text-p font-semibold">Recommended.</strong> Best for
-                  same-day headlines (Google Search).
+                  <strong className="text-text-p font-semibold">Required for Top Stories.</strong>{" "}
+                  Fetches up to five market headlines via Google Search.
                 </>
               ) : (
                 <>
-                  Move-based summaries only — no live web. Leave model on{" "}
-                  <strong className="text-text-p font-semibold">Automatic</strong> unless you need a
-                  specific OpenAI model.
+                  Top Stories need Gemini (web search). OpenAI cannot fetch live headlines.
                 </>
               )}
             </p>

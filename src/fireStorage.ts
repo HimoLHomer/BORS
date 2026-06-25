@@ -126,9 +126,12 @@ export function loadFireInputs(): FireStoredInputs {
   }
 }
 
+export const FIRE_INPUTS_CHANGED_EVENT = 'bors-fire-inputs-changed';
+
 export function saveFireInputs(data: FireStoredInputs): void {
   try {
     localStorage.setItem(FIRE_STORAGE_KEY, JSON.stringify(data));
+    window.dispatchEvent(new Event(FIRE_INPUTS_CHANGED_EVENT));
   } catch {
     /* ignore */
   }

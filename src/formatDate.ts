@@ -36,6 +36,25 @@ export function formatMonthYearFi(monthKey: string): string {
   );
 }
 
+/** English short label for charts (e.g. Jan 14). */
+export function formatShortMonthDayEn(isoDate: string): string {
+  const d = parseIsoDateOnly(isoDate);
+  if (!d) return isoDate;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(d);
+}
+
+/** English date for chart tooltips (e.g. May 14, 2026). */
+export function formatDateEn(isoDate: string | null | undefined): string {
+  if (isoDate == null || !String(isoDate).trim()) return '—';
+  const d = parseIsoDateOnly(String(isoDate));
+  if (!d) return String(isoDate);
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(d);
+}
+
 /** Short label for charts (Finnish month + day). */
 export function formatShortMonthDayFi(isoDate: string): string {
   const d = parseIsoDateOnly(isoDate);

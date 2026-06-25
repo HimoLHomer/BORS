@@ -1,31 +1,29 @@
 import {
-  buildMarketSummaryRetrySuffix,
-  validateMarketSummary,
-  type MarketSummaryValidationContext,
-} from "../../src/marketAiValidation";
+  parseTopStoriesJson,
+  type MarketTopStory,
+} from "../../src/marketTopStories";
 import {
-  countBullets,
-  parseAiError,
-  shouldTryNextModel,
-} from "./modelSelection";
-import type {
-  AiProviderId,
-  GenerateResult,
-  MarketSummaryResult,
-} from "./types";
+  TOP_STORIES_STRICT_SUFFIX,
+  buildTopStoriesRetrySuffix,
+  validateTopStories,
+  type MarketTopStoriesValidationContext,
+} from "../../src/marketTopStoriesValidation";
+import { parseAiError, shouldTryNextModel } from "./modelSelection";
+import type { AiProviderId, GenerateResult, MarketSummaryResult } from "./types";
 
-const STRICT_SUFFIX =
-  '\n\nOutput ONLY three lines, each starting with "- " (hyphen space). No other text.';
+export type GenerateContentResult = {
+  summary: string;
+  stories?: MarketTopStory[];
+  searchEntryPointHtml?: string;
+  finishReason?: string;
+};
 
 export async function generateWithFallback(
   provider: AiProviderId,
   models: string[],
-  generate: (
-    model: string,
-    prompt: string
-  ) => Promise<{ summary: string; finishReason?: string }>,
+  generate: (model: string, prompt: string) => Promise<GenerateContentResult>,
   prompt: string,
-  validation?: MarketSummaryValidationContext
+  validation?: MarketTopStoriesValidationContext
 ): Promise<GenerateResult> {
   if (models.length === 0) {
     return {
@@ -42,32 +40,55 @@ export async function generateWithFallback(
 
   for (const model of models) {
     try {
-      let { summary, finishReason } = await generate(model, prompt);
+      let { summary, stories, searchEntryPointHtml, finishReason } = await generate(
+        model,
+        prompt
+      );
 
-      if (countBullets(summary) < 2) {
-        const retry = await generate(model, prompt + STRICT_SUFFIX);
-        if (retry.summary.length > summary.length) {
-          summary = retry.summary;
-          finishReason = retry.finishReason;
-        }
+      let parsed = stories ?? parseTopStoriesJson(summary) ?? [];
+
+      if (parsed.length === 0) {
+        const retry = await generate(model, prompt + TOP_STORIES_STRICT_SUFFIX);
+        summary = retry.summary;
+        searchEntryPointHtml = retry.searchEntryPointHtml ?? searchEntryPointHtml;
+        finishReason = retry.finishReason ?? finishReason;
+        parsed = retry.stories ?? parseTopStoriesJson(summary) ?? [];
       }
 
-      if (validation) {
-        const check = validateMarketSummary(summary, validation);
-        if (!check.ok) {
-          const suffix = buildMarketSummaryRetrySuffix(check.reasons, validation);
+      if (validation && parsed.length > 0) {
+        let check = validateTopStories(parsed, validation);
+        if (check.ok === false) {
+          const suffix = buildTopStoriesRetrySuffix(check.reasons);
           const retry = await generate(model, prompt + suffix);
-          if (retry.summary.trim()) {
-            summary = retry.summary;
-            finishReason = retry.finishReason;
+          const retryParsed = retry.stories ?? parseTopStoriesJson(retry.summary) ?? [];
+          if (retryParsed.length > 0) {
+            check = validateTopStories(retryParsed, validation);
+            if (check.ok) {
+              parsed = check.stories;
+              searchEntryPointHtml = retry.searchEntryPointHtml ?? searchEntryPointHtml;
+              finishReason = retry.finishReason ?? finishReason;
+            }
           }
+        } else {
+          parsed = check.stories;
         }
       }
 
-      if (!summary) summary = "Summary unavailable.";
+      if (validation && parsed.length > 0) {
+        const finalCheck = validateTopStories(parsed, validation);
+        parsed = finalCheck.ok ? finalCheck.stories : [];
+      }
+
+      if (parsed.length === 0) {
+        summary = summary.trim() || "Top stories unavailable.";
+      } else {
+        summary = "";
+      }
 
       const result: MarketSummaryResult = {
         summary,
+        stories: parsed.length > 0 ? parsed : undefined,
+        searchEntryPointHtml,
         model,
         provider,
         finishReason,
@@ -81,7 +102,7 @@ export async function generateWithFallback(
   }
 
   const err = parseAiError(lastError, provider);
-  console.error(`Market AI summary failed (${provider}):`, lastError);
+  console.error(`Market AI top stories failed (${provider}):`, lastError);
   return {
     ok: false,
     error: { ...err, provider },
