@@ -2,7 +2,7 @@
   "name": "bors",
   "productName": "BÖRS",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Local-first portfolio dashboard",
   "author": "BORS",
   "main": "electron/main.cjs",
@@ -14,14 +14,18 @@
     "dev": "tsx server.ts",
     "build": "vite build && node scripts/build-server.mjs",
     "start": "node dist/server.cjs",
-    "clean": "rm -rf dist server.js",
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
     "verify:cash": "tsx scripts/verify-cash-api.mts",
     "verify:portfolio": "tsx scripts/verify-portfolio-api.mts",
+    "verify:market": "tsx scripts/verify-market-api.mts",
     "verify:prod": "tsx scripts/verify-production-build.mts",
+    "test:unit": "vitest run",
     "test:ai": "tsx scripts/test-model-selection.mts",
     "test:top-stories": "tsx scripts/test-top-stories-validation.mts",
-    "test:release": "npm run lint && npm run test:ai && npm run test:top-stories && npm run verify:portfolio && npm run verify:prod",
+    "test:history-backfill": "tsx scripts/test-portfolio-history-backfill.mts",
+    "test:release": "npm run lint && npm run test:unit && npm run test:ai && npm run test:top-stories && npm run test:history-backfill && npm run verify:cash && npm run verify:portfolio && npm run verify:market && npm run verify:prod",
+    "build:sp500": "tsx scripts/build-sp500-json.mts",
     "rebuild:native": "npm rebuild better-sqlite3",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
     "icons": "node scripts/generate-icons.mjs",
@@ -77,8 +81,6 @@
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.10.0",
-    "clsx": "^2.1.1",
-    "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
@@ -87,8 +89,6 @@
     "react-dom": "^19.0.1",
     "react-markdown": "^10.1.0",
     "recharts": "^3.8.1",
-    "tailwind-merge": "^3.6.0",
-    "vite": "^6.2.3",
     "yahoo-finance2": "^3.14.0"
   },
   "devDependencies": {
@@ -96,7 +96,6 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
-    "autoprefixer": "^10.4.21",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
@@ -105,6 +104,6 @@
     "to-ico": "^1.1.5",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vitest": "^4.1.9"
   }
 }

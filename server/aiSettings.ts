@@ -173,41 +173,4 @@ export function registerAiSettingsRoutes(app: Express): void {
       res.status(500).json({ error: message });
     }
   });
-
-  /** @deprecated Use GET /api/settings/ai */
-  app.get("/api/settings/gemini", (_req: Request, res: Response) => {
-    const s = loadAiSettingsSnapshot();
-    res.json({
-      configured: s.gemini.configured,
-      maskedKey: s.gemini.maskedKey,
-      envFile: s.envFile,
-    });
-  });
-
-  /** @deprecated Use PUT /api/settings/ai */
-  app.put("/api/settings/gemini", (req: Request, res: Response) => {
-    const body = req.body as { apiKey?: unknown };
-    if (typeof body.apiKey !== "string") {
-      res.status(400).json({ error: "apiKey must be a string" });
-      return;
-    }
-    try {
-      const snapshot = saveAiSettings({ geminiApiKey: body.apiKey });
-      res.json({
-        configured: snapshot.gemini.configured,
-        maskedKey: snapshot.gemini.maskedKey,
-        envFile: snapshot.envFile,
-        message: snapshot.gemini.configured ? "Gemini API key saved." : "Gemini API key removed.",
-      });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Could not save API key";
-      res.status(500).json({ error: message });
-    }
-  });
 }
-
-/** @deprecated Use aiEnvFilePath */
-export const geminiEnvFilePath = aiEnvFilePath;
-
-/** @deprecated Use maskApiKey */
-export const maskGeminiApiKey = maskApiKey;

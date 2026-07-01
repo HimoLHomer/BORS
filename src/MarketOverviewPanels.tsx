@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
@@ -9,7 +9,14 @@ import { friendlyAiErrorMessage } from './aiErrorMessage';
 import { MARKET_PANEL, MARKET_SUBCARD } from './marketTheme';
 import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
 import type { MarketHeatmapMover, MarketSectorBreadth } from './marketAiPrompt';
-import { EMPTY_TOP_STORIES_USER_MESSAGE, sanitizeTopStoriesFallback, type MarketTopStory } from './marketTopStories';
+import {
+  EMPTY_TOP_STORIES_USER_MESSAGE,
+  formatStoryReferenceLabel,
+  sanitizeTopStories,
+  sanitizeTopStoriesFallback,
+  storyReferencesForDisplay,
+  type MarketTopStory,
+} from './marketTopStories';
 
 export type MarketQuoteSnapshot = {
   id: string;
@@ -89,11 +96,9 @@ type TopMoversPayload = {
 function TopStoriesList({
   stories,
   fallbackText,
-  searchEntryPointHtml,
 }: {
   stories: MarketTopStory[];
   fallbackText: string;
-  searchEntryPointHtml?: string | null;
 }) {
   const safeFallback = sanitizeTopStoriesFallback(fallbackText);
 
@@ -115,33 +120,39 @@ function TopStoriesList({
   return (
     <div className="market-top-stories space-y-3">
       <ul className="space-y-3 list-none m-0 p-0">
-        {stories.map((story, i) => (
+        {sanitizeTopStories(stories).map((story, i) => {
+          const references = storyReferencesForDisplay(story);
+          return (
           <li key={`${story.headline}-${i}`} className="border-b border-border/30 pb-3 last:border-0 last:pb-0">
-            {story.url ? (
-              <a
-                href={story.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs sm:text-sm text-text-p leading-snug hover:text-accent transition-colors line-clamp-3"
-              >
-                {story.headline}
-              </a>
-            ) : (
-              <p className="text-xs sm:text-sm text-text-p leading-snug line-clamp-3">{story.headline}</p>
-            )}
-            <p className="text-[10px] text-text-s/70 mt-1 truncate">{story.source}</p>
+            <p className="text-xs sm:text-sm text-text-p leading-snug line-clamp-3">{story.headline}</p>
+            {references.length > 0 ? (
+              <ul className="mt-1.5 space-y-1 list-none m-0 p-0">
+                {references.map((ref, j) => (
+                  <li key={`${ref.title}-${j}`}>
+                    {ref.url ? (
+                      <a
+                        href={ref.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={ref.url}
+                        className="text-[10px] text-accent hover:text-accent/80 underline underline-offset-2 decoration-accent/40 hover:decoration-accent transition-colors block"
+                      >
+                        <span className="truncate block">{ref.title.trim() || formatStoryReferenceLabel(ref)}</span>
+                        <span className="truncate block text-[9px] text-text-s/50 font-normal no-underline mt-0.5">
+                          {ref.url}
+                        </span>
+                      </a>
+                    ) : (
+                      <span className="text-[10px] text-text-s/70 truncate block">{ref.title.trim()}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </li>
-        ))}
+          );
+        })}
       </ul>
-      {searchEntryPointHtml ? (
-        <details className="text-[10px] text-text-s/70">
-          <summary className="cursor-pointer hover:text-text-s">Google Search suggestions</summary>
-          <div
-            className="mt-2 overflow-x-auto"
-            dangerouslySetInnerHTML={{ __html: searchEntryPointHtml }}
-          />
-        </details>
-      ) : null}
     </div>
   );
 }
@@ -156,9 +167,8 @@ function useIndexTopStories(
 ) {
   const [stories, setStories] = useState<MarketTopStory[]>([]);
   const [fallbackText, setFallbackText] = useState('');
-  const [searchEntryPointHtml, setSearchEntryPointHtml] = useState<string | null>(null);
   const [summaryDate, setSummaryDate] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
 
   const price = quote?.price ?? null;
@@ -167,8 +177,7 @@ function useIndexTopStories(
   const changePercent = quote?.changePercent ?? 0;
 
   const marketDate = useMemo(() => todayIsoDateHelsinki(), []);
-
-  const contextKey = useMemo(() => `${asOf ?? ''}|${heatmapAsOf ?? ''}|${marketDate}`, [asOf, heatmapAsOf, marketDate]);
+  const initialFetchDoneRef = useRef(false);
 
   const refreshAiStatus = useCallback(() => {
     void fetch('/api/market/ai-status', { cache: 'no-store' })
@@ -215,7 +224,6 @@ function useIndexTopStories(
           stories?: MarketTopStory[];
           summary?: string;
           marketDate?: string;
-          searchEntryPointHtml?: string;
           error?: string;
           code?: number;
         }>(res);
@@ -223,8 +231,7 @@ function useIndexTopStories(
           throw new Error(json.error ?? `Top stories failed (${res.status})`);
         }
         setSummaryDate(json.marketDate ?? marketDate);
-        setStories(json.stories ?? []);
-        setSearchEntryPointHtml(json.searchEntryPointHtml ?? null);
+        setStories(sanitizeTopStories(json.stories ?? []));
         setFallbackText(
           sanitizeTopStoriesFallback(json.summary?.trim() || '') ||
             (json.stories?.length ? '' : EMPTY_TOP_STORIES_USER_MESSAGE)
@@ -232,17 +239,19 @@ function useIndexTopStories(
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'AI request failed';
         setStories([]);
-        setSearchEntryPointHtml(null);
         setFallbackText(friendlyAiErrorMessage(msg));
       } finally {
         setLoading(false);
       }
   }, [aiConfigured, price, variant, label, changePercent, currency, marketDate, asOf, topMovers, sectorBreadth]);
 
+  const fetchStoriesRef = useRef(fetchStories);
+  fetchStoriesRef.current = fetchStories;
+
   useEffect(() => {
     if (aiConfigured === false) {
+      initialFetchDoneRef.current = false;
       setStories([]);
-      setSearchEntryPointHtml(null);
       setFallbackText('Add a **Gemini** API key under **Options → Market AI** for Top Stories.');
       setLoading(false);
       return;
@@ -254,8 +263,10 @@ function useIndexTopStories(
       setLoading(false);
       return;
     }
-    void fetchStories();
-  }, [aiConfigured, price, label, variant, marketDate, contextKey, fetchStories]);
+    if (initialFetchDoneRef.current) return;
+    initialFetchDoneRef.current = true;
+    void fetchStoriesRef.current();
+  }, [aiConfigured, price]);
 
   const canRefresh = aiConfigured === true && price != null;
 
@@ -267,10 +278,10 @@ function useIndexTopStories(
   return {
     stories,
     fallbackText,
-    searchEntryPointHtml,
     summaryDate,
     loading,
     hasAiKey: aiConfigured === true,
+    aiStatusKnown: aiConfigured !== null,
     canRefresh,
     refreshStories,
   };
@@ -300,6 +311,7 @@ export function MarketIndexPanel({
   heatmapAsOf,
   topMovers,
   sectorBreadth,
+  className = '',
 }: {
   quote: MarketQuoteSnapshot | undefined;
   overviewLoading: boolean;
@@ -309,19 +321,28 @@ export function MarketIndexPanel({
   heatmapAsOf?: string | null;
   topMovers?: TopMoversPayload;
   sectorBreadth?: MarketSectorBreadth;
+  className?: string;
 }) {
   const {
     stories,
     fallbackText,
-    searchEntryPointHtml,
     summaryDate,
     loading: aiLoading,
+    hasAiKey,
+    aiStatusKnown,
     canRefresh,
     refreshStories,
   } = useIndexTopStories(quote, variant, asOf, heatmapAsOf, topMovers, sectorBreadth);
 
+  const showActiveFetch = aiLoading && hasAiKey && quote?.price != null;
+  const storiesFallback =
+    fallbackText ||
+    (!aiStatusKnown ? 'Checking AI settings…' : '');
+
   return (
-    <div className={`${MARKET_PANEL} flex flex-col flex-1 min-h-0 h-full`}>
+    <div
+      className={`${MARKET_PANEL} flex flex-col h-full min-h-0 overflow-hidden ${className}`}
+    >
       <div className="shrink-0 mb-2">
         <h3 className="card-title mb-0">{quote?.label ?? '—'}</h3>
         {overviewLoading && !quote ? (
@@ -368,7 +389,7 @@ export function MarketIndexPanel({
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto pr-0.5">
-        {aiLoading ? (
+        {showActiveFetch ? (
           <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="space-y-1.5">
@@ -380,8 +401,7 @@ export function MarketIndexPanel({
         ) : (
           <TopStoriesList
             stories={stories}
-            fallbackText={fallbackText}
-            searchEntryPointHtml={searchEntryPointHtml}
+            fallbackText={storiesFallback}
           />
         )}
         </div>
@@ -429,7 +449,7 @@ export function AlternativeInvestmentsPanel({
   const order = ['btc', 'gold', 'silver', 'oil', 'usdeur'] as const;
 
   return (
-    <div className={MARKET_PANEL}>
+    <div className={`${MARKET_PANEL} min-h-[180px]`}>
       <h3 className="card-title mb-4">Alternative investments</h3>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
         {order.map((id) => (

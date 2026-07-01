@@ -3,7 +3,6 @@
  * so Electron installs and JSON backup keep dividend/FIRE/logo data.
  */
 import { ASSET_LOGO_OVERRIDES_STORAGE_KEY } from './assetLogo';
-import { BLENDED_YIELD_KEY } from './blendedYieldCache';
 import { DIVIDEND_INFO_LINKS_STORAGE_KEY } from './dividendInfoLinks';
 import { REDEEMED_DIVIDENDS_STORAGE_KEY } from './dividendRedemptions';
 import { MANUAL_DIVIDENDS_STORAGE_KEY } from './manualDividends';
@@ -17,7 +16,6 @@ export const CLIENT_SETTINGS_KEYS = [
   REDEEMED_DIVIDENDS_STORAGE_KEY,
   REDEEM_MUTE_STORAGE_KEY,
   FIRE_STORAGE_KEY,
-  BLENDED_YIELD_KEY,
 ] as const;
 
 export type ClientSettingsSnapshot = Record<string, unknown>;

@@ -2,9 +2,6 @@
 
 export const APP_LOCALE = 'en-US';
 
-/** @deprecated Use APP_LOCALE — kept for imports that still reference FI_LOCALE. */
-export const FI_LOCALE = APP_LOCALE;
-
 /** Parse user input: en-US decimals and optional thousand commas. */
 export function parseDecimalInput(raw: string, fallback = 0): number {
   let t = raw.trim().replace(/\s/g, '');

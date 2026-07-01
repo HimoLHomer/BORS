@@ -10,8 +10,6 @@ export type MarketSummaryResult = {
   /** Error text when stories are absent. */
   summary: string;
   stories?: MarketTopStory[];
-  /** Google Search suggestions HTML (grounding compliance). */
-  searchEntryPointHtml?: string;
   model: string;
   finishReason?: string;
   cached?: boolean;

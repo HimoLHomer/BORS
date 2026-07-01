@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   Plus, 
   TrendingUp, 
@@ -70,272 +70,12 @@ import {
   portfolioChartRangeGainLabel,
   type PortfolioChartRangeId,
 } from './portfolioChartRange';
+import { View, dedupeHistoryByDate, normalizeCashAmountEur, parseCashInputEur, formatCashEurTwoDecimals, isAbortError } from './portfolioHelpers';
+import { HistoryPointModal } from './HistoryPointModal';
+import { LoadingScreen, AppHeader } from './AppHeader';
+import { NavButton } from './AppNav';
+import { AddAssetModal } from './AddAssetModal';
 
-// --- Types & Enums ---
-
-enum View {
-  DASHBOARD = 'DASHBOARD',
-  DIVIDENDS = 'DIVIDENDS',
-  FIRE = 'FIRE',
-  MARKET_RECAP = 'MARKET_RECAP',
-  OPTIONS = 'OPTIONS'
-}
-
-function dedupeHistoryByDate(points: HistoryPoint[]): HistoryPoint[] {
-  const seen = new Set<string>();
-  return [...points]
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .filter((p) => {
-      if (seen.has(p.date)) return false;
-      seen.add(p.date);
-      return true;
-    });
-}
-
-function normalizeCashAmountEur(raw: unknown): number | null {
-  if (raw == null) return null;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, raw);
-  if (typeof raw === 'string') {
-    const n = parseDecimalInput(raw, NaN);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return null;
-}
-
-/** Parses the cash text field (comma or dot decimals). */
-function parseCashInputEur(raw: string): number | null {
-  if (raw.trim() === '') return null;
-  const n = parseDecimalInput(raw, NaN);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return n;
-}
-
-function formatCashEurTwoDecimals(n: number): string {
-  return formatDecimalEn(n, 2);
-}
-
-function isAbortError(e: unknown): boolean {
-  return (
-    (e instanceof DOMException && e.name === 'AbortError') ||
-    (e instanceof Error && e.name === 'AbortError')
-  );
-}
-
-const HistoryPointModal = ({
-  modal,
-  onClose,
-  onSaved,
-}: {
-  modal: { type: 'edit'; point: HistoryPoint } | { type: 'add' };
-  onClose: () => void;
-  onSaved: () => Promise<void>;
-}) => {
-  const [dateStr, setDateStr] = useState(
-    modal.type === 'edit' ? modal.point.date : todayIsoDateHelsinki()
-  );
-  const [valueStr, setValueStr] = useState(
-    modal.type === 'edit' ? formatDecimalEn(modal.point.value, 2) : ''
-  );
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const save = async () => {
-    const val = parseDecimalInput(valueStr, NaN);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      setErr('Use date format YYYY-MM-DD');
-      return;
-    }
-    if (!Number.isFinite(val)) {
-      setErr('Enter a valid number');
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await fetch('/api/portfolio/history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: dateStr, value: val }),
-      });
-      if (!res.ok) throw new Error('Save failed');
-      await onSaved();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to save');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (modal.type !== 'edit') return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await fetch(`/api/portfolio/history/${encodeURIComponent(modal.point.date)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok && res.status !== 204) throw new Error('Delete failed');
-      await onSaved();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to delete');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-bg/95 backdrop-blur-xl z-[60] flex items-center justify-center p-4"
-    >
-      <motion.div
-        initial={{ scale: 0.96, opacity: 0, y: 12 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        exit={{ scale: 0.96, opacity: 0, y: 12 }}
-        className="glass-panel p-8 w-full max-w-md border-border bg-card/80 shadow-2xl"
-      >
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-black uppercase tracking-tight text-text-p">
-            {modal.type === 'edit' ? 'Edit history row' : 'Add history row'}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg text-text-s hover:text-text-p hover:bg-white/5"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">Date</label>
-            <input
-              type="date"
-              className="w-full bg-bg/50 border border-border rounded-xl px-4 py-3 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
-              value={dateStr}
-              disabled={modal.type === 'edit'}
-              onChange={(e) => setDateStr(e.target.value)}
-            />
-            {modal.type === 'edit' && (
-              <p className="text-[9px] text-text-s mt-1.5 opacity-70">Date cannot be changed; delete and re-add if needed.</p>
-            )}
-          </div>
-          <div>
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">
-              Total portfolio value (EUR)
-            </label>
-            <EurAmountInput
-              placeholder="e.g. 125,000.50"
-              value={valueStr}
-              onChange={(e) => setValueStr(e.target.value)}
-              onBlur={() => setValueStr((v) => formatDecimalInputEn(v, 2))}
-            />
-          </div>
-          {err && (
-            <p className="text-[10px] text-red font-bold uppercase tracking-widest">{err}</p>
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-3 mt-8">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={save}
-            className="flex-1 min-w-[120px] py-3 bg-accent text-white rounded-xl font-black uppercase tracking-widest text-[10px] disabled:opacity-50"
-          >
-            {busy ? 'Saving…' : 'Save'}
-          </button>
-          {modal.type === 'edit' && modal.point.id !== '__bors_live_today__' && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={remove}
-              className="px-4 py-3 rounded-xl border border-red/40 text-red font-black uppercase tracking-widest text-[10px] hover:bg-red/10 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          )}
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-};
-
-// --- Components ---
-
-const LoadingScreen = () => (
-  <div className="fixed inset-0 bg-bg flex items-center justify-center z-50">
-    <div className="flex flex-col items-center gap-4">
-      <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
-      <div className="flex items-center gap-2 leading-none">
-        <BorsMark className="w-7 h-7 shrink-0 opacity-90" />
-        <span className="font-black text-2xl tracking-tighter text-text-p uppercase">BÖRS</span>
-      </div>
-      <p className="text-[10px] text-text-s font-mono uppercase tracking-widest animate-pulse">Initializing Market Feed</p>
-    </div>
-  </div>
-);
-
-const Header = ({
-  apiStatus,
-  feedDetail,
-  onRetryFeed,
-  feedRetrying,
-}: {
-  apiStatus: 'connecting' | 'connected' | 'error';
-  feedDetail: string | null;
-  onRetryFeed: () => void;
-  feedRetrying: boolean;
-}) => (
-  <header className="border-b border-border bg-bg px-6 py-4 flex items-center justify-between">
-    <div className="flex items-center gap-2 leading-none">
-      <BorsMark className="w-6 h-6 shrink-0 opacity-90" />
-      <span className="font-black text-xl tracking-tighter text-text-p uppercase">BÖRS</span>
-    </div>
-    
-    <div className="flex items-center gap-8">
-      <div className="hidden md:flex items-center gap-8 text-[10px] text-text-s font-bold uppercase tracking-widest">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            Feed: {apiStatus === 'connected' ? (
-              <span className="text-green flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-green shrink-0" aria-hidden />
-                Yahoo Live
-              </span>
-            ) : apiStatus === 'connecting' ? (
-              <span className="text-text-s flex items-center gap-1.5">
-                <RefreshCcw className="w-3 h-3 animate-spin shrink-0" aria-hidden />
-                Connecting…
-              </span>
-            ) : (
-              <span
-                className="text-red flex items-center gap-1.5 max-w-[min(320px,35vw)] truncate cursor-help"
-                title={feedDetail ?? 'Yahoo health check failed. Run npm run dev (Express + Vite) and ensure outbound network allows Yahoo Finance.'}
-              >
-                Offline
-              </span>
-            )}
-          </div>
-          {apiStatus !== 'connected' && (
-            <button
-              type="button"
-              onClick={onRetryFeed}
-              disabled={feedRetrying}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 text-text-s hover:bg-white/10 hover:text-text-p transition-all text-[9px] font-bold uppercase tracking-widest disabled:opacity-40"
-              title={feedDetail ?? 'Retry Yahoo market feed'}
-            >
-              <RefreshCcw className={`w-3 h-3 shrink-0 ${feedRetrying ? 'animate-spin' : ''}`} aria-hidden />
-              Retry
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  </header>
-);
 
 // --- Main App Logic ---
 
@@ -373,6 +113,10 @@ export default function App() {
   /** Strict Mode / remount: incremented on effect cleanup so stale async cannot apply portfolio state. */
   const portfolioBootstrapGenerationRef = useRef(0);
   const statsTotalValueRef = useRef(0);
+  /** One automatic history backfill per app session after portfolio valuation is ready. */
+  const historyBackfillDoneRef = useRef(false);
+  const [historyBackfillBusy, setHistoryBackfillBusy] = useState(false);
+  const [historyBackfillNote, setHistoryBackfillNote] = useState<string | null>(null);
   const [cashEur, setCashEur] = useState(0);
   const [cashInput, setCashInput] = useState('');
   const [cashSaving, setCashSaving] = useState(false);
@@ -678,25 +422,31 @@ export default function App() {
     }
   };
 
-  const stats: PortfolioStats = assets.reduce((acc, asset) => {
+  const holdingsStats = assets.reduce((acc, asset) => {
     const livePrice = marketPrices[asset.symbol] || asset.averagePrice;
     const priceFx = holdingQuoteFxToEur(asset.symbol, asset.currency, quoteCurrencies, exchangeRates);
     const costFx = fxToEur(asset.currency, exchangeRates) || 1;
 
     const valInEur = asset.quantity * livePrice * priceFx;
     const costInEur = asset.quantity * asset.averagePrice * costFx;
-    
+
     acc.totalValue += valInEur;
     acc.totalCost += costInEur;
     return acc;
-  }, { totalValue: 0, totalCost: 0, totalGain: 0, totalGainPercent: 0, dailyChange: 0, dailyChangePercent: 0 });
+  }, { totalValue: 0, totalCost: 0 });
 
   const cashSafe = cashLineEur;
-  stats.totalValue += cashSafe;
-  stats.totalCost += cashSafe;
-
-  stats.totalGain = stats.totalValue - stats.totalCost;
-  stats.totalGainPercent = stats.totalCost > 0 ? (stats.totalGain / stats.totalCost) * 100 : 0;
+  const stats: PortfolioStats = {
+    totalValue: holdingsStats.totalValue + cashSafe,
+    totalCost: holdingsStats.totalCost + cashSafe,
+    totalGain: holdingsStats.totalValue - holdingsStats.totalCost,
+    totalGainPercent:
+      holdingsStats.totalCost > 0
+        ? ((holdingsStats.totalValue - holdingsStats.totalCost) / holdingsStats.totalCost) * 100
+        : 0,
+    dailyChange: 0,
+    dailyChangePercent: 0,
+  };
 
   statsTotalValueRef.current = stats.totalValue;
 
@@ -804,38 +554,14 @@ export default function App() {
     return rows;
   }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur]);
 
-  const allocationPieWrapRef = useRef<HTMLDivElement>(null);
   const [allocationPieBox, setAllocationPieBox] = useState({ width: 0, height: 0 });
 
-  useLayoutEffect(() => {
-    const el = allocationPieWrapRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-
-    const measure = () => {
-      const rect = el.getBoundingClientRect();
-      let width = Math.round(rect.width) || el.clientWidth || 0;
-      let height = Math.round(rect.height) || el.clientHeight || 0;
-      if (width < 32) width = 320;
-      if (height < 32) height = 300;
-      setAllocationPieBox((prev) =>
-        prev.width === width && prev.height === height ? prev : { width, height }
-      );
-    };
-
-    measure();
-    const raf = requestAnimationFrame(measure);
-
-    const ro = new ResizeObserver(() => measure());
-    try {
-      ro.observe(el, { box: 'border-box' });
-    } catch {
-      ro.observe(el);
-    }
-
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
+  const handleAllocationPieResize = useCallback((width: number, height: number) => {
+    const w = Math.round(width);
+    const h = Math.round(height);
+    setAllocationPieBox((prev) =>
+      prev.width === w && prev.height === h ? prev : { width: w, height: h }
+    );
   }, []);
 
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
@@ -854,20 +580,6 @@ export default function App() {
     if (apiStatus === 'connecting') return true;
     return !portfolioValuationReady;
   }, [assets.length, apiStatus, portfolioValuationReady]);
-
-  useLayoutEffect(() => {
-    if (feedMetricsLoading) return;
-    const el = allocationPieWrapRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    let width = Math.round(rect.width) || el.clientWidth || 0;
-    let height = Math.round(rect.height) || el.clientHeight || 0;
-    if (width < 32) width = 320;
-    if (height < 32) height = 300;
-    setAllocationPieBox((prev) =>
-      prev.width === width && prev.height === height ? prev : { width, height }
-    );
-  }, [feedMetricsLoading]);
 
   const allocationPieCalloutMap = useMemo(
     () =>
@@ -908,6 +620,47 @@ export default function App() {
     }, 2000);
     return () => window.clearTimeout(t);
   }, [history, portfolioValuationReady, assets.length, cashLineEur]);
+
+  const runHistoryBackfill = useCallback(async () => {
+    setHistoryBackfillBusy(true);
+    try {
+      const res = await fetch('/api/portfolio/history/backfill', {
+        method: 'POST',
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        setHistoryBackfillNote('Backfill failed — check Yahoo connection.');
+        return;
+      }
+      const json = (await res.json()) as { filled?: HistoryPoint[] };
+      const n = json.filled?.length ?? 0;
+      if (n > 0) {
+        const list = await fetch('/api/portfolio/history', { cache: 'no-store' }).then((r) =>
+          r.json()
+        );
+        setHistory(dedupeHistoryByDate(list as HistoryPoint[]));
+        portfolioMutationEpochRef.current += 1;
+        setHistoryBackfillNote(
+          `Filled ${n} missing day${n === 1 ? '' : 's'} from historical closes.`
+        );
+      } else {
+        setHistoryBackfillNote(null);
+      }
+    } catch (e) {
+      console.warn('History backfill failed', e);
+      setHistoryBackfillNote('Backfill failed — check Yahoo connection.');
+    } finally {
+      setHistoryBackfillBusy(false);
+    }
+  }, []);
+
+  /** Backfill missed history days once per session (gap-only, up to yesterday). */
+  useEffect(() => {
+    if (loading || !portfolioValuationReady) return;
+    if (historyBackfillDoneRef.current) return;
+    historyBackfillDoneRef.current = true;
+    void runHistoryBackfill();
+  }, [loading, portfolioValuationReady, runHistoryBackfill]);
 
   const historyPanelRows = useMemo((): HistoryPoint[] => {
     const todayStr = todayIsoDateHelsinki();
@@ -1077,7 +830,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-bg overflow-hidden font-sans selection:bg-accent/30">
-      <Header
+      <AppHeader
         apiStatus={apiStatus}
         feedDetail={feedDetail}
         onRetryFeed={retryYahooFeed}
@@ -1128,11 +881,7 @@ export default function App() {
           />
         </aside>
 
-        <main
-          className={`flex-1 overflow-y-auto p-6 ${
-            activeView === View.OPTIONS ? 'bg-bg' : 'technical-grid'
-          }`}
-        >
+        <main className="flex-1 overflow-y-auto p-6 technical-grid">
           <AnimatePresence mode="wait">
             {activeView === View.DASHBOARD && (
               <motion.div 
@@ -1142,6 +891,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="max-w-[1600px] mx-auto w-full dashboard-view space-y-4 pb-8"
               >
+                <h2 className="page-title">Portfolio</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4">
                 {/* Main Portfolio Performance */}
                 <div className="lg:col-span-2 lg:row-span-2 glass-panel p-8 flex flex-col group h-full">
@@ -1167,16 +917,51 @@ export default function App() {
                       >
                         <div className="p-4 bg-white/5 rounded-xl border border-border/50 space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                            <p className="text-[9px] text-text-s font-bold uppercase tracking-widest leading-relaxed">
-                              Daily total value (EUR) in SQLite. Edit a row or add a past date you missed.
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => setHistoryModal({ type: 'add' })}
-                              className="shrink-0 px-3 py-2 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 flex items-center justify-center gap-1.5 self-start"
-                            >
-                              <Plus className="w-3.5 h-3.5" /> Add entry
-                            </button>
+                            <div className="space-y-1.5">
+                              <p className="text-[9px] text-text-s font-bold uppercase tracking-widest leading-relaxed">
+                                Daily total value (EUR) in SQLite. Edit a row or add a past date you missed.
+                              </p>
+                              <p className="text-[8px] text-text-s/70 leading-relaxed max-w-prose">
+                                Missing days are filled automatically when you open BÖRS (historical closes).
+                                Uses current holdings — approximate if you traded while away.
+                              </p>
+                              {historyBackfillNote ? (
+                                <p
+                                  className={`text-[8px] font-bold uppercase tracking-widest ${
+                                    historyBackfillNote.startsWith('Filled')
+                                      ? 'text-green/90'
+                                      : 'text-red/80'
+                                  }`}
+                                >
+                                  {historyBackfillNote}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0 self-start">
+                              <button
+                                type="button"
+                                onClick={() => void runHistoryBackfill()}
+                                disabled={historyBackfillBusy || apiStatus !== 'connected'}
+                                title={
+                                  apiStatus !== 'connected'
+                                    ? 'Connect to Yahoo to backfill history'
+                                    : 'Fill missing days from historical closes'
+                                }
+                                className="px-3 py-2 bg-white/5 text-text-s rounded-lg font-black uppercase tracking-widest text-[8px] border border-border/50 hover:bg-white/10 hover:text-text-p transition-all flex items-center justify-center gap-1.5 disabled:opacity-40"
+                              >
+                                <RefreshCcw
+                                  className={`w-3.5 h-3.5 ${historyBackfillBusy ? 'animate-spin' : ''}`}
+                                />
+                                Backfill now
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setHistoryModal({ type: 'add' })}
+                                className="px-3 py-2 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 flex items-center justify-center gap-1.5"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> Add entry
+                              </button>
+                            </div>
                           </div>
                           <div className="overflow-x-auto overflow-y-auto max-h-[min(40vh,280px)] rounded-lg border border-border/40">
                             <table className="w-full text-left text-xs">
@@ -1260,7 +1045,7 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <p className="micro-label mb-1" title="vs average cost (EUR)">
+                      <p className="micro-label mb-1" title="Holdings only vs average cost (EUR); cash excluded">
                         Unrealized gain
                       </p>
                       <GainDisplay
@@ -1269,9 +1054,9 @@ export default function App() {
                         loading={feedMetricsLoading}
                       />
                     </div>
-                    <div className="border-l border-border/40 pl-6 shrink-0">
+                    <div className="border-l border-border/30 pl-6 shrink-0">
                       <p className="micro-label mb-1">Cash (EUR)</p>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-2">
                         <EurAmountInput
                           compact
                           wrapperClassName="w-[6.75rem]"
@@ -1284,7 +1069,7 @@ export default function App() {
                           type="button"
                           disabled={cashSaving}
                           onClick={() => void saveCash()}
-                          className="btn-secondary !inline-flex !items-center !justify-center !h-8 !min-h-0 !max-h-8 !py-0 !px-1.5 !gap-0 !text-[9px] !leading-none box-border shrink-0 disabled:opacity-50"
+                          className="btn-secondary min-w-[3.5rem] !h-8 !py-0 justify-center text-[10px] shrink-0 disabled:opacity-50"
                         >
                           {cashSaving ? 'Saving…' : 'Save'}
                         </button>
@@ -1417,14 +1202,13 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4">
+                <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4 min-h-0">
                   <div className="glass-panel !overflow-visible p-6 flex flex-col flex-1 min-h-[480px] lg:min-h-[520px]">
                     <div className="mb-3">
                       <h3 className="card-title mb-0">Allocation</h3>
                     </div>
                     <div
-                      ref={allocationPieWrapRef}
-                      className="allocation-pie-glow relative flex-1 w-full min-h-[300px] min-w-0"
+                      className="allocation-pie-glow relative flex-1 w-full min-h-0 min-w-0"
                       aria-busy={feedMetricsLoading}
                     >
                       {feedMetricsLoading ? (
@@ -1436,6 +1220,7 @@ export default function App() {
                         width="100%"
                         height="100%"
                         className={feedMetricsLoading ? 'opacity-0 pointer-events-none' : undefined}
+                        onResize={handleAllocationPieResize}
                       >
                         <PieChart margin={{ ...ALLOCATION_PIE_CHART_MARGIN }}>
                           <AllocationPieDefs />
@@ -1674,10 +1459,6 @@ export default function App() {
               >
                 <FireProjection
                   currentPortfolioEur={stats.totalValue}
-                  assets={assets}
-                  marketPrices={marketPrices}
-                  exchangeRates={exchangeRates}
-                  quoteCurrencies={quoteCurrencies}
                   portfolioMetricsLoading={feedMetricsLoading}
                 />
               </motion.div>
@@ -1701,9 +1482,9 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-3xl mx-auto w-full"
+                className="max-w-4xl xl:max-w-5xl mx-auto w-full pb-8"
               >
-                <div className="glass-panel p-8">
+                <div className="panel">
                   <h2 className="page-title mb-1">Options</h2>
                   <p className="page-subtitle mb-6">Integrations, data & backup</p>
 
@@ -1732,7 +1513,7 @@ export default function App() {
                     </div>
 
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
-                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-4">
+                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio backup
                       </h3>
                       <div className="flex flex-col gap-2">
@@ -1795,567 +1576,3 @@ export default function App() {
   );
 }
 
-// --- Internal Components ---
-
-const NAV_SHORT: Record<string, string> = {
-  Dashboard: 'Home',
-  'Dividend engine': 'Divs',
-  FIRE: 'FIRE',
-  Market: 'Market',
-  Options: 'Opts',
-};
-
-const NavButton = ({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    title={label}
-    className={`group relative flex flex-col items-center gap-1 p-3 xl:py-2.5 rounded-xl transition-all w-full ${
-      active ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-s hover:text-text-p hover:bg-white/5'
-    }`}
-  >
-    {icon}
-    <span className="hidden xl:block text-[8px] font-bold uppercase tracking-wide leading-tight text-center max-w-[4.5rem]">
-      {NAV_SHORT[label] ?? label}
-    </span>
-    <span className="xl:hidden absolute left-full ml-3 opacity-0 group-hover:opacity-100 transition-opacity bg-card border border-border px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest pointer-events-none whitespace-nowrap z-50">
-      {label}
-    </span>
-  </button>
-);
-
-const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: { 
-  onClose: () => void, 
-  onPersist: (asset: Asset, isEdit: boolean) => Promise<void>,
-  editAsset?: Asset,
-  exchangeRates: Record<string, number>,
-}) => {
-  const [formData, setFormData] = useState({
-    symbol: editAsset?.symbol || '',
-    displaySymbol: editAsset?.displaySymbol || '',
-    name: editAsset?.name || '',
-    type: editAsset?.type || 'etf',
-    quantity:
-      editAsset?.quantity != null ? formatShares(editAsset.quantity) : '',
-    averagePrice:
-      editAsset?.averagePrice != null ? formatDecimalEn(editAsset.averagePrice, 2) : '',
-    currency: editAsset?.currency || 'EUR'
-  });
-  const [purchaseExpanded, setPurchaseExpanded] = useState(Boolean(editAsset));
-  const [purchaseAddQty, setPurchaseAddQty] = useState('');
-  const [purchaseAddPrice, setPurchaseAddPrice] = useState('');
-  const [purchaseAddCurrency, setPurchaseAddCurrency] = useState(
-    editAsset?.currency || 'EUR'
-  );
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
-  const [isVerified, setIsVerified] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query);
-    if (query.length < 2) {
-      setSearchResults([]);
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        const msg =
-          typeof data === 'object' && data && 'error' in data
-            ? String((data as { error?: string }).error)
-            : 'Search failed';
-        setSearchResults([]);
-        setError(msg);
-        return;
-      }
-      const raw = Array.isArray(data) ? data : [];
-      const cleaned = raw.filter(
-        (row: { symbol?: unknown }) =>
-          row &&
-          typeof row.symbol === 'string' &&
-          row.symbol.trim().length > 0
-      );
-      setSearchResults(cleaned);
-      if (query.length >= 2) setError(null);
-    } catch (e) {
-      console.error("Search failed:", e);
-      setSearchResults([]);
-      setError('Search failed — check your connection and try again.');
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const selectAsset = (asset: any) => {
-    const displayName = asset.longName || asset.shortName || asset.name || asset.symbol;
-    // Guess a cleaner display symbol (e.g. O instead of RY6.F)
-    let displaySymbol = asset.symbol;
-    if (displaySymbol.includes('.')) {
-      displaySymbol = displaySymbol.split('.')[0];
-    }
-    
-    setFormData(prev => ({
-      ...prev,
-      symbol: asset.symbol,
-      displaySymbol: displaySymbol,
-      name: displayName,
-      currency: asset.currency || prev.currency,
-      type: asset.quoteType?.toLowerCase().includes('etf') || asset.typeDisp?.toLowerCase().includes('etf') ? 'etf' : 
-            asset.quoteType?.toLowerCase().includes('crypto') || asset.typeDisp?.toLowerCase().includes('crypto') ? 'crypto' : 'stock'
-    }));
-    setSearchResults([]);
-    setSearchQuery('');
-    setIsVerified(true);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const newAsset: Asset = {
-      ...(editAsset?.id ? { id: editAsset.id } : {}),
-      ...formData,
-      quantity: parseShareInput(formData.quantity, 0),
-      averagePrice: parseDecimalInput(formData.averagePrice, 0),
-      updatedAt: new Date().toISOString()
-    } as Asset;
-
-    setIsSubmitting(true);
-    setError(null);
-    try {
-      await onPersist(newAsset, Boolean(editAsset?.id));
-      onClose();
-    } catch (err) {
-      console.error("Submission failed:", err);
-      setError(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Auto-fill label when symbol changes
-  const checkSymbol = async (symbol: string) => {
-    if (symbol.length < 2) return;
-    setIsValidating(true);
-    setIsVerified(false);
-    try {
-      const res = await fetch(`/api/quote/${symbol}`);
-      const data = await res.json();
-      if (data.name) {
-        setFormData(prev => ({ 
-          ...prev, 
-          // Only auto-fill name if it is currently empty to prevent overwriting manual input
-          name: prev.name === '' ? data.name : prev.name, 
-          currency: data.currency || prev.currency 
-        }));
-        setIsVerified(true);
-      } else {
-        setIsVerified(false);
-      }
-    } catch (e) { 
-      setIsVerified(false);
-    } finally {
-      setIsValidating(false);
-    }
-  };
-
-  const purchasePreview = useMemo(() => {
-    if (!editAsset) return null;
-    const addQty = parseShareInput(purchaseAddQty, 0);
-    if (!(addQty > 0) || purchaseAddPrice.trim() === '') return null;
-    const addPrice = parseDecimalInput(purchaseAddPrice, 0);
-    return mergeHoldingPurchase({
-      quantity: parseShareInput(formData.quantity, 0),
-      averagePrice: parseDecimalInput(formData.averagePrice, 0),
-      holdingCurrency: formData.currency,
-      addQuantity: addQty,
-      addPricePerUnit: addPrice,
-      addCurrency: purchaseAddCurrency,
-      exchangeRates,
-    });
-  }, [
-    editAsset,
-    formData.quantity,
-    formData.averagePrice,
-    formData.currency,
-    purchaseAddQty,
-    purchaseAddPrice,
-    purchaseAddCurrency,
-    exchangeRates,
-  ]);
-
-  const handleApplyPurchase = () => {
-    const addQty = parseShareInput(purchaseAddQty, 0);
-    const addPrice = parseDecimalInput(purchaseAddPrice, 0);
-    const result = mergeHoldingPurchase({
-      quantity: parseShareInput(formData.quantity, 0),
-      averagePrice: parseDecimalInput(formData.averagePrice, 0),
-      holdingCurrency: formData.currency,
-      addQuantity: addQty,
-      addPricePerUnit: addPrice,
-      addCurrency: purchaseAddCurrency,
-      exchangeRates,
-    });
-    if ('error' in result) return;
-    setFormData((f) => ({
-      ...f,
-      quantity: formatShares(result.quantity),
-      averagePrice: formatDecimalEn(result.averagePrice, 2),
-    }));
-    setPurchaseAddQty('');
-    setPurchaseAddPrice('');
-  };
-
-  const canApplyPurchase =
-    purchasePreview != null && !('error' in purchasePreview);
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-bg/95 backdrop-blur-xl z-50 flex items-center justify-center p-4"
-    >
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0, y: 20 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        exit={{ scale: 0.95, opacity: 0, y: 20 }}
-        className="glass-panel p-10 w-full max-w-lg relative bg-card/50 border-accent/20 shadow-2xl flex flex-col max-h-[min(92vh,900px)] overflow-hidden"
-      >
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent/50 to-transparent"></div>
-        <button onClick={onClose} className="absolute top-6 right-6 p-2 text-text-s hover:text-text-p transition-colors rounded-full hover:bg-white/5">
-          <X className="w-5 h-5" />
-        </button>
-        
-        <h2 className="text-2xl font-black tracking-tighter mb-1 text-text-p uppercase">{editAsset ? 'Edit Holding' : 'Add New Holding'}</h2>
-        <p className="text-text-s mb-8 text-[10px] uppercase tracking-[0.25em] font-bold opacity-60">{editAsset ? 'Modify existing asset vector' : 'Add a new asset to your portfolio'}</p>
-        
-        {!editAsset && (
-        <div className="mb-8 space-y-2 relative">
-          <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Find Asset (Name or Ticker)</label>
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-s opacity-40" />
-            <input 
-              type="text"
-              className="w-full bg-bg border border-border focus:border-accent rounded-xl pl-12 pr-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20 shadow-inner"
-              placeholder="e.g. S&P 500 or AAPL"
-              value={searchQuery}
-              onChange={e => handleSearch(e.target.value)}
-            />
-            {isSearching && <RefreshCcw className="absolute right-4 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-accent" />}
-          </div>
-          
-          <AnimatePresence>
-            {searchResults.length > 0 && (
-              <motion.div 
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -5 }}
-                className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-xl shadow-2xl z-[60] max-h-60 overflow-y-auto divide-y divide-border/50"
-              >
-                {searchResults.map((result: any, i: number) => (
-                  <button
-                    key={`${String(result.symbol)}-${i}`}
-                    type="button"
-                    onClick={() => selectAsset(result)}
-                    className="w-full px-5 py-3 text-left hover:bg-white/5 transition-colors group flex items-start justify-between gap-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="text-text-p text-xs font-bold truncate">
-                        {result.shortName || result.longName || result.name || result.symbol}
-                      </div>
-                      <div className="text-[10px] font-mono text-text-s group-hover:text-accent transition-colors truncate">
-                        {result.symbol}
-                        {result.price && (
-                          <span className="ml-2 font-sans opacity-40 group-hover:opacity-100 transition-opacity">
-                            •{' '}
-                            {result.currency === 'EUR'
-                              ? formatCurrency(result.price, 'EUR')
-                              : formatCurrency(result.price, result.currency)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0 flex flex-col items-end gap-0.5">
-                      {typeof result.dividendYieldPercent === 'number' &&
-                      Number.isFinite(result.dividendYieldPercent) &&
-                      result.dividendYieldPercent > 0 ? (
-                        <div
-                          className="text-[10px] font-mono font-bold text-emerald-400/95 tabular-nums tracking-tight"
-                          title="Trailing / indicated dividend yield (Yahoo)"
-                        >
-                          Div {formatPercentEn(result.dividendYieldPercent, 2)}
-                        </div>
-                      ) : (
-                        <div className="text-[9px] font-mono text-text-s/35 uppercase tracking-widest" title="No yield from Yahoo for this listing">
-                          Div —
-                        </div>
-                      )}
-                      <div className="text-[9px] font-bold text-text-s opacity-40 uppercase tracking-widest">
-                        {result.exchange}
-                      </div>
-                      {result.typeDisp && (
-                        <div className="text-[8px] text-text-s font-sans opacity-20 uppercase tracking-tighter max-w-[7rem] truncate">
-                          {result.typeDisp}
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-8 pr-1">
-          {error && (
-            <div className="p-4 bg-red/10 border border-red/20 rounded-xl text-red text-[10px] uppercase font-bold tracking-widest animate-pulse">
-              System Error: {error}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <label className="text-[9px] font-bold text-text-s uppercase tracking-widest ml-1">Symbol (Ticker)</label>
-                {isValidating && <RefreshCcw className="w-2.5 h-2.5 animate-spin text-accent" />}
-                {isVerified && <div className="text-[8px] font-black text-green tracking-tighter uppercase flex items-center gap-1"><Zap className="w-2.5 h-2.5" /> Verified</div>}
-              </div>
-              <input 
-                required
-                autoFocus
-                className={`w-full bg-bg/50 border ${isVerified ? 'border-green/30' : 'border-border'} focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20`}
-                placeholder="VWCE.DE"
-                value={formData.symbol}
-                onBlur={() => checkSymbol(formData.symbol)}
-                onChange={e => setFormData({ ...formData, symbol: e.target.value.toUpperCase() })}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1 text-accent">Display Symbol (Visual)</label>
-              <input 
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                placeholder="VWC"
-                value={formData.displaySymbol}
-                onChange={e => setFormData({ ...formData, displaySymbol: e.target.value.toUpperCase() })}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Currency</label>
-              <select 
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all text-sm appearance-none"
-                value={formData.currency}
-                onChange={e => setFormData({ ...formData, currency: e.target.value })}
-              >
-                <option value="EUR">EUR (€)</option>
-                <option value="USD">USD ($)</option>
-                <option value="GBP">GBP (£)</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Asset Label</label>
-            <input 
-              required
-              className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20"
-              placeholder="Vanguard FTSE All-World"
-              value={formData.name}
-              onChange={e => setFormData({ ...formData, name: e.target.value })}
-            />
-          </div>
-
-          {editAsset && (
-            <div className="rounded-xl border border-accent/25 bg-accent/5 overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setPurchaseExpanded((v) => !v)}
-                className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-white/5 transition-colors"
-              >
-                <span className="text-[10px] font-black text-accent uppercase tracking-[0.2em]">
-                  Add purchase
-                </span>
-                <ChevronDown
-                  className={`w-4 h-4 text-accent shrink-0 transition-transform ${purchaseExpanded ? 'rotate-180' : ''}`}
-                />
-              </button>
-              {purchaseExpanded && (
-                <div className="px-5 pb-5 space-y-4 border-t border-accent/15">
-                  <p className="text-[10px] text-text-s font-mono pt-4">
-                    Current:{' '}
-                    <span className="text-text-p font-bold">
-                      {formatShares(parseShareInput(formData.quantity, 0))}
-                    </span>
-                    {' @ '}
-                    <span className="text-text-p font-bold">
-                      {formatDecimalEn(parseDecimalInput(formData.averagePrice, 0), 2)}
-                    </span>
-                    {' '}
-                    {formData.currency}
-                  </p>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
-                        Additional shares
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                        placeholder="0"
-                        value={purchaseAddQty}
-                        onChange={(e) => setPurchaseAddQty(sanitizeShareDraft(e.target.value))}
-                        onBlur={() => setPurchaseAddQty((v) => formatShareInput(v))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
-                        Price / unit ({purchaseAddCurrency})
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                        placeholder="0.00"
-                        value={purchaseAddPrice}
-                        onChange={(e) => setPurchaseAddPrice(e.target.value)}
-                        onBlur={() =>
-                          setPurchaseAddPrice((v) => formatDecimalInputEn(v, 2))
-                        }
-                      />
-                    </div>
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
-                        Purchase currency
-                      </label>
-                      <select
-                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all text-sm appearance-none"
-                        value={purchaseAddCurrency}
-                        onChange={(e) => setPurchaseAddCurrency(e.target.value)}
-                      >
-                        <option value="EUR">EUR (€)</option>
-                        <option value="USD">USD ($)</option>
-                        <option value="GBP">GBP (£)</option>
-                      </select>
-                    </div>
-                  </div>
-                  {purchasePreview && 'error' in purchasePreview && (
-                    <p className="text-[10px] text-red/90 font-bold uppercase tracking-widest">
-                      {purchasePreview.error}
-                    </p>
-                  )}
-                  {purchasePreview && !('error' in purchasePreview) && (
-                    <div className="text-[10px] text-text-s space-y-1 font-mono leading-relaxed">
-                      <p>
-                        <span className="text-text-s/60 uppercase tracking-widest text-[9px] font-bold">
-                          Preview
-                        </span>
-                        {' — '}
-                        <span className="text-text-p font-bold">
-                          {formatShares(purchasePreview.quantity)}
-                        </span>{' '}
-                        shares · avg{' '}
-                        <span className="text-text-p font-bold">
-                          {formatDecimalEn(purchasePreview.averagePrice, 2)}
-                        </span>{' '}
-                        {formData.currency}
-                      </p>
-                      <p>
-                        Cost basis{' '}
-                        {formatCurrency(purchasePreview.totalCostBasis, formData.currency)}
-                        {formData.currency.toUpperCase() !== 'EUR' && (
-                          <>
-                            {' · '}
-                            {formatCurrency(purchasePreview.totalCostBasisEur, 'EUR')}
-                          </>
-                        )}
-                      </p>
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    disabled={!canApplyPurchase}
-                    onClick={handleApplyPurchase}
-                    className="w-full py-3 bg-white/10 hover:bg-white/15 disabled:opacity-40 border border-border rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-text-p transition-all"
-                  >
-                    Apply to holding
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-          
-          <div className="grid grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Quantity (Units)</label>
-              <input 
-                required
-                type="text"
-                inputMode="numeric"
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                placeholder="0"
-                value={formData.quantity}
-                onChange={e => setFormData({ ...formData, quantity: sanitizeShareDraft(e.target.value) })}
-                onBlur={() =>
-                  setFormData((f) => ({
-                    ...f,
-                    quantity: formatShareInput(f.quantity),
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Cost Per Unit</label>
-              <EurAmountInput
-                required
-                className="py-4 text-sm transition-all placeholder:opacity-20"
-                placeholder="0.00"
-                value={formData.averagePrice}
-                onChange={(e) => setFormData({ ...formData, averagePrice: e.target.value })}
-                onBlur={() =>
-                  setFormData((f) => ({
-                    ...f,
-                    averagePrice: formatDecimalInputEn(f.averagePrice, 2),
-                  }))
-                }
-              />
-            </div>
-          </div>
-          </div>
-
-          <button 
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full shrink-0 py-5 bg-accent hover:bg-accent/90 disabled:opacity-50 text-white font-black uppercase tracking-[0.2em] text-[11px] rounded-xl transition-all shadow-xl shadow-accent/20 active:scale-[0.98] mt-4 flex items-center justify-center gap-3"
-          >
-            {isSubmitting ? (
-              <RefreshCcw className="w-4 h-4 animate-spin" />
-            ) : (
-              editAsset ? 'Save Changes' : 'Add to Portfolio'
-            )}
-          </button>
-        </form>
-      </motion.div>
-    </motion.div>
-  );
-};
-
-// --- Static Feed Data ---

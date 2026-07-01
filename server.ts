@@ -304,12 +304,14 @@ async function startServer() {
 
   const listenHost = process.env.BORS_LISTEN_HOST?.trim() || "0.0.0.0";
   app.listen(PORT, listenHost, () => {
-    const hostLabel = listenHost === "0.0.0.0" ? "localhost" : listenHost;
-    const uiMode = process.env.NODE_ENV === "production" ? "static dist" : "Vite dev";
-    console.log(
-      `ALPHA-OS Server running on http://${hostLabel}:${PORT} (${uiMode}, NODE_ENV=${process.env.NODE_ENV}, entry=${entryScript})`,
-    );
-    for (const r of marketApiRoutes) console.log(`  ${r}`);
+    if (process.env.BORS_QUIET !== "1" && process.env.NODE_ENV !== "production") {
+      const hostLabel = listenHost === "0.0.0.0" ? "localhost" : listenHost;
+      const uiMode = process.env.NODE_ENV === "production" ? "static dist" : "Vite dev";
+      console.log(
+        `BÖRS server running on http://${hostLabel}:${PORT} (${uiMode}, NODE_ENV=${process.env.NODE_ENV}, entry=${entryScript})`,
+      );
+      for (const r of marketApiRoutes) console.log(`  ${r}`);
+    }
   });
 }
 

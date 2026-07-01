@@ -41,19 +41,19 @@ export function DividendInfoLinkCell({
         }}
         autoFocus
         placeholder="https://…"
-        className="w-full max-w-[200px] bg-bg/50 border border-border rounded-lg px-2 py-1 text-[11px] font-mono text-text-p focus:outline-none focus:border-accent/50"
+        className="block ml-auto max-w-[200px] bg-bg/50 border border-border rounded-lg px-2 py-1 text-[11px] font-mono text-text-p focus:outline-none focus:border-accent/50"
       />
     );
   }
 
   if (url) {
     return (
-      <div className="flex items-center justify-start gap-1 min-w-0">
+      <div className="flex items-center justify-end gap-1 min-w-0">
         <a
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-accent hover:text-accent/80 text-[11px] truncate max-w-[160px] underline-offset-2 hover:underline"
+          className="text-accent hover:text-accent/80 text-[11px] truncate max-w-[180px] underline-offset-2 hover:underline text-right"
           title={url}
         >
           {dividendInfoLinkLabel(url)}
@@ -74,7 +74,7 @@ export function DividendInfoLinkCell({
     <button
       type="button"
       onClick={() => setEditing(true)}
-      className="text-[10px] font-bold uppercase tracking-wider text-text-s/40 hover:text-text-s"
+      className="text-[10px] font-bold uppercase tracking-wider text-text-s/40 hover:text-text-s ml-auto block"
     >
       Add link
     </button>

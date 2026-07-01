@@ -1,9 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
 import { MARKET_TOP_STORIES_AI_CONFIG } from "../../src/marketAiPrompt";
 import {
+  attachStoryReferences,
   enrichStoriesWithGrounding,
   extractGroundingChunks,
-  extractSearchEntryPointHtml,
+  extractGroundingMetadataFromResponse,
   parseTopStoriesJson,
 } from "../../src/marketTopStories";
 import { getGeminiApiKey } from "../aiSettings";
@@ -34,21 +35,20 @@ function extractFromResponse(response: {
 }): {
   summary: string;
   stories?: ReturnType<typeof parseTopStoriesJson>;
-  searchEntryPointHtml?: string;
   finishReason?: string;
 } {
   const candidate = response.candidates?.[0];
   const parts =
     candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   const summary = response.text?.trim() || parts.trim() || "";
-  const metadata = candidate?.groundingMetadata;
+  const metadata = extractGroundingMetadataFromResponse(response);
   const chunks = extractGroundingChunks(metadata);
   const parsed = parseTopStoriesJson(summary);
-  const stories = parsed ? enrichStoriesWithGrounding(parsed, chunks) : undefined;
+  const grounded = parsed ? enrichStoriesWithGrounding(parsed, chunks) : undefined;
+  const stories = grounded ? attachStoryReferences(grounded, metadata) : undefined;
   return {
     summary,
     stories: stories ?? undefined,
-    searchEntryPointHtml: extractSearchEntryPointHtml(metadata),
     finishReason: candidate?.finishReason,
   };
 }

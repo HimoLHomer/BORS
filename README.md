@@ -67,6 +67,8 @@ On first run, the app creates `data/portfolio.db` automatically in the project f
 | Custom DB path | Set env var `BORS_DB_PATH` to an absolute path |
 | Dividend/FIRE/logo prefs | Synced to SQLite via API (and browser localStorage while using the app) |
 
+**Portfolio history backfill:** If you do not open BÖRS for several days, chart gaps are filled automatically on the next launch (up to 90 calendar days, using Yahoo historical closes and your **current** holdings). Today is still recorded from live quotes while the app is open. Use **Portfolio Capital → history → Backfill now** to retry manually. Approximate if you traded during the gap.
+
 **Back up before moving machines**
 
 - **Export JSON** in the app (**Options → Portfolio backup**) — includes holdings, cash, chart prefs, and dividend/FIRE settings (backup format v2).
@@ -91,8 +93,8 @@ On first **Electron** launch, if the AppData database does not exist yet, the ap
 Push a version tag — GitHub Actions builds the Windows installer and attaches it to [Releases](https://github.com/HimoLHomer/BORS/releases). You do not commit `release/` to git.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.9
+git push origin v0.1.9
 ```
 
 Or run the **Release** workflow from the Actions tab (manual run uploads an artifact for 30 days).
@@ -118,7 +120,7 @@ Windows desktop installer (local):
 npm run electron:build
 ```
 
-Output: `release/BORS-Setup-0.1.0.exe` (requires `npm run build` inside the script; use plenty of RAM — see CI workflow for `NODE_OPTIONS`).
+Output: `release/BORS-Setup-0.1.9.exe` (requires `npm run build` inside the script; use plenty of RAM — see CI workflow for `NODE_OPTIONS`).
 
 **Native module note:** `better-sqlite3` must match your Node version. If you see `ERR_DLOPEN_FAILED` or `NODE_MODULE_VERSION` errors:
 
@@ -136,10 +138,10 @@ Output: `release/BORS-Setup-0.1.0.exe` (requires `npm run build` inside the scri
 | Market AI errors | Check your Gemini API key in **Options → Market AI** (or `GEMINI_API_KEY` in `.env.local`). Top Stories refresh after the ~10‑minute server cache expires, or use the refresh button on the Market screen. |
 | Desktop app won't start | See `%APPDATA%\BÖRS\bors-startup.log`. End all `BÖRS.exe` in Task Manager, reinstall from latest Release. |
 | FIRE data missing after import | Re-export JSON from **Options** (must include `clientSettings`), or copy full `portfolio.db`. |
+| Chart gap after vacation | Reopen BÖRS with network; missing days backfill automatically (or use **Backfill now** in Portfolio Capital history). |
 
 ## Local-first notes
 
 - Portfolio data is stored in **SQLite**, not in git. Do not commit `data/` or `dist/`.
-- **Firebase** was removed; there is no cloud account for holdings.
-- **Yahoo Finance** is used through the local server for quotes and dividends.
+- **Yahoo Finance** is used through the local server for quotes, dividends, and history backfill.
 - Asset logos may load from external CDNs; initials are shown when offline or missing.

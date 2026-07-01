@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import type { Asset } from './types';
-import { formatCurrency, portfolioFxReady } from './formatCurrency';
+import { formatCurrency } from './formatCurrency';
 import { SkeletonBlock, SkeletonCurrency } from './SkeletonPulse';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
 import { useFiDecimalDraft } from './useFiDecimalDraft';
@@ -15,10 +14,6 @@ import {
   type FireExpenseLine,
 } from './fireProjectionEngine';
 import {
-  BLENDED_YIELD_UPDATED_EVENT,
-  loadBlendedYieldCache,
-} from './blendedYieldCache';
-import {
   formatMonthDisplay,
   isMonthlySavingComplete,
   loadFireInputs,
@@ -26,11 +21,9 @@ import {
   saveFireInputs,
   type FireMonthlySaving,
 } from './fireStorage';
-import { fetchBlendedDividendYieldPercent } from './portfolioDividendYield';
 import { EurAmountField, EUR_AMOUNT_INPUT_PAD } from './EurAmountField';
 import { DataListTable } from './DataListTable';
 
-const PANEL = 'glass-panel p-8 bg-[#0e0e10]/80';
 const INPUT =
   'w-full bg-bg/50 border border-border rounded-xl px-3 py-2 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums';
 const LABEL = 'micro-label block mb-1';
@@ -162,60 +155,12 @@ function ExpenseAmountInput({
 
 export function FireProjection({
   currentPortfolioEur,
-  assets,
-  marketPrices,
-  exchangeRates,
-  quoteCurrencies = {},
   portfolioMetricsLoading = false,
 }: {
   currentPortfolioEur: number;
-  assets: Asset[];
-  marketPrices: Record<string, number>;
-  exchangeRates: Record<string, number>;
-  quoteCurrencies?: Record<string, string>;
   portfolioMetricsLoading?: boolean;
 }) {
-  const [blendedYield, setBlendedYield] = useState<number | null>(() => {
-    const c = loadBlendedYieldCache();
-    return c != null ? c.avgYieldPercent : null;
-  });
   const [stored, setStored] = useState(() => loadFireInputs());
-
-  const applyYieldResult = useCallback((avgYieldPercent: number) => {
-    if (avgYieldPercent > 0) {
-      setBlendedYield(avgYieldPercent);
-      return;
-    }
-    const cached = loadBlendedYieldCache();
-    if (cached != null && cached.avgYieldPercent > 0) {
-      setBlendedYield(cached.avgYieldPercent);
-    }
-  }, []);
-
-  const refreshBlendedYield = useCallback(async () => {
-    const r = await fetchBlendedDividendYieldPercent(assets, marketPrices, exchangeRates);
-    applyYieldResult(r.avgYieldPercent);
-  }, [assets, marketPrices, exchangeRates, applyYieldResult]);
-
-  const quotesReady =
-    assets.length === 0 ||
-    (!portfolioMetricsLoading &&
-      Object.keys(marketPrices).length > 0 &&
-      portfolioFxReady(assets, quoteCurrencies, exchangeRates));
-
-  useEffect(() => {
-    if (!quotesReady) return;
-    void refreshBlendedYield();
-  }, [refreshBlendedYield, quotesReady]);
-
-  useEffect(() => {
-    const syncFromCache = () => {
-      const c = loadBlendedYieldCache();
-      if (c != null && c.avgYieldPercent > 0) setBlendedYield(c.avgYieldPercent);
-    };
-    window.addEventListener(BLENDED_YIELD_UPDATED_EVENT, syncFromCache);
-    return () => window.removeEventListener(BLENDED_YIELD_UPDATED_EVENT, syncFromCache);
-  }, []);
 
   useEffect(() => {
     saveFireInputs(stored);
@@ -233,13 +178,7 @@ export function FireProjection({
 
   const monthlyTotal = monthlyExpensesTotal(stored.expenses);
   const annualExpenses = monthlyTotal * 12;
-  const cachedYieldNow = loadBlendedYieldCache();
-  const effectiveYield =
-    blendedYield != null && blendedYield > 0
-      ? blendedYield
-      : cachedYieldNow != null && cachedYieldNow.avgYieldPercent > 0
-        ? cachedYieldNow.avgYieldPercent
-        : blendedYield ?? 0;
+  const effectiveYield = Math.max(0, stored.capital.blendedYieldPercent);
 
   const projection = useMemo(
     () =>
@@ -356,10 +295,10 @@ export function FireProjection({
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-2xl font-black tracking-tight text-white uppercase">FIRE projection</h2>
+        <h2 className="page-title">FIRE projection</h2>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className={`${PANEL} lg:col-span-1 flex flex-col gap-3`}>
+        <div className="panel lg:col-span-1 flex flex-col gap-3">
           <h3 className="card-title mb-0">Independence goal</h3>
 
           <p
@@ -422,7 +361,7 @@ export function FireProjection({
           </div>
         </div>
 
-        <div className={`${PANEL} lg:col-span-2`}>
+        <div className="panel lg:col-span-2">
           <h3 className="card-title mb-3">Capital variables</h3>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <FireNumInput
@@ -431,24 +370,12 @@ export function FireProjection({
               onChange={(n) => setCapital({ marketReturnPercent: n })}
               suffix="%"
             />
-            <div className="block">
-              <span className={LABEL}>Average yield (blended)</span>
-              <div
-                className="bg-bg/50 border border-border rounded-xl px-3 py-2 min-h-[42px] flex items-center"
-                title="From Dividends Engine holdings (auto-refreshed)"
-              >
-                {!quotesReady ? (
-                  <SkeletonBlock className="h-4 w-14" />
-                ) : effectiveYield > 0 ? (
-                  <span className="text-sm font-mono text-accent tabular-nums">
-                    {formatPercentFi(effectiveYield, 2)}
-                  </span>
-                ) : (
-                  <span className="text-text-s text-sm font-mono">—</span>
-                )}
-              </div>
-              <p className="text-[10px] text-text-s mt-1">From Dividend engine</p>
-            </div>
+            <FireNumInput
+              label="Average yield (blended)"
+              value={stored.capital.blendedYieldPercent}
+              onChange={(n) => setCapital({ blendedYieldPercent: n })}
+              suffix="%"
+            />
             <FireNumInput
               label="Dividend tax / withholding"
               value={stored.capital.dividendTaxRatePercent}
@@ -482,13 +409,13 @@ export function FireProjection({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className={PANEL}>
+        <div className="panel">
           <div className="flex items-center justify-between mb-3">
             <h3 className="card-title mb-0">Expenses (monthly)</h3>
             <button
               type="button"
               onClick={addExpense}
-              className="px-2 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[10px] flex items-center gap-1 shadow-lg shadow-accent/20"
+              className="btn-primary"
             >
               <Plus className="w-3 h-3" /> Add
             </button>
@@ -526,23 +453,29 @@ export function FireProjection({
               </section>
             )}
           </div>
-          <div className="mt-4 pt-3 border-t border-border/50 flex justify-between gap-4 text-sm font-mono font-bold tabular-nums">
-            <span className="micro-label mb-0">Total monthly</span>
-            <span className="text-text-p">{formatCurrency(monthlyTotal, 'EUR')}</span>
-          </div>
-          <div className="flex justify-between text-xs font-mono text-text-s tabular-nums mt-1">
-            <span>Annual expenses</span>
-            <span>{formatCurrency(annualExpenses, 'EUR')}</span>
+          <div className="mt-4 pt-3 border-t border-border/50 space-y-1">
+            <div className="flex justify-between gap-4">
+              <span className="micro-label mb-0">Total monthly</span>
+              <span className="text-sm font-mono font-bold tabular-nums text-text-p">
+                {formatCurrency(monthlyTotal, 'EUR')}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="micro-label mb-0">Annual expenses</span>
+              <span className="text-sm font-mono font-bold tabular-nums text-text-p">
+                {formatCurrency(annualExpenses, 'EUR')}
+              </span>
+            </div>
           </div>
         </div>
 
-        <div className={PANEL}>
+        <div className="panel">
           <div className="flex items-center justify-between mb-3">
             <h3 className="card-title mb-0">Capital saved (monthly)</h3>
             <button
               type="button"
               onClick={addSaving}
-              className="px-2 py-1.5 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[10px] flex items-center gap-1 shadow-lg shadow-accent/20"
+              className="btn-primary"
             >
               <Plus className="w-3 h-3" /> Add
             </button>
@@ -590,14 +523,14 @@ export function FireProjection({
                     </span>
                     {annualSavingsGoalEur > 0 ? (
                       <span
-                        className={`text-[9px] font-mono font-bold tabular-nums shrink-0 ${
+                        className={`text-[11px] font-mono font-bold tabular-nums shrink-0 ${
                           goalMet ? 'text-green' : 'text-text-s/70'
                         }`}
                       >
                         {formatCurrency(total, 'EUR')} / {formatCurrency(annualSavingsGoalEur, 'EUR')}
                       </span>
                     ) : (
-                      <span className="text-[9px] font-mono font-bold tabular-nums text-text-p shrink-0">
+                      <span className="text-[11px] font-mono font-bold tabular-nums text-text-p shrink-0">
                         {formatCurrency(total, 'EUR')}
                       </span>
                     )}
@@ -646,7 +579,7 @@ export function FireProjection({
         </div>
       </div>
 
-      <div className={PANEL}>
+      <div className="panel">
         <h3 className="card-title mb-2">FIRE projection</h3>
         <DataListTable
         highlightWhen={(i) => i === fiYearIndex}

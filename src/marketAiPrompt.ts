@@ -1,6 +1,5 @@
 /** Prompts and config for Market Intelligence index panels. */
 
-import { formatPercentFi } from "./formatNumber";
 import {
   MARKET_TOP_STORIES_AI_CONFIG,
   MARKET_TOP_STORIES_SYSTEM_INSTRUCTION,
@@ -20,20 +19,6 @@ export {
   type MarketHeatmapMover,
   type MarketSectorBreadth,
 };
-
-export const MARKET_AI_GENERATION_CONFIG = MARKET_TOP_STORIES_AI_CONFIG;
-export const MARKET_INDEX_SYSTEM_INSTRUCTION = MARKET_TOP_STORIES_SYSTEM_INSTRUCTION;
-export const MARKET_INDEX_AI_CONFIG = MARKET_TOP_STORIES_AI_CONFIG;
-
-/** @deprecated Use buildUsTopStoriesPrompt */
-export function buildUsMarketAiPrompt(ctx: MarketAiQuoteContext): string {
-  return buildUsTopStoriesPrompt(ctx);
-}
-
-/** @deprecated Use buildFiTopStoriesPrompt */
-export function buildFiMarketAiPrompt(ctx: MarketAiQuoteContext): string {
-  return buildFiTopStoriesPrompt(ctx);
-}
 
 export function pickTopHeatmapMovers(
   tiles: MarketHeatmapMover[],

@@ -2,10 +2,12 @@ import React from 'react';
 
 export type DataListColumn = {
   key: string;
-  label: string;
+  label: React.ReactNode;
   align?: 'left' | 'right';
   headerClassName?: string;
   cellClassName?: string;
+  /** Fixed column width for table-fixed layouts (e.g. `6.5rem`, `12%`). */
+  width?: string;
 };
 
 export function dataListRowClassName(rowIndex: number, highlight?: boolean): string {
@@ -31,6 +33,7 @@ export function DataListTable({
   showHeader = true,
   onRowClick,
   tableClassName,
+  headerRowClassName,
 }: {
   columns: DataListColumn[];
   rows: Record<string, React.ReactNode>[];
@@ -43,6 +46,7 @@ export function DataListTable({
   showHeader?: boolean;
   onRowClick?: (rowIndex: number) => void;
   tableClassName?: string;
+  headerRowClassName?: string;
 }) {
   const colSpan = columns.length;
 
@@ -58,9 +62,21 @@ export function DataListTable({
         className={`w-full border-separate border-spacing-y-1 text-xs font-mono${tableClassName ? ` ${tableClassName}` : ''}`}
         style={horizontalScroll && minWidth > 0 ? { minWidth } : undefined}
       >
+        {columns.some((c) => c.width) ? (
+          <colgroup>
+            {columns.map((c) => (
+              <col key={c.key} style={c.width ? { width: c.width } : undefined} />
+            ))}
+          </colgroup>
+        ) : null}
         {showHeader ? (
           <thead>
-            <tr className="text-[9px] font-bold text-text-s uppercase tracking-[0.2em] opacity-50">
+            <tr
+              className={
+                headerRowClassName ??
+                'text-[9px] font-bold text-text-s uppercase tracking-[0.2em] opacity-50'
+              }
+            >
               {columns.map((c) => (
                 <th
                   key={c.key}

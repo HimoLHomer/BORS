@@ -18,11 +18,11 @@ export type AllocationPieMargin = {
 
 const RADIAL_STUB = 18;
 const TEXT_PAD = 6;
-const LABEL_FONT_PX = 9;
+const LABEL_FONT_PX = 11;
 const LABEL_EDGE_PAD = 6;
 /** Fixed vertical gap between legend rows (px). */
-const LEGEND_SLOT_GAP = 28;
-const LEGEND_SLOT_GAP_MIN = 20;
+const LEGEND_SLOT_GAP = 32;
+const LEGEND_SLOT_GAP_MIN = 22;
 /** Left-column legend slots — dynamic up to available chart height. */
 const LEFT_LEGEND_SLOTS_MAX = 16;
 const PIE_START_ANGLE = 90;
@@ -132,8 +132,8 @@ function allocationCalloutRendered(base: AllocationCalloutLayout) {
   const tx = jx + base.sign * TEXT_PAD;
   const nameFont = LABEL_FONT_PX;
   const pctFont = Math.max(8, nameFont - 1);
-  const nameLift = Math.max(5, Math.round(nameFont * 0.58));
-  const pctDrop = Math.max(6, Math.round(nameFont * 0.82));
+  const nameLift = Math.max(4, Math.round(nameFont * 0.45));
+  const pctDrop = Math.max(4, Math.round(nameFont * 0.58));
   return {
     pathD,
     tx,

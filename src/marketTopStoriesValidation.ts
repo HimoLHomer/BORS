@@ -4,6 +4,7 @@ import {
   BANNED_VAGUE_PHRASES,
   TOP_STORIES_HEADLINE_MAX,
   TOP_STORIES_MAX,
+  sanitizeTopStory,
   type MarketTopStory,
   type MarketVariant,
 } from "./marketTopStories";
@@ -100,11 +101,24 @@ export function validateTopStories(
       reasons.push(...itemReasons);
       continue;
     }
-    cleaned.push({
+    const sanitized = sanitizeTopStory({
       headline: story.headline.trim().slice(0, TOP_STORIES_HEADLINE_MAX),
       source: story.source.trim() || "News",
       ...(story.url ? { url: story.url } : {}),
+      ...(story.references?.length
+        ? {
+            references: story.references.map((ref) => ({
+              title: ref.title.trim() || "Source",
+              ...(ref.url ? { url: ref.url } : {}),
+            })),
+          }
+        : {}),
     });
+    if (!sanitized) {
+      reasons.push(`invalid story fields: ${story.headline.slice(0, 50)}`);
+      continue;
+    }
+    cleaned.push(sanitized);
   }
 
   const deduped = dedupeTopStories(cleaned);

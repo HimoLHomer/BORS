@@ -140,6 +140,20 @@ export async function assertPortfolioApi(base: string): Promise<void> {
   if (status.storage !== "sqlite") {
     throw new Error(`status.storage expected sqlite, got ${status.storage}`);
   }
+
+  const backfillRes = await fetch(`${base}/api/portfolio/history/backfill?dryRun=true`, {
+    method: "POST",
+  });
+  if (backfillRes.status === 503) {
+    throw new Error("POST /api/portfolio/history/backfill returned 503 without yahooFinance mock");
+  }
+  if (!backfillRes.ok) {
+    throw new Error(`POST /api/portfolio/history/backfill failed: HTTP ${backfillRes.status}`);
+  }
+  const backfill = (await backfillRes.json()) as { filled?: unknown[]; skipped?: unknown[] };
+  if (!Array.isArray(backfill.filled) || !Array.isArray(backfill.skipped)) {
+    throw new Error("Backfill response must include filled and skipped arrays");
+  }
 }
 
 export async function waitForServer(base: string, timeoutMs = 60_000): Promise<void> {

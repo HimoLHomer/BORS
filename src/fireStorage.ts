@@ -25,6 +25,7 @@ const currentYear = () => new Date().getFullYear();
 export function defaultFireCapital(): FireCapitalInputs {
   return {
     marketReturnPercent: 7,
+    blendedYieldPercent: 5,
     investedMonthlyEur: 1000,
     startAge: 0,
     startYear: currentYear(),
@@ -94,6 +95,7 @@ export function loadFireInputs(): FireStoredInputs {
     return {
       capital: {
         marketReturnPercent: num(c.marketReturnPercent, d.capital.marketReturnPercent),
+        blendedYieldPercent: num(c.blendedYieldPercent, d.capital.blendedYieldPercent),
         investedMonthlyEur: num(c.investedMonthlyEur, d.capital.investedMonthlyEur),
         startAge: num(c.startAge, d.capital.startAge),
         startYear: num(c.startYear, d.capital.startYear),

@@ -82,8 +82,3 @@ export function formatCurrency(value: number, currency: string = 'EUR'): string 
   }
   return new Intl.NumberFormat(APP_LOCALE, opts).format(value);
 }
-
-/** @deprecated Alias for formatCurrency. */
-export function formatCurrencyEn(value: number, currency: string = 'EUR'): string {
-  return formatCurrency(value, currency);
-}

@@ -19,10 +19,9 @@ import {
   loadDividendInfoLinks,
   saveDividendInfoLinks,
 } from './dividendInfoLinks';
-import { DataListTable, dataListCellClassName } from './DataListTable';
+import { HoldingsDetailTable } from './HoldingsDetailTable';
 import { AssetNameCell } from './AssetNameCell';
 import { displayTickerForAsset } from './assetLogo';
-import { saveBlendedYieldCache } from './blendedYieldCache';
 import {
   type ManualDividendPosition,
   type DividendPayoutFrequency,
@@ -31,6 +30,7 @@ import {
   frequencyLabel,
 } from './manualDividends';
 import { DividendPayoutCalendar } from './DividendPayoutCalendar';
+import { SummaryStatCard } from './SummaryStatCard';
 import { SkeletonBarChart, buildTableSkeletonRows } from './SkeletonPulse';
 import {
   resolveApiNextPayDate,
@@ -71,7 +71,6 @@ type DividendsPayload = {
 
 const BAR_COLOR = 'var(--color-accent)';
 
-const PANEL = 'glass-panel p-8 bg-[#0e0e10]/80';
 const SECTION_HEAD = 'flex items-center justify-between mb-2 gap-2';
 
 const HOLDINGS_DETAIL_COLUMN_KEYS = [
@@ -401,7 +400,7 @@ export function DividendsEngine({
 
   const displaySummary = useMemo(() => {
     if (!data?.rows?.length) {
-      return { totalAnnualEur: 0, avgYieldPercent: 0 };
+      return { totalAnnualEur: 0, avgYieldPercent: 0, capitalBaseEur: 0 };
     }
     const rates = {
       EUR: 1,
@@ -410,15 +409,6 @@ export function DividendsEngine({
     };
     return computeBlendedYieldSummary(assets, data.rows, manualRows, marketPrices, rates);
   }, [data, assets, manualRows, marketPrices, exchangeRates]);
-
-  useEffect(() => {
-    if (displaySummary.avgYieldPercent > 0) {
-      saveBlendedYieldCache({
-        avgYieldPercent: displaySummary.avgYieldPercent,
-        totalAnnualEur: displaySummary.totalAnnualEur,
-      });
-    }
-  }, [displaySummary]);
 
   const barData = useMemo((): BarDatum[] => {
     const apiBars: BarDatum[] = dividendPayingRows.map(({ row, index }) => {
@@ -722,29 +712,51 @@ export function DividendsEngine({
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-2xl font-black tracking-tight text-white uppercase">Dividend engine</h2>
+        <h2 className="page-title">Dividend engine</h2>
       </div>
       {err && (
         <div className="error-banner">{err}</div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className={`${PANEL} flex flex-col`}>
-          <h3 className="card-title mb-0">Total annual dividend income</h3>
-          <div className="stat-value text-6xl font-black tracking-tighter tabular-nums mt-2">
-            {formatCurrency(displaySummary.totalAnnualEur, 'EUR')}
-          </div>
-        </div>
-        <div className={`${PANEL} flex flex-col`}>
-          <h3 className="card-title mb-0">Average yield (blended)</h3>
-          <div className="stat-value text-6xl font-black tracking-tighter text-accent tabular-nums mt-2">
-            {formatPercentFi(displaySummary.avgYieldPercent, 2)}
-          </div>
-        </div>
+        <SummaryStatCard
+          title="Total annual dividend income"
+          hero={formatCurrency(displaySummary.totalAnnualEur, 'EUR')}
+          footer={
+            displaySummary.totalAnnualEur > 0 ? (
+              <p className="stat-subline">
+                ≈{' '}
+                <span className="text-accent font-bold">
+                  {formatCurrency(displaySummary.totalAnnualEur / 12, 'EUR')}
+                </span>{' '}
+                / month
+              </p>
+            ) : undefined
+          }
+          emptyFooter={<p className="stat-subline text-text-s/60">No dividend income yet</p>}
+        />
+        <SummaryStatCard
+          title="Average yield (blended)"
+          hero={formatPercentFi(displaySummary.avgYieldPercent, 2)}
+          footer={
+            displaySummary.capitalBaseEur > 0 ? (
+              <p className="stat-subline">
+                On{' '}
+                <span className="text-accent font-bold">
+                  {formatCurrency(displaySummary.capitalBaseEur, 'EUR')}
+                </span>{' '}
+                in dividend-paying holdings
+              </p>
+            ) : undefined
+          }
+          emptyFooter={
+            <p className="stat-subline text-text-s/60">No dividend-paying capital base yet</p>
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className={`${PANEL} min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden`}>
+        <div className="panel min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden">
           <div className={`${SECTION_HEAD} shrink-0`}>
             <h3 className="card-title mb-0">Annual dividend income (by holding)</h3>
           </div>
@@ -753,17 +765,20 @@ export function DividendsEngine({
               Add holdings on the Dashboard, then add a per-holding dividend estimate here if needed.
             </p>
           ) : dividendsFetchPending ? (
-            <div className="h-[280px] w-full flex-1 min-h-0" role="status" aria-label="Loading dividend chart">
-              <SkeletonBarChart />
+            <div className="flex-1 min-h-0 flex flex-col justify-center">
+              <div className="h-[238px] w-full shrink-0" role="status" aria-label="Loading dividend chart">
+                <SkeletonBarChart />
+              </div>
             </div>
           ) : barData.length === 0 ? (
             <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
               No dividend-paying holdings (or estimates are all zero).
             </p>
           ) : (
-            <div className="h-[280px] w-full flex-1 min-h-0">
+            <div className="flex-1 min-h-0 flex flex-col justify-center">
+              <div className="h-[238px] w-full shrink-0">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 28 }} barCategoryGap="18%">
+                <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }} barCategoryGap="18%">
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
                   <XAxis
                     dataKey="label"
@@ -771,8 +786,8 @@ export function DividendsEngine({
                     interval={0}
                     angle={0}
                     textAnchor="middle"
-                    height={48}
-                    tickMargin={8}
+                    height={44}
+                    tickMargin={7}
                   />
                   <YAxis
                     tick={{ fill: 'var(--color-text-s)', fontSize: 10, opacity: 0.7 }}
@@ -801,11 +816,12 @@ export function DividendsEngine({
                   <Bar dataKey="annualEur" radius={[6, 6, 0, 0]} fill={BAR_COLOR} fillOpacity={0.9} />
                 </BarChart>
               </ResponsiveContainer>
+              </div>
             </div>
           )}
         </div>
 
-        <div className={`${PANEL} min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden`}>
+        <div className="panel min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden">
           <div className={`${SECTION_HEAD} shrink-0`}>
             <h3 className="card-title mb-0">Dividend calendar</h3>
           </div>
@@ -818,7 +834,7 @@ export function DividendsEngine({
         </div>
       </div>
 
-      <div className={PANEL}>
+      <div className="panel">
         <div className={SECTION_HEAD}>
           <h3 className="card-title mb-0">Holdings detail</h3>
           <button
@@ -830,29 +846,7 @@ export function DividendsEngine({
             <Plus className="w-3.5 h-3.5" /> Add dividend estimate
           </button>
         </div>
-        <DataListTable
-          minWidth={880}
-          columns={[
-            { key: 'asset', label: 'Asset' },
-            { key: 'yield', label: 'Yield %', align: 'right' },
-            { key: 'annualShare', label: 'Annual / share', align: 'right' },
-            { key: 'income', label: 'Est. annual income', align: 'right' },
-            {
-              key: 'freq',
-              label: 'Pay freq.',
-              align: 'right',
-              headerClassName: 'pr-6',
-              cellClassName: dataListCellClassName('right', 'pr-6'),
-            },
-            { key: 'infoLink', label: 'Dividend info' },
-            {
-              key: 'actions',
-              label: '',
-              align: 'right',
-              headerClassName: 'w-16',
-              cellClassName: 'px-3 py-2 text-right',
-            },
-          ]}
+        <HoldingsDetailTable
           rows={dividendsFetchPending ? holdingsDetailSkeletonRows : holdingsDetailTableRows}
           emptyState={holdingsDetailEmptyState ?? undefined}
         />

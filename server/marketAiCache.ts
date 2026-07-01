@@ -1,6 +1,6 @@
 const CACHE_TTL_MS = 10 * 60 * 1000;
 /** Bump when prompt contract changes so stale results are not reused. */
-const CACHE_PROMPT_VERSION = "v10-top-stories-scroll-sanitize";
+const CACHE_PROMPT_VERSION = "v14-sanitize-story-fields";
 
 type CacheEntry = {
   expiresAt: number;
@@ -14,15 +14,6 @@ export function marketAiCacheKey(parts: {
   marketDate: string;
 }): string {
   return [CACHE_PROMPT_VERSION, parts.variant, parts.marketDate].join("|");
-}
-
-/** @deprecated Top-stories cache no longer keys on movers. */
-export function moversFingerprint(
-  gainers: { symbol: string; changePercent: number }[],
-  losers: { symbol: string; changePercent: number }[]
-): string {
-  const payload = JSON.stringify({ gainers, losers });
-  return payload.length > 0 ? "legacy" : "";
 }
 
 export function getCachedMarketSummary(key: string): import("./ai/types").MarketSummaryResult | null {

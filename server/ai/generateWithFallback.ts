@@ -19,7 +19,6 @@ import type { GenerateResult, MarketSummaryResult } from "./types";
 export type GenerateContentResult = {
   summary: string;
   stories?: MarketTopStory[];
-  searchEntryPointHtml?: string;
   finishReason?: string;
 };
 
@@ -44,7 +43,7 @@ export async function generateWithFallback(
   for (let i = 0; i < models.length; i++) {
     const model = models[i]!;
     try {
-      let { summary, stories, searchEntryPointHtml, finishReason } = await generate(
+      let { summary, stories, finishReason } = await generate(
         model,
         prompt
       );
@@ -54,7 +53,6 @@ export async function generateWithFallback(
       if (parsed.length === 0) {
         const retry = await generate(model, prompt + TOP_STORIES_STRICT_SUFFIX);
         summary = retry.summary;
-        searchEntryPointHtml = retry.searchEntryPointHtml ?? searchEntryPointHtml;
         finishReason = retry.finishReason ?? finishReason;
         parsed = coalesceTopStoriesFromText(retry.stories, summary);
       }
@@ -69,7 +67,6 @@ export async function generateWithFallback(
             check = validateTopStories(retryParsed, validation);
             if (check.ok) {
               parsed = check.stories;
-              searchEntryPointHtml = retry.searchEntryPointHtml ?? searchEntryPointHtml;
               finishReason = retry.finishReason ?? finishReason;
             }
           }
@@ -119,7 +116,6 @@ export async function generateWithFallback(
       const result: MarketSummaryResult = {
         summary: sanitizeTopStoriesFallback(summary),
         stories: parsed.length > 0 ? parsed : undefined,
-        searchEntryPointHtml,
         model,
         finishReason,
       };

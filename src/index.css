@@ -57,6 +57,18 @@
   @apply bg-card border border-border rounded-2xl overflow-hidden transition-all duration-300;
 }
 
+.panel {
+  @apply bg-card border border-border rounded-2xl overflow-hidden transition-all duration-300 p-8;
+}
+
+.stat-hero {
+  @apply font-mono text-6xl font-black tracking-tighter leading-none tabular-nums text-text-p;
+}
+
+.stat-subline {
+  @apply text-[11px] text-text-s font-mono tabular-nums mt-3;
+}
+
 .card-title {
   @apply text-xs text-text-s font-bold uppercase tracking-wider mb-2;
 }
@@ -88,7 +100,7 @@
 }
 
 .micro-label {
-  @apply text-[9px] font-bold text-text-s uppercase tracking-widest opacity-60;
+  @apply text-[10px] font-bold text-text-s uppercase tracking-widest opacity-70;
 }
 
 .error-banner {
@@ -126,6 +138,11 @@
   z-index: 0;
 }
 
+.allocation-pie-glow .recharts-responsive-container {
+  min-width: 0;
+  min-height: 0;
+}
+
 .allocation-pie-glow .recharts-wrapper {
   position: relative;
   z-index: 1;
@@ -142,5 +159,17 @@
 
 .allocation-pie-callout path[stroke]:not([stroke='rgba(255,255,255,0.012)']) {
   filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.28));
+}
+
+/* Dividends — holdings detail: wide asset, even middle cols, info flush right */
+.holdings-detail-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 2.8fr)
+    repeat(4, minmax(0, 1fr))
+    2.75rem
+    minmax(8rem, 1.35fr);
+  column-gap: 0.75rem;
+  align-items: center;
 }
 

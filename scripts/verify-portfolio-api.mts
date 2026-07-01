@@ -17,7 +17,11 @@ const { registerPortfolioRoutes } = await import("../server/portfolio.ts");
 
 const app = express();
 app.use(express.json());
-registerPortfolioRoutes(app);
+registerPortfolioRoutes(app, {
+  chart: async () => ({ quotes: [], meta: { currency: "EUR" } }),
+  quote: async () => ({ regularMarketPrice: 100, currency: "EUR" }),
+  quoteSummary: async () => ({}),
+});
 
 let exitCode = 0;
 const server = app.listen(0, "127.0.0.1", async () => {

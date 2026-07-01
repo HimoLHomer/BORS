@@ -1,5 +1,7 @@
 export type FireCapitalInputs = {
   marketReturnPercent: number;
+  /** Portfolio dividend yield assumption for FIRE projection (manual input). */
+  blendedYieldPercent: number;
   investedMonthlyEur: number;
   startAge: number;
   startYear: number;

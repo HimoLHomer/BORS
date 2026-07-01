@@ -10,6 +10,8 @@ export type DividendRowForYield = {
 export type BlendedYieldSummary = {
   totalAnnualEur: number;
   avgYieldPercent: number;
+  /** EUR market value of holdings used as the blended-yield denominator. */
+  capitalBaseEur: number;
 };
 
 export function isDividendPayerRow(r: DividendRowForYield): boolean {
@@ -136,10 +138,11 @@ export function computeBlendedYieldSummary(
 
   const totalAnnualEur = Math.round((apiAnnualEur + manualAnnualSum) * 100) / 100;
   const denom = apiValueEur + manualDenominatorSum;
+  const capitalBaseEur = Math.round(denom * 100) / 100;
   const avgYieldPercent =
     denom > 0
       ? Math.round(((totalAnnualEur / denom) * 100) * 100) / 100
       : Math.round(apiYieldPercent * 100) / 100;
 
-  return { totalAnnualEur, avgYieldPercent };
+  return { totalAnnualEur, avgYieldPercent, capitalBaseEur };
 }

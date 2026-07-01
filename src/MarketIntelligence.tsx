@@ -9,7 +9,7 @@ import {
   MarketIndexPanel,
   useMarketOverview,
 } from './MarketOverviewPanels';
-import { MARKET_PANEL, MARKET_REFRESH_BTN } from './marketTheme';
+import { MARKET_PANEL, MARKET_REFRESH_BTN, MARKET_FI_CHART_HEIGHT, MARKET_FI_ROW_HEIGHT, MARKET_US_CHART_HEIGHT, MARKET_US_ROW_HEIGHT } from './marketTheme';
 import { onFeedReconnected } from './feedReconnect';
 import {
   computeSectorBreadth,
@@ -863,7 +863,7 @@ function TreemapChart({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-visible"
+      className="relative w-full h-full overflow-hidden"
       onMouseLeave={() => setHover(null)}
     >
       {hover && (
@@ -960,11 +960,11 @@ function HeatmapPanel({
   }, [onTopMovers, onSectorBreadth, onHeatmapAsOf, topMovers, sectorBreadth, meta?.asOf]);
 
   return (
-    <div className={`${MARKET_PANEL} flex flex-col min-h-0 h-full ${className}`}>
+    <div className={`${MARKET_PANEL} flex flex-col min-h-0 h-full overflow-hidden ${className}`}>
       <div className="flex items-start justify-between gap-2 mb-2 shrink-0">
         <h3 className="card-title mb-0">{title}</h3>
       </div>
-      <div className={`${chartClassName} min-h-0`}>
+      <div className={`${chartClassName} shrink-0 overflow-hidden`}>
         {loading && data.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 opacity-50">
             <RefreshCcw className="w-7 h-7 animate-spin text-accent" />
@@ -1011,7 +1011,7 @@ export function MarketIntelligence() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-2xl font-black tracking-tight text-white uppercase">Market Intelligence</h2>
+      <h2 className="page-title">Market Intelligence</h2>
 
       {overviewError && (
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -1028,20 +1028,20 @@ export function MarketIntelligence() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-stretch min-h-0">
-        <div className="xl:col-span-8 min-h-0 flex flex-col">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 min-h-0">
+        <div className={`xl:col-span-8 flex flex-col min-h-0 shrink-0 ${MARKET_US_ROW_HEIGHT}`}>
           <HeatmapPanel
             title="S&P 500"
             universe="sp500"
-            chartClassName="w-full flex-1 min-h-[min(38vh,380px)] overflow-visible"
+            chartClassName={`w-full ${MARKET_US_CHART_HEIGHT}`}
             maxTiles={SP500_DISPLAY_CAP}
             onTopMovers={setUsTopMovers}
             onSectorBreadth={setUsSectorBreadth}
             onHeatmapAsOf={setUsHeatmapAsOf}
-            className="flex-1 min-h-0"
+            className="h-full"
           />
         </div>
-        <div className="xl:col-span-4 min-h-0 flex flex-col">
+        <div className={`xl:col-span-4 flex flex-col min-h-0 shrink-0 overflow-hidden ${MARKET_US_ROW_HEIGHT}`}>
           <MarketIndexPanel
             quote={overview?.sp500}
             overviewLoading={overviewLoading}
@@ -1050,21 +1050,22 @@ export function MarketIntelligence() {
             heatmapAsOf={usHeatmapAsOf}
             topMovers={usTopMovers}
             sectorBreadth={usSectorBreadth}
+            className="h-full"
           />
         </div>
 
-        <div className="xl:col-span-8 min-h-0 flex flex-col">
+        <div className={`xl:col-span-8 flex flex-col min-h-0 shrink-0 ${MARKET_FI_ROW_HEIGHT}`}>
           <HeatmapPanel
             title="OMX Helsinki 25"
             universe="omxh25"
-            chartClassName="w-full flex-1 min-h-[min(32vh,300px)] overflow-visible"
+            chartClassName={`w-full ${MARKET_FI_CHART_HEIGHT}`}
             onTopMovers={setFiTopMovers}
             onSectorBreadth={setFiSectorBreadth}
             onHeatmapAsOf={setFiHeatmapAsOf}
-            className="flex-1 min-h-0"
+            className="h-full"
           />
         </div>
-        <div className="xl:col-span-4 min-h-0 flex flex-col">
+        <div className={`xl:col-span-4 flex flex-col min-h-0 shrink-0 overflow-hidden ${MARKET_FI_ROW_HEIGHT}`}>
           <MarketIndexPanel
             quote={overview?.omxhpi}
             overviewLoading={overviewLoading}
@@ -1073,6 +1074,7 @@ export function MarketIntelligence() {
             heatmapAsOf={fiHeatmapAsOf}
             topMovers={fiTopMovers}
             sectorBreadth={fiSectorBreadth}
+            className="h-full"
           />
         </div>
 

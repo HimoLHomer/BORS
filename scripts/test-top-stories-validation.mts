@@ -1,7 +1,9 @@
 import {
+  isInvalidStoryField,
   isRawTopStoriesPayload,
   parseTopStoriesJson,
   parseTopStoriesJsonLenient,
+  sanitizeTopStories,
   sanitizeTopStoriesFallback,
   type MarketTopStory,
 } from "../src/marketTopStories.ts";
@@ -71,5 +73,16 @@ assert(
 
 const fenced = '```json\n{"stories":[{"headline":"Fed holds rates","source":"Reuters"}]}\n```';
 assert(isRawTopStoriesPayload(fenced), "fenced JSON is raw payload");
+
+assert(isInvalidStoryField("{"), "reject lone JSON brace as source");
+const garbage = sanitizeTopStories([
+  {
+    headline: "Nokia shares continue decline amid fading AI enthusiasm",
+    source: "{",
+  },
+  { headline: "Elisa reports stable Q2 revenue", source: "Kauppalehti" },
+]);
+assert(garbage.length === 2, "keep stories with recoverable fields");
+assert(garbage.every((s) => !isInvalidStoryField(s.source)), "no JSON garbage in sources");
 
 console.log("test-top-stories-validation: all passed");

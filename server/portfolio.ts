@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { registerDividendRoutes } from "./dividends";
+import { backfillPortfolioHistory } from "./portfolioHistoryBackfill";
 import { appRoot } from "./appRoot";
 import fs from "fs";
 import path from "path";
@@ -42,7 +43,9 @@ export function getPortfolioDb(): Database.Database {
     );
     INSERT OR IGNORE INTO ui_prefs (id, payload) VALUES (1, '{}');
   `);
-  console.log(`[portfolio] SQLite database: ${file}`);
+  if (process.env.BORS_QUIET !== "1" && process.env.NODE_ENV !== "production") {
+    console.log(`[portfolio] SQLite database: ${file}`);
+  }
   return db;
 }
 
@@ -295,6 +298,30 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       console.error(e);
       res.status(500).json({ error: "Failed to delete history" });
     }
+  });
+
+  /** Fill missing history dates up to yesterday using Yahoo historical closes (gap-only). */
+  app.post("/api/portfolio/history/backfill", (req: Request, res: Response) => {
+    void (async () => {
+      try {
+        if (!yahooFinance) {
+          res.status(503).json({ error: "Market data unavailable" });
+          return;
+        }
+        const maxDaysRaw = req.query.maxDays;
+        const maxDays =
+          typeof maxDaysRaw === "string" && /^\d+$/.test(maxDaysRaw)
+            ? Math.min(365, Math.max(1, parseInt(maxDaysRaw, 10)))
+            : undefined;
+        const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+        const result = await backfillPortfolioHistory(yahooFinance, { maxDays, dryRun });
+        res.set("Cache-Control", "no-store");
+        res.json(result);
+      } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "Failed to backfill history" });
+      }
+    })();
   });
 
   app.get("/api/portfolio/export", (_req: Request, res: Response) => {

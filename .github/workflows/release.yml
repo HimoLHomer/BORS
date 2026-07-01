@@ -38,6 +38,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           RAYON_NUM_THREADS: "1"
 
+      - name: Smoke test packaged app
+        run: powershell -ExecutionPolicy Bypass -File scripts/test-packaged-app.ps1
+
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

@@ -14,7 +14,7 @@ import {
   marketAiCacheKey,
   setCachedMarketSummary,
 } from "./marketAiCache";
-import { todayIsoDateHelsinki } from "./marketAiDate";
+import { todayIsoDateHelsinki } from "../src/formatDate";
 
 function parseTopMovers(
   raw: unknown

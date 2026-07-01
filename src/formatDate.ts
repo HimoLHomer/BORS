@@ -49,17 +49,6 @@ export function formatShortMonthDayEn(isoDate: string): string {
   return new Intl.DateTimeFormat(APP_LOCALE, { month: 'short', day: 'numeric' }).format(d);
 }
 
-export function formatShortMonthDayFi(isoDate: string): string {
-  return formatShortMonthDayEn(isoDate);
-}
-
-export function formatTimeFi(date: Date = new Date()): string {
-  return new Intl.DateTimeFormat(APP_LOCALE, {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
-}
-
 /** Today's calendar date in Europe/Helsinki as `YYYY-MM-DD` (for comparing to stored history rows). */
 export function todayIsoDateHelsinki(): string {
   const now = new Date();
