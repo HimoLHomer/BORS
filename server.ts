@@ -15,8 +15,7 @@ import { registerPortfolioRoutes } from "./server/portfolio";
 import { yahooFinance } from "./server/yahooClient";
 import { registerMarketHeatmapRoutes } from "./server/marketHeatmap";
 import { registerMarketOverviewRoutes } from "./server/marketOverview";
-import { registerMarketAiRoutes } from "./server/marketAi";
-import { registerAiSettingsRoutes } from "./server/aiSettings";
+import { registerMarketNewsRoutes } from "./server/marketNews";
 import {
   dividendYieldPercentFromQuote,
   dividendYieldPercentFromQuoteSummary,
@@ -61,14 +60,12 @@ async function startServer() {
   registerPortfolioRoutes(app, yahooFinance);
   registerMarketHeatmapRoutes(app, yahooFinance);
   registerMarketOverviewRoutes(app, yahooFinance);
-  registerMarketAiRoutes(app);
-  registerAiSettingsRoutes(app);
+  registerMarketNewsRoutes(app, yahooFinance);
 
   const marketApiRoutes = [
     "GET /api/market/heatmap",
     "GET /api/market/overview",
-    "GET /api/market/ai-status",
-    "POST /api/market/ai-summary",
+    "POST /api/market/news",
   ];
 
   function pickQuotePrice(q: unknown): number | null {

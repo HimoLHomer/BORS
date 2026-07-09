@@ -2,7 +2,7 @@
   "name": "bors",
   "productName": "BÖRS",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Local-first portfolio dashboard",
   "author": "BORS",
   "main": "electron/main.cjs",
@@ -21,10 +21,11 @@
     "verify:market": "tsx scripts/verify-market-api.mts",
     "verify:prod": "tsx scripts/verify-production-build.mts",
     "test:unit": "vitest run",
-    "test:ai": "tsx scripts/test-model-selection.mts",
-    "test:top-stories": "tsx scripts/test-top-stories-validation.mts",
+    "test:market-news": "tsx scripts/test-market-news-ranking.mts",
+    "test:portfolio-chart": "tsx scripts/test-portfolio-chart-range.mts",
+    "test:portfolio-flow-return": "tsx scripts/test-portfolio-flow-return.mts",
     "test:history-backfill": "tsx scripts/test-portfolio-history-backfill.mts",
-    "test:release": "npm run lint && npm run test:unit && npm run test:ai && npm run test:top-stories && npm run test:history-backfill && npm run verify:cash && npm run verify:portfolio && npm run verify:market && npm run verify:prod",
+    "test:release": "npm run lint && npm run test:unit && npm run test:market-news && npm run test:portfolio-chart && npm run test:portfolio-flow-return && npm run test:history-backfill && npm run verify:cash && npm run verify:portfolio && npm run verify:market && npm run verify:prod",
     "build:sp500": "tsx scripts/build-sp500-json.mts",
     "rebuild:native": "npm rebuild better-sqlite3",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
@@ -59,6 +60,7 @@
       "dist/**"
     ],
     "publish": null,
+    "afterPack": "./scripts/embed-win-icon.cjs",
     "win": {
       "target": [
         "nsis"
@@ -77,7 +79,6 @@
     }
   },
   "dependencies": {
-    "@google/genai": "^1.52.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.10.0",
@@ -99,6 +100,7 @@
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
+    "rcedit": "^5.0.2",
     "sharp": "^0.34.5",
     "tailwindcss": "^4.1.14",
     "to-ico": "^1.1.5",

@@ -129,11 +129,11 @@ export function AssetNameCell({
       <div className={`flex items-center ${gap} min-w-0`}>
         {logo}
         <div className="min-w-0">
-          <div className="text-text-p text-[11px] font-sans truncate leading-snug" title={name}>
+          <div className="text-text-p text-[11px] font-sans font-semibold truncate leading-snug" title={name}>
             {name}
           </div>
           {line ? (
-            <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate leading-none">
+            <div className="mt-0.5 text-[10px] text-text-s/70 font-sans truncate leading-snug">
               {line}
             </div>
           ) : null}

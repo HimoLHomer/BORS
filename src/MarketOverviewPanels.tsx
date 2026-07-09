@@ -1,19 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import Markdown from 'react-markdown';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
 import { formatCurrency } from './formatCurrency';
 import { fetchJson } from './apiFetch';
 import { onFeedReconnected } from './feedReconnect';
-import { friendlyAiErrorMessage } from './aiErrorMessage';
 import { MARKET_PANEL, MARKET_SUBCARD } from './marketTheme';
 import { formatDateFi, todayIsoDateHelsinki } from './formatDate';
-import type { MarketHeatmapMover, MarketSectorBreadth } from './marketAiPrompt';
+import type { MarketHeatmapMover, MarketSectorBreadth } from './marketHeatmapUtils';
 import {
   EMPTY_TOP_STORIES_USER_MESSAGE,
   formatStoryReferenceLabel,
   sanitizeTopStories,
-  sanitizeTopStoriesFallback,
   storyReferencesForDisplay,
   type MarketTopStory,
 } from './marketTopStories';
@@ -93,6 +90,42 @@ type TopMoversPayload = {
   losers: MarketHeatmapMover[];
 };
 
+function TopStorySourcePill({ ref: storyRef }: { ref: { title: string; url?: string } }) {
+  const label = storyRef.title.trim() || formatStoryReferenceLabel(storyRef);
+  const pillClass =
+    'inline-flex max-w-full items-center rounded-md border border-border/30 bg-white/5 px-2 py-0.5 font-sans text-[11px] font-medium text-accent transition-colors';
+
+  if (storyRef.url) {
+    return (
+      <a
+        href={storyRef.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={storyRef.url}
+        className={`${pillClass} hover:border-accent/30 hover:text-accent`}
+      >
+        <span className="truncate">{label}</span>
+      </a>
+    );
+  }
+
+  return (
+    <span className={pillClass}>
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
+function TopStoryCardSkeleton() {
+  return (
+    <div className={`${MARKET_SUBCARD} p-3 space-y-2`}>
+      <div className="h-2.5 bg-white/5 rounded-full w-full animate-pulse" />
+      <div className="h-2.5 bg-white/5 rounded-full w-[92%] animate-pulse" />
+      <div className="h-5 w-20 rounded-md bg-white/5 animate-pulse" />
+    </div>
+  );
+}
+
 function TopStoriesList({
   stories,
   fallbackText,
@@ -100,68 +133,52 @@ function TopStoriesList({
   stories: MarketTopStory[];
   fallbackText: string;
 }) {
-  const safeFallback = sanitizeTopStoriesFallback(fallbackText);
-
   if (stories.length === 0) {
-    const useMarkdown = /\*\*[^*]+\*\*/.test(safeFallback);
     return (
-      <div className="text-text-p text-xs sm:text-sm leading-relaxed">
-        {useMarkdown ? (
-          <div className="markdown-body prose prose-sm prose-invert max-w-none">
-            <Markdown>{safeFallback || 'Top stories unavailable.'}</Markdown>
-          </div>
-        ) : (
-          <p className="m-0">{safeFallback || 'Top stories unavailable.'}</p>
-        )}
+      <div className={`${MARKET_SUBCARD} p-3 font-sans`}>
+        <p className="m-0 text-sm text-text-s/80 leading-relaxed">
+          {fallbackText || 'Top stories unavailable.'}
+        </p>
       </div>
     );
   }
 
+  const cleaned = sanitizeTopStories(stories);
+
+  const renderStory = (story: MarketTopStory, i: number) => {
+    const references = storyReferencesForDisplay(story);
+    const primaryRef = references[0];
+
+    return (
+      <li key={`${story.headline}-${i}`}>
+        <article
+          className={`${MARKET_SUBCARD} p-3 font-sans hover:bg-bg/40 transition-colors`}
+        >
+          <p className="text-sm font-bold text-text-p leading-relaxed line-clamp-3 m-0">
+            {story.headline}
+          </p>
+          {primaryRef ? (
+            <div className="mt-2">
+              <TopStorySourcePill ref={primaryRef} />
+            </div>
+          ) : null}
+        </article>
+      </li>
+    );
+  };
+
   return (
-    <div className="market-top-stories space-y-3">
-      <ul className="space-y-3 list-none m-0 p-0">
-        {sanitizeTopStories(stories).map((story, i) => {
-          const references = storyReferencesForDisplay(story);
-          return (
-          <li key={`${story.headline}-${i}`} className="border-b border-border/30 pb-3 last:border-0 last:pb-0">
-            <p className="text-xs sm:text-sm text-text-p leading-snug line-clamp-3">{story.headline}</p>
-            {references.length > 0 ? (
-              <ul className="mt-1.5 space-y-1 list-none m-0 p-0">
-                {references.map((ref, j) => (
-                  <li key={`${ref.title}-${j}`}>
-                    {ref.url ? (
-                      <a
-                        href={ref.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={ref.url}
-                        className="text-[10px] text-accent hover:text-accent/80 underline underline-offset-2 decoration-accent/40 hover:decoration-accent transition-colors block"
-                      >
-                        <span className="truncate block">{ref.title.trim() || formatStoryReferenceLabel(ref)}</span>
-                        <span className="truncate block text-[9px] text-text-s/50 font-normal no-underline mt-0.5">
-                          {ref.url}
-                        </span>
-                      </a>
-                    ) : (
-                      <span className="text-[10px] text-text-s/70 truncate block">{ref.title.trim()}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </li>
-          );
-        })}
+    <div className="market-top-stories">
+      <ul className="space-y-2 list-none m-0 p-0">
+        {cleaned.map((story, i) => renderStory(story, i))}
       </ul>
     </div>
   );
 }
 
-function useIndexTopStories(
+function useIndexNews(
   quote: MarketQuoteSnapshot | null | undefined,
   variant: 'us' | 'fi',
-  asOf: string | null | undefined,
-  heatmapAsOf: string | null | undefined,
   topMovers: TopMoversPayload | undefined,
   sectorBreadth: MarketSectorBreadth | undefined
 ) {
@@ -169,94 +186,59 @@ function useIndexTopStories(
   const [fallbackText, setFallbackText] = useState('');
   const [summaryDate, setSummaryDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
 
   const price = quote?.price ?? null;
-  const label = quote?.label ?? '';
-  const currency = quote?.currency ?? 'USD';
   const changePercent = quote?.changePercent ?? 0;
 
-  const marketDate = useMemo(() => todayIsoDateHelsinki(), []);
   const initialFetchDoneRef = useRef(false);
 
-  const refreshAiStatus = useCallback(() => {
-    void fetch('/api/market/ai-status', { cache: 'no-store' })
-      .then((r) => r.json())
-      .then((j: { configured?: boolean }) => setAiConfigured(Boolean(j.configured)))
-      .catch(() => setAiConfigured(false));
-  }, []);
-
-  useEffect(() => {
-    refreshAiStatus();
-    const onSettings = () => refreshAiStatus();
-    window.addEventListener('bors-ai-settings-changed', onSettings);
-    return () => window.removeEventListener('bors-ai-settings-changed', onSettings);
-  }, [refreshAiStatus]);
-
   const fetchStories = useCallback(async (forceRefresh = false) => {
-      if (aiConfigured !== true || price == null) return;
-      setLoading(true);
-      try {
-        const body: Record<string, unknown> = {
-          variant,
-          label,
-          price,
-          changePercent,
-          currency,
-          marketDate,
-          asOf: asOf ?? null,
-          refresh: forceRefresh,
-        };
-        const g = topMovers?.gainers ?? [];
-        const l = topMovers?.losers ?? [];
-        if (g.length > 0 || l.length > 0) {
-          body.topMovers = { gainers: g, losers: l };
-        }
-        if (sectorBreadth) {
-          body.sectorBreadth = sectorBreadth;
-        }
-        const res = await fetch('/api/market/ai-summary', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const json = await fetchJson<{
-          stories?: MarketTopStory[];
-          summary?: string;
-          marketDate?: string;
-          error?: string;
-          code?: number;
-        }>(res);
-        if (!res.ok) {
-          throw new Error(json.error ?? `Top stories failed (${res.status})`);
-        }
-        setSummaryDate(json.marketDate ?? marketDate);
-        setStories(sanitizeTopStories(json.stories ?? []));
-        setFallbackText(
-          sanitizeTopStoriesFallback(json.summary?.trim() || '') ||
-            (json.stories?.length ? '' : EMPTY_TOP_STORIES_USER_MESSAGE)
-        );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'AI request failed';
-        setStories([]);
-        setFallbackText(friendlyAiErrorMessage(msg));
-      } finally {
-        setLoading(false);
+    if (price == null) return;
+    setLoading(true);
+    try {
+      const body: Record<string, unknown> = {
+        variant,
+        changePercent,
+        marketDate: todayIsoDateHelsinki(),
+        refresh: forceRefresh,
+      };
+      const g = topMovers?.gainers ?? [];
+      const l = topMovers?.losers ?? [];
+      if (g.length > 0 || l.length > 0) {
+        body.topMovers = { gainers: g, losers: l };
       }
-  }, [aiConfigured, price, variant, label, changePercent, currency, marketDate, asOf, topMovers, sectorBreadth]);
+      if (sectorBreadth) {
+        body.sectorBreadth = sectorBreadth;
+      }
+      const res = await fetch('/api/market/news', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await fetchJson<{
+        stories?: MarketTopStory[];
+        marketDate?: string;
+        error?: string;
+      }>(res);
+      if (!res.ok) {
+        throw new Error(json.error ?? `Top stories failed (${res.status})`);
+      }
+      setSummaryDate(json.marketDate ?? todayIsoDateHelsinki());
+      setStories(sanitizeTopStories(json.stories ?? []));
+      setFallbackText(json.stories?.length ? '' : EMPTY_TOP_STORIES_USER_MESSAGE);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not load news';
+      setStories([]);
+      setFallbackText(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [price, variant, changePercent, topMovers, sectorBreadth]);
 
   const fetchStoriesRef = useRef(fetchStories);
   fetchStoriesRef.current = fetchStories;
 
   useEffect(() => {
-    if (aiConfigured === false) {
-      initialFetchDoneRef.current = false;
-      setStories([]);
-      setFallbackText('Add a **Gemini** API key under **Options → Market AI** for Top Stories.');
-      setLoading(false);
-      return;
-    }
-    if (aiConfigured !== true) return;
     if (price == null) {
       setStories([]);
       setFallbackText('Waiting for live quote…');
@@ -266,9 +248,9 @@ function useIndexTopStories(
     if (initialFetchDoneRef.current) return;
     initialFetchDoneRef.current = true;
     void fetchStoriesRef.current();
-  }, [aiConfigured, price]);
+  }, [price]);
 
-  const canRefresh = aiConfigured === true && price != null;
+  const canRefresh = price != null;
 
   const refreshStories = useCallback(() => {
     if (!canRefresh) return;
@@ -280,8 +262,6 @@ function useIndexTopStories(
     fallbackText,
     summaryDate,
     loading,
-    hasAiKey: aiConfigured === true,
-    aiStatusKnown: aiConfigured !== null,
     canRefresh,
     refreshStories,
   };
@@ -307,8 +287,6 @@ export function MarketIndexPanel({
   quote,
   overviewLoading,
   variant,
-  asOf,
-  heatmapAsOf,
   topMovers,
   sectorBreadth,
   className = '',
@@ -316,9 +294,6 @@ export function MarketIndexPanel({
   quote: MarketQuoteSnapshot | undefined;
   overviewLoading: boolean;
   variant: 'us' | 'fi';
-  asOf?: string | null;
-  /** Snapshot time of the heatmap tiles beside this panel (keeps AI in sync). */
-  heatmapAsOf?: string | null;
   topMovers?: TopMoversPayload;
   sectorBreadth?: MarketSectorBreadth;
   className?: string;
@@ -327,17 +302,13 @@ export function MarketIndexPanel({
     stories,
     fallbackText,
     summaryDate,
-    loading: aiLoading,
-    hasAiKey,
-    aiStatusKnown,
+    loading: newsLoading,
     canRefresh,
     refreshStories,
-  } = useIndexTopStories(quote, variant, asOf, heatmapAsOf, topMovers, sectorBreadth);
+  } = useIndexNews(quote, variant, topMovers, sectorBreadth);
 
-  const showActiveFetch = aiLoading && hasAiKey && quote?.price != null;
-  const storiesFallback =
-    fallbackText ||
-    (!aiStatusKnown ? 'Checking AI settings…' : '');
+  const showActiveFetch = newsLoading && quote?.price != null;
+  const storiesFallback = fallbackText;
 
   return (
     <div
@@ -362,13 +333,13 @@ export function MarketIndexPanel({
 
       <div className="flex flex-col flex-1 min-h-0 mt-3 pt-3 border-t border-border/40">
         <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem] shrink-0">
-          <p className="text-[10px] font-bold text-text-s uppercase tracking-widest">
+          <p className="micro-label mb-0">
             Top stories
           </p>
           <div className="flex items-center gap-2 min-w-0">
-            {summaryDate && !aiLoading ? (
+            {summaryDate && !newsLoading ? (
               <p
-                className="text-[10px] text-text-s/80 tabular-nums truncate"
+                className="font-sans text-[10px] text-text-s/80 tabular-nums truncate"
                 title="News date"
               >
                 {formatDateFi(summaryDate)}
@@ -378,24 +349,21 @@ export function MarketIndexPanel({
               <button
                 type="button"
                 onClick={() => refreshStories()}
-                disabled={aiLoading}
+                disabled={newsLoading}
                 title="Refresh top stories"
                 aria-label="Refresh top stories"
                 className="shrink-0 p-1 rounded-md text-text-s hover:text-text-p hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none transition-colors"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${newsLoading ? 'animate-spin' : ''}`} />
               </button>
             ) : null}
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto pr-0.5">
         {showActiveFetch ? (
-          <div className="space-y-3">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="space-y-1.5">
-                <div className="h-2.5 bg-white/5 rounded-full w-full animate-pulse" />
-                <div className="h-2 bg-white/5 rounded-full w-1/4 animate-pulse" />
-              </div>
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <TopStoryCardSkeleton key={i} />
             ))}
           </div>
         ) : (
@@ -450,8 +418,8 @@ export function AlternativeInvestmentsPanel({
 
   return (
     <div className={`${MARKET_PANEL} min-h-[180px]`}>
-      <h3 className="card-title mb-4">Alternative investments</h3>
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+      <h3 className="card-title mb-0">Alternative investments</h3>
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mt-3">
         {order.map((id) => (
           <AlternativeAssetCard key={id} quote={byId.get(id)} loading={loading} />
         ))}

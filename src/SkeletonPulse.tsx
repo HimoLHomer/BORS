@@ -58,27 +58,39 @@ export function SkeletonBarChart({ className = '' }: { className?: string }) {
 
 export function SkeletonDividendCalendar() {
   return (
-    <div className="space-y-6 px-2 py-4" aria-hidden>
+    <div className="flex flex-col gap-3 px-0.5 py-1" aria-hidden>
       {[0, 1].map((section) => (
-        <section key={section} className="space-y-2">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto_2.75rem] items-end gap-x-1 -mx-2 px-2 pt-2 pb-1.5">
-            <div className={`h-3 w-24 rounded ${SKELETON_PULSE}`} />
-            <div className={`h-3 w-20 rounded justify-self-end ${SKELETON_PULSE}`} />
-            <span className="w-11" />
-          </div>
-          {[0, 1, 2].map((row) => (
-            <div
-              key={row}
-              className="grid grid-cols-[minmax(0,1fr)_auto_2.75rem] gap-2 items-center bg-bg/30 rounded-lg px-2 py-2.5"
-            >
-              <div className="space-y-1.5 min-w-0">
-                <div className={`h-3 w-28 max-w-full rounded ${SKELETON_PULSE}`} />
-                <div className={`h-2 w-14 rounded-full ${SKELETON_PULSE}`} />
-              </div>
-              <div className={`h-3 w-16 rounded justify-self-end ${SKELETON_PULSE}`} />
-              <span className="w-11" />
+        <section key={section} className="min-w-0">
+          <div className="flex items-end justify-between gap-3 px-0.5 pt-0.5 pb-2">
+            <div className={`h-3 w-16 rounded ${SKELETON_PULSE}`} />
+            <div className="flex items-baseline gap-1.5 shrink-0">
+              <div className={`h-2.5 w-14 rounded ${SKELETON_PULSE}`} />
+              <div className={`h-3 w-12 rounded ${SKELETON_PULSE}`} />
             </div>
-          ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {[0, 1].map((row) => (
+              <div
+                key={row}
+                className={`min-h-[3.75rem] rounded-xl border border-border/40 bg-bg/25 px-2.5 py-2 space-y-2 ${SKELETON_PULSE}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="h-5 w-5 shrink-0 rounded-full bg-white/5" />
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="h-3 w-full rounded-full bg-white/5" />
+                      <div className="h-2.5 w-12 rounded-full bg-white/5" />
+                    </div>
+                  </div>
+                  <div className="h-3.5 w-10 rounded bg-white/5 shrink-0" />
+                </div>
+                <div className="flex justify-between gap-2">
+                  <div className="h-4 w-10 rounded-md bg-white/5" />
+                  <div className="h-3 w-12 rounded bg-white/5" />
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       ))}
     </div>

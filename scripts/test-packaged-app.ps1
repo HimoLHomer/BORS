@@ -59,4 +59,12 @@ if ($uiRes.StatusCode -ne 200 -or $uiRes.Content -notmatch 'id="root"') { throw 
 Write-Host "PASS UI HTTP $($uiRes.StatusCode)"
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
+Write-Host "== 3) App icon embedded in packaged exe =="
+Add-Type -AssemblyName System.Drawing
+$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($exe)
+if (-not $icon) { throw "No icon resource on $exe" }
+if ($icon.Width -lt 16 -or $icon.Height -lt 16) { throw "Icon on $exe looks invalid ($($icon.Width)x$($icon.Height))" }
+Write-Host "PASS icon $($icon.Width)x$($icon.Height) on $($exeItem.Name)"
+$icon.Dispose()
+
 Write-Host "`nPackaged app smoke tests passed."

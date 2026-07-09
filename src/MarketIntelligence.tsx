@@ -16,7 +16,7 @@ import {
   pickTopHeatmapMovers,
   type MarketHeatmapMover,
   type MarketSectorBreadth,
-} from './marketAiPrompt';
+} from './marketHeatmapUtils';
 
 type HeatmapUniverse = 'sp500' | 'omxh25';
 
@@ -933,7 +933,6 @@ function HeatmapPanel({
   maxTiles,
   onTopMovers,
   onSectorBreadth,
-  onHeatmapAsOf,
   className = '',
 }: {
   title: string;
@@ -945,10 +944,9 @@ function HeatmapPanel({
     losers: MarketHeatmapMover[];
   }) => void;
   onSectorBreadth?: (breadth: MarketSectorBreadth | undefined) => void;
-  onHeatmapAsOf?: (asOf: string | null) => void;
   className?: string;
 }) {
-  const { data, loading, error, tileLookup, topMovers, sectorBreadth, meta, reload } = useHeatmap(
+  const { data, loading, error, tileLookup, topMovers, sectorBreadth, reload } = useHeatmap(
     universe,
     maxTiles
   );
@@ -956,8 +954,7 @@ function HeatmapPanel({
   useEffect(() => {
     onTopMovers?.(topMovers);
     onSectorBreadth?.(sectorBreadth);
-    onHeatmapAsOf?.(meta?.asOf ?? null);
-  }, [onTopMovers, onSectorBreadth, onHeatmapAsOf, topMovers, sectorBreadth, meta?.asOf]);
+  }, [onTopMovers, onSectorBreadth, topMovers, sectorBreadth]);
 
   return (
     <div className={`${MARKET_PANEL} flex flex-col min-h-0 h-full overflow-hidden ${className}`}>
@@ -1006,8 +1003,6 @@ export function MarketIntelligence() {
   }>({ gainers: [], losers: [] });
   const [usSectorBreadth, setUsSectorBreadth] = useState<MarketSectorBreadth | undefined>();
   const [fiSectorBreadth, setFiSectorBreadth] = useState<MarketSectorBreadth | undefined>();
-  const [usHeatmapAsOf, setUsHeatmapAsOf] = useState<string | null>(null);
-  const [fiHeatmapAsOf, setFiHeatmapAsOf] = useState<string | null>(null);
 
   return (
     <div className="space-y-4">
@@ -1037,7 +1032,6 @@ export function MarketIntelligence() {
             maxTiles={SP500_DISPLAY_CAP}
             onTopMovers={setUsTopMovers}
             onSectorBreadth={setUsSectorBreadth}
-            onHeatmapAsOf={setUsHeatmapAsOf}
             className="h-full"
           />
         </div>
@@ -1046,8 +1040,6 @@ export function MarketIntelligence() {
             quote={overview?.sp500}
             overviewLoading={overviewLoading}
             variant="us"
-            asOf={overview?.asOf}
-            heatmapAsOf={usHeatmapAsOf}
             topMovers={usTopMovers}
             sectorBreadth={usSectorBreadth}
             className="h-full"
@@ -1061,7 +1053,6 @@ export function MarketIntelligence() {
             chartClassName={`w-full ${MARKET_FI_CHART_HEIGHT}`}
             onTopMovers={setFiTopMovers}
             onSectorBreadth={setFiSectorBreadth}
-            onHeatmapAsOf={setFiHeatmapAsOf}
             className="h-full"
           />
         </div>
@@ -1070,8 +1061,6 @@ export function MarketIntelligence() {
             quote={overview?.omxhpi}
             overviewLoading={overviewLoading}
             variant="fi"
-            asOf={overview?.asOf}
-            heatmapAsOf={fiHeatmapAsOf}
             topMovers={fiTopMovers}
             sectorBreadth={fiSectorBreadth}
             className="h-full"

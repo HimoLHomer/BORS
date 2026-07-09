@@ -32,6 +32,7 @@ export type RedeemedDividendPayment = {
   amountEur: number;
   source: DividendPaymentSource;
   frequency: DividendPayoutFrequency;
+  payDateSource?: PayDateSource;
 };
 
 export type MonthPaymentGroup = {
@@ -106,6 +107,13 @@ export function loadRedeemed(): RedeemedDividendPayment[] {
           o.frequency === 'monthly' || o.frequency === 'quarterly' || o.frequency === 'annual'
             ? o.frequency
             : null;
+        const payDateSource =
+          o.payDateSource === 'yahoo' ||
+          o.payDateSource === 'estimated' ||
+          o.payDateSource === 'manual' ||
+          o.payDateSource === 'fallback'
+            ? o.payDateSource
+            : undefined;
         if (!id || !redeemedAt || !monthKey || !name || !source || !frequency) return null;
         if (!Number.isFinite(amountEur) || amountEur < 0) return null;
         return {
@@ -117,6 +125,7 @@ export function loadRedeemed(): RedeemedDividendPayment[] {
           amountEur,
           source,
           frequency,
+          ...(payDateSource ? { payDateSource } : {}),
         } satisfies RedeemedDividendPayment;
       })
       .filter((x): x is RedeemedDividendPayment => x != null);
@@ -391,6 +400,7 @@ export function redeemPayment(
     amountEur: payment.amountEur,
     source: payment.source,
     frequency: payment.frequency,
+    ...(payment.payDateSource ? { payDateSource: payment.payDateSource } : {}),
   };
   return [...redeemed, entry];
 }

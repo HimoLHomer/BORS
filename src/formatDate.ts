@@ -49,18 +49,31 @@ export function formatShortMonthDayEn(isoDate: string): string {
   return new Intl.DateTimeFormat(APP_LOCALE, { month: 'short', day: 'numeric' }).format(d);
 }
 
-/** Today's calendar date in Europe/Helsinki as `YYYY-MM-DD` (for comparing to stored history rows). */
-export function todayIsoDateHelsinki(): string {
-  const now = new Date();
+function helsinkiDateParts(date: Date): { y: string; m: string; d: string } | null {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Europe/Helsinki',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(now);
+  }).formatToParts(date);
   const y = parts.find((p) => p.type === 'year')?.value;
   const m = parts.find((p) => p.type === 'month')?.value;
   const d = parts.find((p) => p.type === 'day')?.value;
-  if (y && m && d) return `${y}-${m}-${d}`;
-  return now.toISOString().slice(0, 10);
+  if (y && m && d) return { y, m, d };
+  return null;
+}
+
+/** Calendar date in Europe/Helsinki for a timestamp, as `YYYY-MM-DD`. */
+export function isoDateFromTimestampHelsinki(ms: number): string | null {
+  if (!Number.isFinite(ms)) return null;
+  const parts = helsinkiDateParts(new Date(ms));
+  if (!parts) return null;
+  return `${parts.y}-${parts.m}-${parts.d}`;
+}
+
+/** Today's calendar date in Europe/Helsinki as `YYYY-MM-DD` (for comparing to stored history rows). */
+export function todayIsoDateHelsinki(): string {
+  const parts = helsinkiDateParts(new Date());
+  if (parts) return `${parts.y}-${parts.m}-${parts.d}`;
+  return new Date().toISOString().slice(0, 10);
 }

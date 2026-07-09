@@ -72,7 +72,7 @@ function loadUserEnv() {
     if (!fs.existsSync(example)) {
       fs.writeFileSync(
         example,
-        "# Market AI (Options → Market AI)\nGEMINI_API_KEY=\n",
+        "# Optional environment overrides\n# See .env.example\n",
         "utf8"
       );
     }

@@ -1,23 +1,16 @@
-/** Prompts and config for Market Intelligence index panels. */
+/** Heatmap helpers for Market Intelligence panels. */
 
-import {
-  MARKET_TOP_STORIES_AI_CONFIG,
-  MARKET_TOP_STORIES_SYSTEM_INSTRUCTION,
-  buildFiTopStoriesPrompt,
-  buildUsTopStoriesPrompt,
-  type MarketAiQuoteContext,
-  type MarketHeatmapMover,
-  type MarketSectorBreadth,
-} from "./marketTopStories";
+export type MarketHeatmapMover = {
+  symbol: string;
+  name: string;
+  changePercent: number;
+};
 
-export {
-  MARKET_TOP_STORIES_AI_CONFIG,
-  MARKET_TOP_STORIES_SYSTEM_INSTRUCTION,
-  buildFiTopStoriesPrompt,
-  buildUsTopStoriesPrompt,
-  type MarketAiQuoteContext,
-  type MarketHeatmapMover,
-  type MarketSectorBreadth,
+export type MarketSectorBreadth = {
+  leadingSector: string;
+  leadingAvgPct: number;
+  laggingSector: string;
+  laggingAvgPct: number;
 };
 
 export function pickTopHeatmapMovers(

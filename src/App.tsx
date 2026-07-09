@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BorsMark } from './BorsMark';
-import { Asset, PortfolioStats, HistoryPoint } from './types';
+import { Asset, PortfolioStats, HistoryPoint, PortfolioFlow } from './types';
 import {
   buildAllocationPieCalloutMap,
   AllocationPieCalloutLayer,
@@ -38,10 +38,9 @@ import {
 import { formatCurrency, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
 import { mergeHoldingPurchase } from './mergeHoldingPurchase';
 import { formatDecimalEn, formatDecimalInputEn, formatPercentEn, parseDecimalInput, parseShareInput, formatShareInput, formatShares, sanitizeShareDraft } from './formatNumber';
-import { formatDateEn, formatShortMonthDayEn, todayIsoDateHelsinki } from './formatDate';
+import { formatDateEn, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
-import { AiSettingsPanel } from './AiSettingsPanel';
 import { DataListTable } from './DataListTable';
 import { buildTableSkeletonRows, SkeletonBlock, SkeletonCurrency } from './SkeletonPulse';
 import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
@@ -60,14 +59,22 @@ import {
 } from './clientSettings';
 import {
   PORTFOLIO_CHART_RANGE_OPTIONS,
-  computePortfolioRangeGain,
+  computePortfolioChartYDomain,
+  computePortfolioChartXAxis,
+  applyLiveTodayPortfolioPoint,
+  buildPortfolio1DaySeries,
+  buildPortfolio1DaySeriesFromTodayGain,
+  computePortfolioRangeReturnFromHistory,
   filterPortfolioChartByRange,
-  formatPortfolioChartXTick,
   formatPortfolioChartYTick,
   formatPortfolioChartTooltipValue,
   isPortfolioChartRangeAvailable,
   pickDefaultPortfolioChartRange,
+  portfolioChartPoint,
+  portfolioChartTooltipLabel,
   portfolioChartRangeGainLabel,
+  portfolioRangeShowsNetContributions,
+  type PortfolioChartPoint,
   type PortfolioChartRangeId,
 } from './portfolioChartRange';
 import { View, dedupeHistoryByDate, normalizeCashAmountEur, parseCashInputEur, formatCashEurTwoDecimals, isAbortError } from './portfolioHelpers';
@@ -86,6 +93,7 @@ export default function App() {
   const [dbPathCopied, setDbPathCopied] = useState(false);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [portfolioFlows, setPortfolioFlows] = useState<PortfolioFlow[]>([]);
   const [portfolioChartRange, setPortfolioChartRange] = useState<PortfolioChartRangeId | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [historyModal, setHistoryModal] = useState<
@@ -235,11 +243,13 @@ export default function App() {
         let snapshot = portfolioMutationEpochRef.current;
         let assetsData: Asset[] = [];
         let historyData: HistoryPoint[] = [];
+        let flowsData: PortfolioFlow[] = [];
         let hydrated = false;
 
         for (let attempt = 0; attempt < 12 && !cancelled; attempt++) {
           const assetsRes = await fetch('/api/portfolio/assets', pf);
           const historyRes = await fetch('/api/portfolio/history', pf);
+          const flowsRes = await fetch('/api/portfolio/flows', pf);
           if (!assetsRes.ok || !historyRes.ok) {
             throw new Error(
               `Could not load portfolio (assets HTTP ${assetsRes.status}, history HTTP ${historyRes.status})`
@@ -247,12 +257,14 @@ export default function App() {
           }
           assetsData = await fetchJson<Asset[]>(assetsRes);
           historyData = await fetchJson<HistoryPoint[]>(historyRes);
+          flowsData = flowsRes.ok ? await fetchJson<PortfolioFlow[]>(flowsRes) : [];
 
           if (cancelled) return;
           if (portfolioMutationEpochRef.current === snapshot) {
             if (portfolioBootstrapGenerationRef.current !== gen) return;
             setAssets(assetsData);
             setHistory(dedupeHistoryByDate(historyData));
+            setPortfolioFlows(flowsData);
             hydrated = true;
             break;
           }
@@ -261,6 +273,7 @@ export default function App() {
         if (!cancelled && !hydrated && portfolioBootstrapGenerationRef.current === gen) {
           setAssets(assetsData);
           setHistory(dedupeHistoryByDate(historyData));
+          setPortfolioFlows(flowsData);
         }
 
         // One cash read after assets/history are stable — avoids interleaving GET /cash with
@@ -416,7 +429,7 @@ export default function App() {
       if (!res.ok) throw new Error('Delete failed');
       const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
       setAssets(list);
-      portfolioMutationEpochRef.current += 1;
+      await reloadFlows();
     } catch (err) {
       console.error('Failed to remove position:', err);
     }
@@ -464,16 +477,8 @@ export default function App() {
     const todayStr = todayIsoDateHelsinki();
     const baseData = history
       .filter((p, i, self) => i === self.findIndex((t) => t.date === p.date))
-      .map((p) => ({
-        date: p.date,
-        name: formatShortMonthDayEn(p.date),
-        value: p.value,
-      }));
-    const hasStoredToday = history.some((p) => p.date === todayStr);
-    if (!hasStoredToday && stats.totalValue > 0) {
-      baseData.push({ date: todayStr, name: 'Today', value: stats.totalValue });
-    }
-    return baseData;
+      .map((p) => portfolioChartPoint(p.date, p.value));
+    return applyLiveTodayPortfolioPoint(baseData, stats.totalValue, todayStr);
   }, [history, stats.totalValue]);
 
   const defaultPortfolioChartRange = useMemo(
@@ -496,6 +501,11 @@ export default function App() {
     [portfolioChartData, activePortfolioChartRange]
   );
 
+  const portfolioHistoryValues = useMemo(
+    () => history.map((point) => ({ date: point.date, value: point.value })),
+    [history]
+  );
+
   const portfolioTodayGain = useMemo(() => {
     let todayGainEur = 0;
     let portfolioValueEur = cashLineEur;
@@ -511,20 +521,57 @@ export default function App() {
     return { todayGainEur, todayGainPercent };
   }, [assets, marketPrices, quoteCurrencies, exchangeRates, marketChanges, cashLineEur]);
 
+  const portfolioChartDisplayData = useMemo(() => {
+    if (activePortfolioChartRange === '1D') {
+      const oneDaySeries = buildPortfolio1DaySeriesFromTodayGain(
+        stats.totalValue,
+        portfolioTodayGain.todayGainEur
+      );
+      if (oneDaySeries) return oneDaySeries;
+      const historyFallback = buildPortfolio1DaySeries(portfolioHistoryValues, stats.totalValue);
+      if (historyFallback) return historyFallback;
+    }
+    return portfolioChartVisibleData;
+  }, [
+    activePortfolioChartRange,
+    portfolioHistoryValues,
+    portfolioTodayGain.todayGainEur,
+    stats.totalValue,
+    portfolioChartVisibleData,
+  ]);
+
+  const portfolioChartYDomain = useMemo(
+    () => computePortfolioChartYDomain(portfolioChartDisplayData, activePortfolioChartRange),
+    [portfolioChartDisplayData, activePortfolioChartRange]
+  );
+
+  const portfolioChartXAxis = useMemo(
+    () => computePortfolioChartXAxis(portfolioChartDisplayData, activePortfolioChartRange),
+    [portfolioChartDisplayData, activePortfolioChartRange]
+  );
+
   const portfolioRangeGain = useMemo(() => {
-    const fromChart = computePortfolioRangeGain(portfolioChartVisibleData);
-    if (activePortfolioChartRange === '1D' && portfolioChartVisibleData.length < 2) {
+    if (activePortfolioChartRange === '1D') {
       return {
         gainEur: portfolioTodayGain.todayGainEur,
         gainPercent: portfolioTodayGain.todayGainPercent,
+        netContributionsEur: 0,
+        flowAdjusted: false,
+        useLiveQuoteFallback: false,
       };
     }
-    return { gainEur: fromChart.gainEur, gainPercent: fromChart.gainPercent };
+    return computePortfolioRangeReturnFromHistory(
+      portfolioHistoryValues,
+      portfolioFlows,
+      stats.totalValue,
+      activePortfolioChartRange
+    );
   }, [
-    portfolioChartVisibleData,
     activePortfolioChartRange,
-    portfolioTodayGain.todayGainEur,
-    portfolioTodayGain.todayGainPercent,
+    portfolioTodayGain,
+    portfolioHistoryValues,
+    portfolioFlows,
+    stats.totalValue,
   ]);
 
   const allocationSlices = useMemo(() => {
@@ -716,6 +763,7 @@ export default function App() {
       const data = JSON.parse(text) as {
         assets?: Asset[];
         history?: HistoryPoint[];
+        flows?: PortfolioFlow[];
         cashEur?: number;
         uiPrefs?: unknown;
         clientSettings?: unknown;
@@ -723,6 +771,7 @@ export default function App() {
       const payload: {
         assets: Asset[];
         history: HistoryPoint[];
+        flows?: PortfolioFlow[];
         cashEur?: number;
         uiPrefs?: unknown;
         clientSettings?: unknown;
@@ -730,6 +779,9 @@ export default function App() {
         assets: data.assets ?? [],
         history: data.history ?? [],
       };
+      if (Array.isArray(data.flows)) {
+        payload.flows = data.flows;
+      }
       if (data.cashEur !== undefined && data.cashEur !== null && Number.isFinite(data.cashEur)) {
         payload.cashEur = Math.max(0, data.cashEur);
       }
@@ -745,13 +797,15 @@ export default function App() {
         body: JSON.stringify(payload),
       });
       const pf = { cache: 'no-store' as RequestCache };
-      const [a, h, cashRes] = await Promise.all([
+      const [a, h, flowsRes, cashRes] = await Promise.all([
         fetch('/api/portfolio/assets', pf).then((r) => r.json()),
         fetch('/api/portfolio/history', pf).then((r) => r.json()),
+        fetch('/api/portfolio/flows', pf).then((r) => (r.ok ? r.json() : [])),
         fetch('/api/portfolio/cash', pf).then((r) => (r.ok ? r.json() : { amountEur: 0 })),
       ]);
       setAssets(a);
       setHistory(dedupeHistoryByDate(h));
+      setPortfolioFlows(flowsRes as PortfolioFlow[]);
       const cv = normalizeCashAmountEur(cashRes.amountEur) ?? 0;
       setCashEur(Number(cv));
       setCashInput(formatCashEurTwoDecimals(cv));
@@ -789,7 +843,7 @@ export default function App() {
       const v = normalizeCashAmountEur(j.amountEur) ?? amount;
       setCashEur(Number(v));
       setCashInput(formatCashEurTwoDecimals(v));
-      portfolioMutationEpochRef.current += 1;
+      await reloadFlows();
     } catch (e) {
       console.error('Cash save failed', e);
       setCashEur(prevEur);
@@ -799,25 +853,39 @@ export default function App() {
     }
   };
 
-  const persistAsset = async (asset: Asset, isEdit: boolean) => {
+  const reloadFlows = async () => {
+    const list: PortfolioFlow[] = await fetch('/api/portfolio/flows').then((r) => r.json());
+    setPortfolioFlows(list);
+    portfolioMutationEpochRef.current += 1;
+  };
+
+  const persistAsset = async (
+    asset: Asset,
+    isEdit: boolean,
+    opts?: { flowAmountEur?: number }
+  ) => {
+    const flowBody =
+      opts?.flowAmountEur != null && Number.isFinite(opts.flowAmountEur)
+        ? { flowAmountEur: opts.flowAmountEur }
+        : {};
     if (isEdit && asset.id) {
       const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(asset.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(asset),
+        body: JSON.stringify({ ...asset, ...flowBody }),
       });
       if (!res.ok) throw new Error('Update failed');
     } else {
       const res = await fetch('/api/portfolio/assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(asset),
+        body: JSON.stringify({ ...asset, ...flowBody }),
       });
       if (!res.ok) throw new Error('Create failed');
     }
     const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
     setAssets(list);
-    portfolioMutationEpochRef.current += 1;
+    await reloadFlows();
   };
 
   const reloadHistory = async () => {
@@ -1035,7 +1103,14 @@ export default function App() {
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                     <div>
-                      <p className="micro-label mb-1">
+                      <p
+                        className="micro-label mb-1"
+                        title={
+                          activePortfolioChartRange === '1D'
+                            ? "Sum of each holding's today gain from live quotes; cash excluded."
+                            : 'Return from market movement using daily history; purchases and cash deposits are excluded.'
+                        }
+                      >
                         {portfolioChartRangeGainLabel(activePortfolioChartRange)}
                       </p>
                       <GainDisplay
@@ -1043,6 +1118,13 @@ export default function App() {
                         percent={portfolioRangeGain.gainPercent}
                         loading={feedMetricsLoading}
                       />
+                      {portfolioRangeGain.flowAdjusted &&
+                      portfolioRangeShowsNetContributions(activePortfolioChartRange) &&
+                      portfolioRangeGain.netContributionsEur > 0 ? (
+                        <p className="text-[10px] text-text-s/70 mt-1">
+                          Net contributions {formatCurrency(portfolioRangeGain.netContributionsEur, 'EUR')}
+                        </p>
+                      ) : null}
                     </div>
                     <div>
                       <p className="micro-label mb-1" title="Holdings only vs average cost (EUR); cash excluded">
@@ -1123,7 +1205,8 @@ export default function App() {
                       )}
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart
-                          data={portfolioChartVisibleData}
+                          key={activePortfolioChartRange}
+                          data={portfolioChartDisplayData}
                           margin={{ top: 8, right: 12, left: 0, bottom: 4 }}
                         >
                           <defs>
@@ -1138,17 +1221,23 @@ export default function App() {
                             vertical={false}
                           />
                           <XAxis
-                            dataKey="date"
-                            tickFormatter={(iso) =>
-                              formatPortfolioChartXTick(String(iso), activePortfolioChartRange)
+                            type="number"
+                            dataKey="chartTime"
+                            domain={['dataMin', 'dataMax']}
+                            scale="linear"
+                            ticks={portfolioChartXAxis.ticks}
+                            tickFormatter={(chartTime) =>
+                              portfolioChartXAxis.formatTick(Number(chartTime))
                             }
                             tick={{ fill: 'var(--color-text-s)', fontSize: 10, fontWeight: 600 }}
                             tickMargin={8}
-                            minTickGap={24}
                             axisLine={{ stroke: 'var(--color-border)', strokeOpacity: 0.4 }}
                             tickLine={{ stroke: 'var(--color-border)', strokeOpacity: 0.25 }}
                           />
                           <YAxis
+                            domain={portfolioChartYDomain}
+                            allowDataOverflow={false}
+                            tickCount={5}
                             tick={{ fill: 'var(--color-text-s)', fontSize: 10, opacity: 0.7 }}
                             tickFormatter={(v) => formatPortfolioChartYTick(Number(v))}
                             width={80}
@@ -1160,7 +1249,10 @@ export default function App() {
                               formatPortfolioChartTooltipValue(Number(value)),
                               '',
                             ]}
-                            labelFormatter={(iso) => formatDateEn(String(iso))}
+                            labelFormatter={(_, payload) => {
+                              const row = payload?.[0]?.payload as PortfolioChartPoint | undefined;
+                              return row ? portfolioChartTooltipLabel(row) : '—';
+                            }}
                             separator=""
                             labelStyle={{
                               color: 'var(--color-text-s)',
@@ -1489,7 +1581,6 @@ export default function App() {
                   <p className="page-subtitle mb-6">Integrations, data & backup</p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <AiSettingsPanel />
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio data (SQLite)

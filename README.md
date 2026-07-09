@@ -10,7 +10,7 @@ You do **not** need Node.js or `npm run build` to use the desktop app.
 2. Download the latest **`BORS-Setup-0.x.x.exe`** (one file — nothing else required).
 3. Run the installer, then launch **BÖRS** from the Start menu.
 
-Your data is stored under `%APPDATA%\BÖRS\` (portfolio database, optional Gemini key).
+Your data is stored under `%APPDATA%\BÖRS\` (portfolio database).
 
 **Move data from an older copy:** use **Options → Import JSON** (full backup), or copy `portfolio.db` into `%APPDATA%\BÖRS\` while BÖRS is closed.
 
@@ -19,8 +19,7 @@ Developers who clone the repo can still run from source — see [First-time setu
 ## Requirements
 
 - [Node.js](https://nodejs.org/) **22 or newer** (includes `npm`)
-- Internet for live quotes, dividends, and heatmaps (no offline price feed)
-- Optional: [Gemini API key](https://aistudio.google.com/apikey) for Market Intelligence AI summaries
+- Internet for live quotes, dividends, heatmaps, and market news (no offline price feed)
 
 ## First-time setup (development)
 
@@ -37,21 +36,13 @@ Developers who clone the repo can still run from source — see [First-time setu
    npm install
    ```
 
-3. **Configure Market AI (optional)**
-
-   In the app: **Options → Market AI** → paste your **Gemini** API key → **Save**.
-
-   **Top Stories** on the Market screen (S&P 500 and OMX Helsinki) use **Gemini** with [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search) for up to five factual headlines per index. The app tries Gemini models automatically until stories load.
-
-   For development you can copy [.env.example](.env.example) to `.env.local`. Without a key, the rest of BÖRS works; only the Market AI panels are disabled.
-
-4. **Start the app**
+3. **Start the app**
 
    ```bash
    npm run dev
    ```
 
-5. **Open in your browser**
+4. **Open in your browser**
 
    [http://localhost:3000](http://localhost:3000)
 
@@ -86,7 +77,7 @@ On first run, the app creates `data/portfolio.db` automatically in the project f
 
 On first **Electron** launch, if the AppData database does not exist yet, the app copies `data/portfolio.db` from the project folder when that file is present.
 
-**Gemini in desktop mode:** use **Options → Market AI** in the app (saved to `%APPDATA%\BÖRS\.env.local`).
+**Market Top Stories:** headlines are fetched from Yahoo Finance (with Google News RSS fallback) when you open the Market screen. Stories refresh once per day automatically; use the refresh icon beside Top Stories to fetch again.
 
 ## Publishing a release (maintainers)
 
@@ -135,7 +126,7 @@ Output: `release/BORS-Setup-0.1.9.exe` (requires `npm run build` inside the scri
 | Empty dashboard but you had holdings | Open [http://localhost:3000/api/portfolio/assets](http://localhost:3000/api/portfolio/assets) — if JSON lists assets, data is on disk; refresh the page. |
 | `better-sqlite3` / DLL errors | `npm run rebuild:native` with server stopped. |
 | Port already in use | Stop the other process on 3000 (or 3847 for Electron dev). |
-| Market AI errors | Check your Gemini API key in **Options → Market AI** (or `GEMINI_API_KEY` in `.env.local`). Top Stories refresh after the ~10‑minute server cache expires, or use the refresh button on the Market screen. |
+| Top Stories empty | Check your internet connection and use the refresh button on the Market screen. News is cached per day per index. |
 | Desktop app won't start | See `%APPDATA%\BÖRS\bors-startup.log`. End all `BÖRS.exe` in Task Manager, reinstall from latest Release. |
 | FIRE data missing after import | Re-export JSON from **Options** (must include `clientSettings`), or copy full `portfolio.db`. |
 | Chart gap after vacation | Reopen BÖRS with network; missing days backfill automatically (or use **Backfill now** in Portfolio Capital history). |
@@ -143,5 +134,5 @@ Output: `release/BORS-Setup-0.1.9.exe` (requires `npm run build` inside the scri
 ## Local-first notes
 
 - Portfolio data is stored in **SQLite**, not in git. Do not commit `data/` or `dist/`.
-- **Yahoo Finance** is used through the local server for quotes, dividends, and history backfill.
+- **Yahoo Finance** is used through the local server for quotes, dividends, history backfill, and market news.
 - Asset logos may load from external CDNs; initials are shown when offline or missing.

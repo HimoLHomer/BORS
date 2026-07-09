@@ -41,3 +41,15 @@ export interface HistoryPoint {
   date: string; // YYYY-MM-DD
   value: number;
 }
+
+export type PortfolioFlowKind = 'cash' | 'buy' | 'sell';
+
+export interface PortfolioFlow {
+  id?: string;
+  date: string;
+  amountEur: number;
+  kind: PortfolioFlowKind;
+  assetSymbol?: string;
+  note?: string;
+  createdAt: string;
+}

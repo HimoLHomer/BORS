@@ -119,10 +119,10 @@ export async function assertPortfolioApi(base: string): Promise<void> {
     throw new Error(`GET /api/portfolio/export failed: HTTP ${exportRes.status}`);
   }
   const exported = (await exportRes.json()) as ExportPayload;
-  if (exported.version !== 1 && exported.version !== 2) {
-    throw new Error(`Export version expected 1 or 2, got ${exported.version}`);
+  if (exported.version !== 1 && exported.version !== 2 && exported.version !== 3) {
+    throw new Error(`Export version expected 1, 2, or 3, got ${exported.version}`);
   }
-  if (exported.version === 2 && exported.clientSettings != null && typeof exported.clientSettings !== "object") {
+  if ((exported.version === 2 || exported.version === 3) && exported.clientSettings != null && typeof exported.clientSettings !== "object") {
     throw new Error("Export clientSettings must be an object when present");
   }
   if (!exported.assets || exported.assets.length !== FIXTURE_SYMBOLS.length) {

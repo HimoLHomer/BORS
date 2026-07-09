@@ -5,7 +5,17 @@ import { appRoot } from "./appRoot";
 import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
-import type { Asset, HistoryPoint } from "../src/types";
+import type { Asset, HistoryPoint, PortfolioFlow } from "../src/types";
+import {
+  ensurePortfolioFlowsTable,
+  importPortfolioFlows,
+  insertPortfolioFlow,
+  listPortfolioFlows,
+  recordAssetCreateFlow,
+  recordAssetDeleteFlow,
+  recordAssetUpdateFlows,
+  recordCashChangeFlow,
+} from "./portfolioFlows";
 
 let db: Database.Database | null = null;
 
@@ -43,6 +53,7 @@ export function getPortfolioDb(): Database.Database {
     );
     INSERT OR IGNORE INTO ui_prefs (id, payload) VALUES (1, '{}');
   `);
+  ensurePortfolioFlowsTable(db);
   if (process.env.BORS_QUIET !== "1" && process.env.NODE_ENV !== "production") {
     console.log(`[portfolio] SQLite database: ${file}`);
   }
@@ -147,9 +158,10 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       if (!Number.isFinite(amount) || amount < 0) {
         return res.status(400).json({ error: "amountEur must be a non-negative number" });
       }
-      getPortfolioDb()
-        .prepare("UPDATE portfolio_cash SET amount_eur = ? WHERE id = 1")
-        .run(amount);
+      const d = getPortfolioDb();
+      const previous = getCashAmountEur();
+      d.prepare("UPDATE portfolio_cash SET amount_eur = ? WHERE id = 1").run(amount);
+      recordCashChangeFlow(d, previous, amount);
       res.set("Cache-Control", "no-store");
       res.json({ amountEur: getCashAmountEur() });
     } catch (e) {
@@ -198,12 +210,14 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
 
   app.post("/api/portfolio/assets", (req: Request, res: Response) => {
     try {
-      const body = req.body as Asset;
+      const body = req.body as Asset & { flowAmountEur?: number };
       const id = body.id || crypto.randomUUID();
-      const { id: _omit, ...rest } = body;
+      const { id: _omit, flowAmountEur: _flow, ...rest } = body;
       const asset: Asset = { ...rest, id, updatedAt: rest.updatedAt || new Date().toISOString() };
       const payload = JSON.stringify(asset);
-      getPortfolioDb().prepare("INSERT INTO assets (id, payload) VALUES (?, ?)").run(id, payload);
+      const d = getPortfolioDb();
+      d.prepare("INSERT INTO assets (id, payload) VALUES (?, ?)").run(id, payload);
+      recordAssetCreateFlow(d, asset, body);
       res.status(201).json(asset);
     } catch (e) {
       console.error(e);
@@ -214,21 +228,21 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
   app.patch("/api/portfolio/assets/:id", (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const row = getPortfolioDb()
+      const d = getPortfolioDb();
+      const row = d
         .prepare("SELECT id, payload FROM assets WHERE id = ?")
         .get(id) as { id: string; payload: string } | undefined;
       if (!row) return res.status(404).json({ error: "Asset not found" });
       const prev = JSON.parse(row.payload) as Asset;
-      const patch = req.body as Partial<Asset>;
+      const patch = req.body as Partial<Asset> & { flowAmountEur?: number };
       const next: Asset = {
         ...prev,
         ...patch,
         id,
         updatedAt: new Date().toISOString(),
       };
-      getPortfolioDb()
-        .prepare("UPDATE assets SET payload = ? WHERE id = ?")
-        .run(JSON.stringify(next), id);
+      d.prepare("UPDATE assets SET payload = ? WHERE id = ?").run(JSON.stringify(next), id);
+      recordAssetUpdateFlows(d, prev, next, patch);
       res.json(next);
     } catch (e) {
       console.error(e);
@@ -238,12 +252,58 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
 
   app.delete("/api/portfolio/assets/:id", (req: Request, res: Response) => {
     try {
-      const r = getPortfolioDb().prepare("DELETE FROM assets WHERE id = ?").run(req.params.id);
+      const d = getPortfolioDb();
+      const row = d
+        .prepare("SELECT id, payload FROM assets WHERE id = ?")
+        .get(req.params.id) as { id: string; payload: string } | undefined;
+      if (!row) return res.status(404).json({ error: "Asset not found" });
+      const prev = JSON.parse(row.payload) as Asset;
+      const r = d.prepare("DELETE FROM assets WHERE id = ?").run(req.params.id);
       if (r.changes === 0) return res.status(404).json({ error: "Asset not found" });
+      recordAssetDeleteFlow(d, prev);
       res.status(204).send();
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to delete asset" });
+    }
+  });
+
+  app.get("/api/portfolio/flows", (_req: Request, res: Response) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(listPortfolioFlows(getPortfolioDb()));
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to read flows" });
+    }
+  });
+
+  app.post("/api/portfolio/flows", (req: Request, res: Response) => {
+    try {
+      const body = req.body as {
+        date?: string;
+        amountEur?: number;
+        kind?: PortfolioFlow["kind"];
+        assetSymbol?: string;
+        note?: string;
+      };
+      if (typeof body.amountEur !== "number" || !Number.isFinite(body.amountEur) || body.amountEur === 0) {
+        return res.status(400).json({ error: "amountEur must be a non-zero number" });
+      }
+      if (body.kind !== "cash" && body.kind !== "buy" && body.kind !== "sell") {
+        return res.status(400).json({ error: "kind must be cash, buy, or sell" });
+      }
+      const flow = insertPortfolioFlow(getPortfolioDb(), {
+        date: body.date,
+        amountEur: body.amountEur,
+        kind: body.kind,
+        assetSymbol: body.assetSymbol,
+        note: body.note,
+      });
+      res.status(201).json(flow);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to write flow" });
     }
   });
 
@@ -338,11 +398,13 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       }));
       const uiPrefs = readUiPrefsPayload();
       const clientSettings = readClientSettingsPayload();
+      const flows = listPortfolioFlows(getPortfolioDb());
       res.json({
-        version: 2,
+        version: 3,
         exportedAt: new Date().toISOString(),
         assets,
         history,
+        flows,
         cashEur: getCashAmountEur(),
         uiPrefs,
         clientSettings,
@@ -359,6 +421,7 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       const body = req.body as {
         assets?: Asset[];
         history?: HistoryPoint[];
+        flows?: PortfolioFlow[];
         cashEur?: unknown;
         uiPrefs?: unknown;
         clientSettings?: unknown;
@@ -366,10 +429,12 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       const d = getPortfolioDb();
       const importAssets = Array.isArray(body.assets) ? body.assets : [];
       const importHistory = Array.isArray(body.history) ? body.history : [];
+      const importFlows = Array.isArray(body.flows) ? body.flows : [];
 
       if (mode === "replace") {
         d.prepare("DELETE FROM history").run();
         d.prepare("DELETE FROM assets").run();
+        d.prepare("DELETE FROM portfolio_flows").run();
         d.prepare("UPDATE portfolio_cash SET amount_eur = 0 WHERE id = 1").run();
       }
 
@@ -388,6 +453,8 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       for (const h of importHistory) {
         if (h.date && typeof h.value === "number") upsertHistory.run(h.date, h.value);
       }
+
+      const flowsImported = importPortfolioFlows(d, importFlows, mode);
 
       if (body.cashEur !== undefined && body.cashEur !== null) {
         const c = typeof body.cashEur === "number" ? body.cashEur : parseFloat(String(body.cashEur));
@@ -410,7 +477,13 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         writeClientSettingsPayload(body.clientSettings as Record<string, unknown>);
       }
 
-      res.json({ ok: true, mode, assetsImported: importAssets.length, historyImported: importHistory.length });
+      res.json({
+        ok: true,
+        mode,
+        assetsImported: importAssets.length,
+        historyImported: importHistory.length,
+        flowsImported,
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to import" });

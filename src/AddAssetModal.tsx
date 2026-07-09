@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { X, Search, RefreshCcw, Zap, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Asset } from './types';
-import { formatCurrency } from './formatCurrency';
+import { formatCurrency, fxToEur } from './formatCurrency';
 import { mergeHoldingPurchase } from './mergeHoldingPurchase';
 import {
   formatDecimalEn,
@@ -18,7 +18,11 @@ import { EurAmountInput } from './EurAmountField';
 
 export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: { 
   onClose: () => void, 
-  onPersist: (asset: Asset, isEdit: boolean) => Promise<void>,
+  onPersist: (
+    asset: Asset,
+    isEdit: boolean,
+    opts?: { flowAmountEur?: number }
+  ) => Promise<void>,
   editAsset?: Asset,
   exchangeRates: Record<string, number>,
 }) => {
@@ -122,7 +126,36 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
     setIsSubmitting(true);
     setError(null);
     try {
-      await onPersist(newAsset, Boolean(editAsset?.id));
+      const opts: { flowAmountEur?: number } = {};
+      if (!editAsset) {
+        const cost = newAsset.quantity * newAsset.averagePrice;
+        const fx = fxToEur(newAsset.currency, exchangeRates) || 1;
+        const flowAmountEur = cost * fx;
+        if (flowAmountEur > 0) opts.flowAmountEur = flowAmountEur;
+      } else {
+        const addQty = parseShareInput(purchaseAddQty, 0);
+        const addPrice = parseDecimalInput(purchaseAddPrice, 0);
+        if (addQty > 0 && purchaseAddPrice.trim() !== '') {
+          const preview = mergeHoldingPurchase({
+            quantity: parseShareInput(formData.quantity, 0),
+            averagePrice: parseDecimalInput(formData.averagePrice, 0),
+            holdingCurrency: formData.currency,
+            addQuantity: addQty,
+            addPricePerUnit: addPrice,
+            addCurrency: purchaseAddCurrency,
+            exchangeRates,
+          });
+          if (!('error' in preview) && preview.totalCostBasisEur > 0) {
+            const prevCostEur =
+              parseShareInput(formData.quantity, 0) *
+              parseDecimalInput(formData.averagePrice, 0) *
+              (fxToEur(formData.currency, exchangeRates) || 1);
+            const delta = preview.totalCostBasisEur - prevCostEur;
+            if (Math.abs(delta) >= 0.01) opts.flowAmountEur = delta;
+          }
+        }
+      }
+      await onPersist(newAsset, Boolean(editAsset?.id), opts);
       onClose();
     } catch (err) {
       console.error("Submission failed:", err);
