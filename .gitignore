@@ -9,6 +9,7 @@ dist/
 release/
 release-*/
 coverage/
+.cache/
 .DS_Store
 *.log
 .env*

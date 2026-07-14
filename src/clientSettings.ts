@@ -8,7 +8,6 @@ import { REDEEMED_DIVIDENDS_STORAGE_KEY } from './dividendRedemptions';
 import { MANUAL_DIVIDENDS_STORAGE_KEY } from './manualDividends';
 import { FIRE_STORAGE_KEY } from './fireStorage';
 import { REDEEM_MUTE_STORAGE_KEY } from './redeemDividendFeedback';
-
 export const CLIENT_SETTINGS_KEYS = [
   MANUAL_DIVIDENDS_STORAGE_KEY,
   DIVIDEND_INFO_LINKS_STORAGE_KEY,

@@ -93,7 +93,7 @@ type TopMoversPayload = {
 function TopStorySourcePill({ ref: storyRef }: { ref: { title: string; url?: string } }) {
   const label = storyRef.title.trim() || formatStoryReferenceLabel(storyRef);
   const pillClass =
-    'inline-flex max-w-full items-center rounded-md border border-border/30 bg-white/5 px-2 py-0.5 font-sans text-[11px] font-medium text-accent transition-colors';
+    'inline-flex max-w-full items-center rounded border border-border/30 bg-white/5 px-1.5 py-px font-sans text-[10px] font-medium leading-tight text-accent transition-colors';
 
   if (storyRef.url) {
     return (
@@ -118,11 +118,13 @@ function TopStorySourcePill({ ref: storyRef }: { ref: { title: string; url?: str
 
 function TopStoryCardSkeleton() {
   return (
-    <div className={`${MARKET_SUBCARD} p-3 space-y-2`}>
-      <div className="h-2.5 bg-white/5 rounded-full w-full animate-pulse" />
-      <div className="h-2.5 bg-white/5 rounded-full w-[92%] animate-pulse" />
-      <div className="h-5 w-20 rounded-md bg-white/5 animate-pulse" />
-    </div>
+    <li className="shrink-0">
+      <div className={`${MARKET_SUBCARD} px-2.5 py-2 flex flex-col`}>
+        <div className="h-2 bg-white/5 rounded-full w-full animate-pulse" />
+        <div className="h-2 bg-white/5 rounded-full w-[85%] animate-pulse shrink-0" />
+        <div className="mt-1.5 h-3.5 w-16 rounded bg-white/5 animate-pulse shrink-0" />
+      </div>
+    </li>
   );
 }
 
@@ -135,8 +137,8 @@ function TopStoriesList({
 }) {
   if (stories.length === 0) {
     return (
-      <div className={`${MARKET_SUBCARD} p-3 font-sans`}>
-        <p className="m-0 text-sm text-text-s/80 leading-relaxed">
+      <div className={`${MARKET_SUBCARD} p-2 font-sans`}>
+        <p className="m-0 text-xs text-text-s/80 leading-snug">
           {fallbackText || 'Top stories unavailable.'}
         </p>
       </div>
@@ -152,13 +154,13 @@ function TopStoriesList({
     return (
       <li key={`${story.headline}-${i}`}>
         <article
-          className={`${MARKET_SUBCARD} p-3 font-sans hover:bg-bg/40 transition-colors`}
+          className={`${MARKET_SUBCARD} font-sans hover:bg-bg/40 transition-colors`}
         >
-          <p className="text-sm font-bold text-text-p leading-relaxed line-clamp-3 m-0">
+          <p className="text-xs font-semibold text-text-p leading-snug line-clamp-2 m-0 min-h-0 overflow-hidden">
             {story.headline}
           </p>
           {primaryRef ? (
-            <div className="mt-2">
+            <div className="market-top-story-source">
               <TopStorySourcePill ref={primaryRef} />
             </div>
           ) : null}
@@ -169,7 +171,7 @@ function TopStoriesList({
 
   return (
     <div className="market-top-stories">
-      <ul className="space-y-2 list-none m-0 p-0">
+      <ul>
         {cleaned.map((story, i) => renderStory(story, i))}
       </ul>
     </div>
@@ -312,15 +314,15 @@ export function MarketIndexPanel({
 
   return (
     <div
-      className={`${MARKET_PANEL} flex flex-col h-full min-h-0 overflow-hidden ${className}`}
+      className={`${MARKET_PANEL} market-index-panel flex flex-col h-full min-h-0 overflow-hidden ${className}`}
     >
-      <div className="shrink-0 mb-2">
+      <div className="shrink-0 mb-1">
         <h3 className="card-title mb-0">{quote?.label ?? '—'}</h3>
         {overviewLoading && !quote ? (
-          <div className="h-8 w-32 bg-white/5 rounded animate-pulse mt-2" />
+          <div className="h-7 w-28 bg-white/5 rounded animate-pulse mt-1.5" />
         ) : (
           <>
-            <p className="stat-value text-3xl sm:text-4xl font-black tracking-tighter tabular-nums mt-2">
+            <p className="stat-value text-2xl sm:text-3xl font-black tracking-tighter tabular-nums mt-1.5">
               {quote ? formatQuotePrice(quote) : '—'}
               {quote?.kind === 'index' && quote.price != null && (
                 <span className="text-xs font-semibold text-text-s ml-1.5 font-sans">{quote.currency}</span>
@@ -331,8 +333,8 @@ export function MarketIndexPanel({
         )}
       </div>
 
-      <div className="flex flex-col flex-1 min-h-0 mt-3 pt-3 border-t border-border/40">
-        <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem] shrink-0">
+      <div className="flex flex-col flex-1 min-h-0 mt-2 pt-2 border-t border-border/40">
+        <div className="flex items-center justify-between gap-2 mb-1 min-h-[1.125rem] shrink-0">
           <p className="micro-label mb-0">
             Top stories
           </p>
@@ -359,12 +361,14 @@ export function MarketIndexPanel({
             ) : null}
           </div>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto pr-0.5">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
         {showActiveFetch ? (
-          <div className="space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <TopStoryCardSkeleton key={i} />
-            ))}
+          <div className="market-top-stories">
+            <ul>
+              {Array.from({ length: 3 }).map((_, i) => (
+                <TopStoryCardSkeleton key={i} />
+              ))}
+            </ul>
           </div>
         ) : (
           <TopStoriesList

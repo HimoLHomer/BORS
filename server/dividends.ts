@@ -12,8 +12,95 @@ import {
   toIsoDate,
   buildCalendarPayoutSchedule,
 } from "./dividendMath";
+import {
+  type CachedDividendBundle,
+  DIVIDEND_BUNDLE_SCORE_GOOD_ENOUGH,
+  DIVIDEND_CHART_LOOKBACK_DAYS,
+  dividendFetchCacheKey,
+  getCachedDividendBundle,
+  setCachedDividendBundle,
+} from "./dividendFetchCache";
 
 export * from "./dividendMath";
+
+type CandidateBundle = {
+  divSym: string;
+  sum: Record<string, unknown> | null;
+  divList: { date?: Date | string; amount?: number }[];
+  score: number;
+};
+
+async function fetchCandidateBundle(
+  yahooFinance: any,
+  candSym: string,
+  p1: number,
+  p2: number
+): Promise<CandidateBundle> {
+  try {
+    const [sum, chartResult] = await Promise.all([
+      yahooFinance.quoteSummary(
+        candSym,
+        {
+          modules: ["summaryDetail", "calendarEvents", "price", "defaultKeyStatistics", "fundProfile"],
+        },
+        { validateResult: false }
+      ),
+      yahooFinance
+        .chart(candSym, { period1: p1, period2: p2, interval: "1d", events: "div" }, { validateResult: false })
+        .catch(() => null),
+    ]);
+    const divList = chartDividendsToList(chartResult?.events?.dividends);
+    return {
+      divSym: candSym,
+      sum: sum as Record<string, unknown>,
+      divList,
+      score: dividendBundleScore(sum, divList),
+    };
+  } catch {
+    return { divSym: candSym, sum: null, divList: [], score: -1 };
+  }
+}
+
+async function resolveDividendBundle(
+  yahooFinance: any,
+  sym: string,
+  displaySymbol: string | null | undefined
+): Promise<CachedDividendBundle> {
+  const cacheKey = dividendFetchCacheKey(sym, displaySymbol);
+  const cached = getCachedDividendBundle(cacheKey);
+  if (cached) return cached;
+
+  const p2 = Math.floor(Date.now() / 1000);
+  const p1 = p2 - 86400 * DIVIDEND_CHART_LOOKBACK_DAYS;
+  const candidates = yahooDividendSymbolFallbacks(sym, displaySymbol);
+  const listQuote = await yahooFinance.quote(sym).catch(() => null);
+
+  let best: CandidateBundle | null = null;
+  for (const candSym of candidates) {
+    const bundle = await fetchCandidateBundle(yahooFinance, candSym, p1, p2);
+    if (bundle.sum != null && bundle.score > (best?.score ?? -1)) {
+      best = bundle;
+    }
+    if (best != null && best.score >= DIVIDEND_BUNDLE_SCORE_GOOD_ENOUGH) break;
+  }
+
+  const picked = best;
+  if (!picked?.sum) {
+    throw new Error(`No Yahoo dividend data for ${sym}`);
+  }
+
+  const divSym = picked.divSym;
+  const fundQuote = divSym !== sym ? await yahooFinance.quote(divSym).catch(() => null) : null;
+  const result: CachedDividendBundle = {
+    divSym,
+    sum: picked.sum,
+    divList: picked.divList,
+    fundQuote,
+    listQuote,
+  };
+  setCachedDividendBundle(cacheKey, result);
+  return result;
+}
 
 export function registerDividendRoutes(app: Express, yahooFinance: any): void {
   /** Under `/api/portfolio/*` so the same Express router as other portfolio APIs (avoids dev-only fallthrough). */
@@ -93,75 +180,28 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
             };
           }
           try {
-            const p2 = Math.floor(Date.now() / 1000);
-            const p1 = p2 - 86400 * 800;
-            const candidates = yahooDividendSymbolFallbacks(sym, h.displaySymbol);
-            const [listQuote, ...candidateBundles] = await Promise.all([
-              yahooFinance.quote(sym).catch(() => null),
-              ...candidates.map(async (candSym) => {
-                try {
-                  const [sum, chartResult] = await Promise.all([
-                    yahooFinance.quoteSummary(
-                      candSym,
-                      {
-                        modules: [
-                          "summaryDetail",
-                          "calendarEvents",
-                          "price",
-                          "defaultKeyStatistics",
-                          "fundProfile",
-                        ],
-                      },
-                      { validateResult: false }
-                    ),
-                    yahooFinance
-                      .chart(
-                        candSym,
-                        { period1: p1, period2: p2, interval: "1d", events: "div" },
-                        { validateResult: false }
-                      )
-                      .catch(() => null),
-                  ]);
-                  const divList = chartDividendsToList(chartResult?.events?.dividends);
-                  return {
-                    divSym: candSym,
-                    sum,
-                    chartResult,
-                    divList,
-                    score: dividendBundleScore(sum, divList),
-                  };
-                } catch {
-                  return {
-                    divSym: candSym,
-                    sum: null,
-                    chartResult: null,
-                    divList: [] as { date?: Date | string; amount?: number }[],
-                    score: -1,
-                  };
-                }
-              }),
-            ]);
-
-            const ranked = candidateBundles
-              .filter((b) => b.sum != null)
-              .sort((a, b) => b.score - a.score);
-            const picked = ranked[0] ?? candidateBundles[0];
-            if (!picked?.sum) {
-              throw new Error(`No Yahoo dividend data for ${sym}`);
-            }
-            const divSym = picked.divSym;
-            const sum = picked.sum;
-            const chartResult = picked.chartResult;
-            const fundQuote =
-              divSym !== sym ? await yahooFinance.quote(divSym).catch(() => null) : null;
-            const divList = picked.divList.length
-              ? picked.divList
-              : chartDividendsToList(chartResult?.events?.dividends);
+            const { divSym, sum, divList: pickedDivList, fundQuote, listQuote } = await resolveDividendBundle(
+              yahooFinance,
+              sym,
+              h.displaySymbol
+            );
+            const divList = pickedDivList.length ? pickedDivList : [];
             const payoutFrequency = inferPayoutFrequencyFromChartDividends(divList);
 
-            const sd = sum.summaryDetail;
-            const cal = sum.calendarEvents;
-            const price = sum.price;
+            const sd = sum.summaryDetail as {
+              trailingAnnualDividendRate?: number;
+              dividendRate?: number;
+              trailingAnnualDividendYield?: number;
+              dividendYield?: number;
+              exDividendDate?: unknown;
+            } | undefined;
+            const cal = sum.calendarEvents as { dividendDate?: unknown; exDividendDate?: unknown } | undefined;
+            const price = sum.price as {
+              longName?: string;
+              shortName?: string;
+              currency?: string;
+              regularMarketPrice?: number;
+            } | undefined;
             const dks = sum.defaultKeyStatistics as { financialCurrency?: string } | undefined;
             const sdRec = sd as Record<string, unknown> | undefined;
             const financialRaw =

@@ -58,41 +58,42 @@ export function SkeletonBarChart({ className = '' }: { className?: string }) {
 
 export function SkeletonDividendCalendar() {
   return (
-    <div className="flex flex-col gap-3 px-0.5 py-1" aria-hidden>
-      {[0, 1].map((section) => (
-        <section key={section} className="min-w-0">
-          <div className="flex items-end justify-between gap-3 px-0.5 pt-0.5 pb-2">
-            <div className={`h-3 w-16 rounded ${SKELETON_PULSE}`} />
-            <div className="flex items-baseline gap-1.5 shrink-0">
-              <div className={`h-2.5 w-14 rounded ${SKELETON_PULSE}`} />
-              <div className={`h-3 w-12 rounded ${SKELETON_PULSE}`} />
+    <div className="flex flex-col flex-1 min-h-0 px-0.5 py-1" aria-hidden>
+      <div className="flex items-center justify-between gap-2 shrink-0 pb-1.5 px-0.5">
+        <div className="flex items-center gap-0.5 min-w-0">
+          <div className={`h-4 w-4 rounded shrink-0 ${SKELETON_PULSE}`} />
+          <div className={`h-3 w-16 rounded ${SKELETON_PULSE}`} />
+          <div className={`h-4 w-4 rounded shrink-0 ${SKELETON_PULSE}`} />
+        </div>
+        <div className={`h-3.5 w-14 rounded shrink-0 ${SKELETON_PULSE}`} />
+      </div>
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+        <div className="dividend-upcoming-grid h-full w-full">
+          <div
+            className={`dividend-upcoming-featured rounded-xl border border-border/40 bg-bg/25 p-2.5 flex flex-col items-center justify-center gap-2.5 ${SKELETON_PULSE}`}
+          >
+            <div className="h-[72px] w-[72px] shrink-0 rounded-full bg-white/5" />
+            <div className="flex flex-col items-center gap-0.5">
+              <div className="h-3.5 w-14 rounded bg-white/5" />
+              <div className="h-2.5 w-10 rounded-full bg-white/5" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            {[0, 1].map((row) => (
-              <div
-                key={row}
-                className={`min-h-[3.75rem] rounded-xl border border-border/40 bg-bg/25 px-2.5 py-2 space-y-2 ${SKELETON_PULSE}`}
+          <ul className="dividend-upcoming-cluster">
+            {[0, 1, 2, 3].map((i) => (
+              <li
+                key={i}
+                className={`rounded-xl border border-border/40 bg-bg/25 p-1.5 flex flex-col items-center justify-center gap-1.5 min-h-0 min-w-0 ${SKELETON_PULSE}`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <div className="h-5 w-5 shrink-0 rounded-full bg-white/5" />
-                    <div className="space-y-1.5 min-w-0 flex-1">
-                      <div className="h-3 w-full rounded-full bg-white/5" />
-                      <div className="h-2.5 w-12 rounded-full bg-white/5" />
-                    </div>
-                  </div>
-                  <div className="h-3.5 w-10 rounded bg-white/5 shrink-0" />
+                <div className="h-[34px] w-[34px] shrink-0 rounded-full bg-white/5" />
+                <div className="flex flex-col items-center gap-px">
+                  <div className="h-2.5 w-9 rounded bg-white/5" />
+                  <div className="h-2 w-7 rounded-full bg-white/5" />
                 </div>
-                <div className="flex justify-between gap-2">
-                  <div className="h-4 w-10 rounded-md bg-white/5" />
-                  <div className="h-3 w-12 rounded bg-white/5" />
-                </div>
-              </div>
+              </li>
             ))}
-          </div>
-        </section>
-      ))}
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }

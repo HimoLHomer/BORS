@@ -20,20 +20,13 @@ import {
   History,
   Copy,
   ChevronDown,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { BorsMark } from './BorsMark';
 import { Asset, PortfolioStats, HistoryPoint, PortfolioFlow } from './types';
-import {
-  buildAllocationPieCalloutMap,
-  AllocationPieCalloutLayer,
-  ALLOCATION_PIE_CHART_MARGIN,
-  ALLOCATION_PIE_PADDING_ANGLE,
-} from './allocationPieLabels';
-import { AllocationPieDefs, allocationPieSliceChrome } from './allocationPieChrome';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
 } from 'recharts';
 import { formatCurrency, fxToEur, holdingQuoteFxToEur, portfolioFxReady } from './formatCurrency';
 import { mergeHoldingPurchase } from './mergeHoldingPurchase';
@@ -73,13 +66,21 @@ import {
   portfolioChartPoint,
   portfolioChartTooltipLabel,
   portfolioChartRangeGainLabel,
-  portfolioRangeShowsNetContributions,
   type PortfolioChartPoint,
   type PortfolioChartRangeId,
 } from './portfolioChartRange';
 import { View, dedupeHistoryByDate, normalizeCashAmountEur, parseCashInputEur, formatCashEurTwoDecimals, isAbortError } from './portfolioHelpers';
 import { HistoryPointModal } from './HistoryPointModal';
+import { AllocationPieChart } from './AllocationPieChart';
+import { useAnimatedNumber } from './useAnimatedNumber';
+import { isUiSoundsMuted, setUiSoundsMuted } from './uiFeedback';
 import { LoadingScreen, AppHeader } from './AppHeader';
+import { WhisperBanner } from './WhisperBanner';
+import {
+  findNewPortfolioMilestone,
+  formatMilestoneLabel,
+  markPortfolioMilestoneShown,
+} from './portfolioMilestones';
 import { NavButton } from './AppNav';
 import { AddAssetModal } from './AddAssetModal';
 
@@ -109,10 +110,15 @@ export default function App() {
   const [feedDetail, setFeedDetail] = useState<string | null>(null);
   const [feedRetrying, setFeedRetrying] = useState(false);
   const [quotesRefreshEpoch, setQuotesRefreshEpoch] = useState(0);
+  const [quotesRefreshing, setQuotesRefreshing] = useState(false);
+  const [uiSoundsMuted, setUiSoundsMutedState] = useState(() => isUiSoundsMuted());
+  const [milestoneBannerEur, setMilestoneBannerEur] = useState<number | null>(null);
+  const portfolioMilestonePrevRef = useRef<number | null>(null);
   const apiStatusRef = useRef(apiStatus);
   apiStatusRef.current = apiStatus;
   const [portfolioLoadError, setPortfolioLoadError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
+  const [holdingsStaggerKey, setHoldingsStaggerKey] = useState(0);
   const importBackupRef = useRef<HTMLInputElement>(null);
   /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
   const portfolioMutationEpochRef = useRef(0);
@@ -135,14 +141,6 @@ export default function App() {
     const raw = Number(cashEur);
     return Number.isFinite(raw) && raw >= 0 ? raw : 0;
   }, [cashEur]);
-
-  const normalizeCashInputOnBlur = useCallback(() => {
-    setCashInput((prev) => {
-      const p = parseCashInputEur(prev);
-      if (p !== null) return formatCashEurTwoDecimals(p);
-      return prev.trim() === '' ? formatCashEurTwoDecimals(0) : formatCashEurTwoDecimals(cashLineEur);
-    });
-  }, [cashLineEur]);
 
   const checkYahooFeed = useCallback(async (opts?: { manual?: boolean }) => {
     if (opts?.manual) {
@@ -363,58 +361,70 @@ export default function App() {
   }, [loading]);
 
   // Real-time market data: Integrated Yahoo Finance Backend
-  useEffect(() => {
-    const fetchRealData = async (isInitial: boolean) => {
-      const symbols = assets.map(a => a.symbol);
-      if (symbols.length === 0) {
-        setInitialQuotesPending(false);
-        return;
-      }
+  const fetchQuotes = useCallback(async (isInitial: boolean) => {
+    const symbols = assets.map((a) => a.symbol);
+    if (symbols.length === 0) {
+      setInitialQuotesPending(false);
+      return;
+    }
 
-      if (isInitial) setInitialQuotesPending(true);
-      try {
-        const res = await fetch('/api/quotes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbols, baseCurrency: 'EUR' })
+    if (isInitial) setInitialQuotesPending(true);
+    try {
+      const res = await fetch('/api/quotes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols, baseCurrency: 'EUR' }),
+      });
+      const data = await res.json();
+      const newPrices: Record<string, number> = {};
+      const newQuoteCurrencies: Record<string, string> = {};
+      const newChanges: Record<string, number> = {};
+      if (data.quotes) {
+        data.quotes.forEach((item: { symbol?: string; price?: number; currency?: string; changePercent?: number }) => {
+          if (item.symbol && item.price) newPrices[item.symbol] = item.price;
+          if (item.symbol && item.currency) newQuoteCurrencies[item.symbol] = String(item.currency).toUpperCase();
+          if (item.symbol && item.changePercent !== undefined) newChanges[item.symbol] = item.changePercent;
         });
-        const data = await res.json();
-        const newPrices: Record<string, number> = {};
-        const newQuoteCurrencies: Record<string, string> = {};
-        const newChanges: Record<string, number> = {};
-        if (data.quotes) {
-          data.quotes.forEach((item: any) => {
-            if (item.price) newPrices[item.symbol] = item.price;
-            if (item.currency) newQuoteCurrencies[item.symbol] = String(item.currency).toUpperCase();
-            if (item.changePercent !== undefined) newChanges[item.symbol] = item.changePercent;
-          });
-        }
-        if (data.rates) setExchangeRates(data.rates);
-        setMarketPrices(prev => ({ ...prev, ...newPrices }));
-        setQuoteCurrencies(prev => ({ ...prev, ...newQuoteCurrencies }));
-        setMarketChanges(prev => ({ ...prev, ...newChanges }));
-      } catch (e) {
-        console.warn("Backend feed connection limited. Using local simulation vectors.");
-      } finally {
-        if (isInitial) setInitialQuotesPending(false);
       }
-    };
+      if (data.rates) setExchangeRates(data.rates);
+      setMarketPrices((prev) => ({ ...prev, ...newPrices }));
+      setQuoteCurrencies((prev) => ({ ...prev, ...newQuoteCurrencies }));
+      setMarketChanges((prev) => ({ ...prev, ...newChanges }));
+    } catch (e) {
+      console.warn('Backend feed connection limited. Using local simulation vectors.');
+    } finally {
+      if (isInitial) setInitialQuotesPending(false);
+    }
+  }, [assets]);
 
-    void fetchRealData(true);
-    const dataInterval = setInterval(() => void fetchRealData(false), 15000);
+  useEffect(() => {
+    void fetchQuotes(true);
+    const dataInterval = setInterval(() => void fetchQuotes(false), 15000);
+    return () => clearInterval(dataInterval);
+  }, [fetchQuotes, quotesRefreshEpoch]);
 
-    return () => {
-      clearInterval(dataInterval);
-    };
-  }, [assets, quotesRefreshEpoch]);
+  const refreshQuotes = useCallback(async () => {
+    setQuotesRefreshing(true);
+    try {
+      await fetchQuotes(false);
+    } finally {
+      setQuotesRefreshing(false);
+    }
+  }, [fetchQuotes]);
+
+  const toggleUiSoundsMuted = useCallback(() => {
+    const next = !uiSoundsMuted;
+    setUiSoundsMuted(next);
+    setUiSoundsMutedState(next);
+  }, [uiSoundsMuted]);
 
   const holdingsTableSkeletonRows = useMemo(
     () =>
       buildTableSkeletonRows(Math.min(Math.max(assets.length, 4), 10), [
         'asset',
+        'value',
         'shares',
         'price',
-        'value',
         'cost',
         'gain',
         'today',
@@ -422,6 +432,12 @@ export default function App() {
       ]),
     [assets.length]
   );
+
+  useEffect(() => {
+    if (activeView === View.DASHBOARD) {
+      setHoldingsStaggerKey((k) => k + 1);
+    }
+  }, [activeView]);
 
   const removeAsset = async (id: string) => {
     try {
@@ -434,6 +450,85 @@ export default function App() {
       console.error('Failed to remove position:', err);
     }
   };
+
+  const sortedHoldings = useMemo(
+    () =>
+      [...assets].sort((a, b) => {
+        const valA =
+          a.quantity *
+          (marketPrices[a.symbol] || a.averagePrice) *
+          holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
+        const valB =
+          b.quantity *
+          (marketPrices[b.symbol] || b.averagePrice) *
+          holdingQuoteFxToEur(b.symbol, b.currency, quoteCurrencies, exchangeRates);
+        return valB - valA;
+      }),
+    [assets, marketPrices, quoteCurrencies, exchangeRates]
+  );
+
+  const holdingsRowKeys = useMemo(
+    () => sortedHoldings.map((item) => String(item.id ?? item.symbol)),
+    [sortedHoldings]
+  );
+
+  const holdingsTableRows = useMemo(
+    () =>
+      sortedHoldings.map((item) => {
+        const price = marketPrices[item.symbol] || item.averagePrice;
+        const priceFx = holdingQuoteFxToEur(item.symbol, item.currency, quoteCurrencies, exchangeRates);
+        const costFx = fxToEur(item.currency, exchangeRates) || 1;
+        const priceInEur = price * priceFx;
+        const costBasisInEur = item.quantity * item.averagePrice * costFx;
+        const totalValue = item.quantity * priceInEur;
+        const totalGainInEur = totalValue - costBasisInEur;
+        const totalGainPercent = costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
+        const change = marketChanges[item.symbol] || 0;
+        const todayGainEur = todayGainEurFromChange(totalValue, change);
+        const ticker = displayTickerForAsset(item);
+
+        return {
+          asset: (
+            <AssetNameCell
+              name={item.name}
+              ticker={ticker}
+              yahooSymbol={item.symbol}
+              type={item.type}
+            />
+          ),
+          value: formatCurrency(totalValue, 'EUR'),
+          shares: formatShares(item.quantity),
+          price: formatCurrency(priceInEur, 'EUR'),
+          cost: <span className="text-text-s/50">{formatCurrency(costBasisInEur, 'EUR')}</span>,
+          gain: <GainDisplay amountEur={totalGainInEur} percent={totalGainPercent} />,
+          today: <GainDisplay amountEur={todayGainEur} percent={change} />,
+          actions: (
+            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingAsset(item);
+                  setIsModalOpen(true);
+                }}
+                className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
+                aria-label="Edit holding"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => removeAsset(item.id!)}
+                className="p-1.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
+                aria-label="Remove holding"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ),
+        };
+      }),
+    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges]
+  );
 
   const holdingsStats = assets.reduce((acc, asset) => {
     const livePrice = marketPrices[asset.symbol] || asset.averagePrice;
@@ -462,6 +557,20 @@ export default function App() {
   };
 
   statsTotalValueRef.current = stats.totalValue;
+  const animatedTotalValue = useAnimatedNumber(stats.totalValue, { minDelta: 50 });
+
+  useEffect(() => {
+    if (loading) return;
+    const next = stats.totalValue;
+    const prev = portfolioMilestonePrevRef.current;
+    if (prev === null) {
+      portfolioMilestonePrevRef.current = next;
+      return;
+    }
+    const crossed = findNewPortfolioMilestone(prev, next);
+    portfolioMilestonePrevRef.current = next;
+    if (crossed != null) setMilestoneBannerEur(crossed);
+  }, [loading, stats.totalValue]);
 
   // Real daily change calculation based on history
   const yesterday = history.length > 1 ? history[history.length - 2] : null;
@@ -601,16 +710,6 @@ export default function App() {
     return rows;
   }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur]);
 
-  const [allocationPieBox, setAllocationPieBox] = useState({ width: 0, height: 0 });
-
-  const handleAllocationPieResize = useCallback((width: number, height: number) => {
-    const w = Math.round(width);
-    const h = Math.round(height);
-    setAllocationPieBox((prev) =>
-      prev.width === w && prev.height === h ? prev : { width: w, height: h }
-    );
-  }, []);
-
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
   /** Wait for first quote fetch + FX rates before trusting EUR totals for SQLite history. */
@@ -627,17 +726,6 @@ export default function App() {
     if (apiStatus === 'connecting') return true;
     return !portfolioValuationReady;
   }, [assets.length, apiStatus, portfolioValuationReady]);
-
-  const allocationPieCalloutMap = useMemo(
-    () =>
-      buildAllocationPieCalloutMap(
-        allocationPieBox.width,
-        allocationPieBox.height,
-        allocationSlices,
-        { ...ALLOCATION_PIE_CHART_MARGIN }
-      ),
-    [allocationPieBox.width, allocationPieBox.height, allocationSlices]
-  );
 
   /** Persist today's total once FX/quotes are ready; upsert if an early save was wrong. */
   useEffect(() => {
@@ -823,13 +911,27 @@ export default function App() {
     }
   };
 
-  const saveCash = async () => {
-    const parsed = parseCashInputEur(String(cashInput));
-    const amount = parsed != null && parsed >= 0 ? parsed : 0;
+  const reloadFlows = async () => {
+    const list: PortfolioFlow[] = await fetch('/api/portfolio/flows').then((r) => r.json());
+    setPortfolioFlows(list);
+    portfolioMutationEpochRef.current += 1;
+  };
+
+  const commitCashOnBlur = useCallback(async () => {
+    const parsed = parseCashInputEur(cashInput);
+    const amount =
+      parsed !== null && parsed >= 0
+        ? parsed
+        : cashInput.trim() === ''
+          ? 0
+          : cashLineEur;
+    const formatted = formatCashEurTwoDecimals(amount);
+    setCashInput(formatted);
+    if (amount === cashLineEur) return;
+
     const prevEur = cashEur;
     const prevInput = cashInput;
     setCashEur(Number(amount));
-    setCashInput(formatCashEurTwoDecimals(amount));
     setCashSaving(true);
     try {
       const res = await fetch('/api/portfolio/cash', {
@@ -851,13 +953,7 @@ export default function App() {
     } finally {
       setCashSaving(false);
     }
-  };
-
-  const reloadFlows = async () => {
-    const list: PortfolioFlow[] = await fetch('/api/portfolio/flows').then((r) => r.json());
-    setPortfolioFlows(list);
-    portfolioMutationEpochRef.current += 1;
-  };
+  }, [cashInput, cashLineEur, cashEur]);
 
   const persistAsset = async (
     asset: Asset,
@@ -903,6 +999,8 @@ export default function App() {
         feedDetail={feedDetail}
         onRetryFeed={retryYahooFeed}
         feedRetrying={feedRetrying || apiStatus === 'connecting'}
+        onRefreshQuotes={() => void refreshQuotes()}
+        quotesRefreshing={quotesRefreshing}
       />
       {(portfolioLoadError) && (
         <div
@@ -914,6 +1012,18 @@ export default function App() {
           </p>
         </div>
       )}
+      <WhisperBanner
+        visible={milestoneBannerEur != null}
+        message={
+          milestoneBannerEur != null
+            ? `Portfolio crossed ${formatMilestoneLabel(milestoneBannerEur)} total capital.`
+            : ''
+        }
+        onDismiss={() => {
+          if (milestoneBannerEur != null) markPortfolioMilestoneShown(milestoneBannerEur);
+          setMilestoneBannerEur(null);
+        }}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-20 xl:w-[5.5rem] min-w-[80px] border-r border-border bg-card flex flex-col items-center xl:items-stretch py-8 gap-6 xl:gap-2 xl:px-1.5 z-10 shadow-2xl shrink-0">
@@ -1098,7 +1208,7 @@ export default function App() {
                     {feedMetricsLoading ? (
                       <SkeletonCurrency className="h-14 w-52" />
                     ) : (
-                      formatCurrency(stats.totalValue, 'EUR')
+                      formatCurrency(animatedTotalValue, 'EUR')
                     )}
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
@@ -1118,13 +1228,6 @@ export default function App() {
                         percent={portfolioRangeGain.gainPercent}
                         loading={feedMetricsLoading}
                       />
-                      {portfolioRangeGain.flowAdjusted &&
-                      portfolioRangeShowsNetContributions(activePortfolioChartRange) &&
-                      portfolioRangeGain.netContributionsEur > 0 ? (
-                        <p className="text-[10px] text-text-s/70 mt-1">
-                          Net contributions {formatCurrency(portfolioRangeGain.netContributionsEur, 'EUR')}
-                        </p>
-                      ) : null}
                     </div>
                     <div>
                       <p className="micro-label mb-1" title="Holdings only vs average cost (EUR); cash excluded">
@@ -1138,24 +1241,19 @@ export default function App() {
                     </div>
                     <div className="border-l border-border/30 pl-6 shrink-0">
                       <p className="micro-label mb-1">Cash (EUR)</p>
-                      <div className="flex items-center gap-2">
-                        <EurAmountInput
-                          compact
-                          wrapperClassName="w-[6.75rem]"
-                          placeholder="0.00"
-                          value={cashInput}
-                          onChange={(e) => setCashInput(e.target.value)}
-                          onBlur={() => normalizeCashInputOnBlur()}
-                        />
-                        <button
-                          type="button"
-                          disabled={cashSaving}
-                          onClick={() => void saveCash()}
-                          className="btn-secondary min-w-[3.5rem] !h-8 !py-0 justify-center text-[10px] shrink-0 disabled:opacity-50"
-                        >
-                          {cashSaving ? 'Saving…' : 'Save'}
-                        </button>
-                      </div>
+                      <EurAmountInput
+                        compact
+                        className="!text-green"
+                        wrapperClassName="w-[6.75rem] [&>span]:!text-green/70"
+                        placeholder="0.00"
+                        value={cashInput}
+                        disabled={cashSaving}
+                        onChange={(e) => setCashInput(e.target.value)}
+                        onBlur={() => void commitCashOnBlur()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                        }}
+                      />
                     </div>
                   </div>
 
@@ -1187,9 +1285,11 @@ export default function App() {
                           >
                             {label}
                             {active && (
-                              <span
+                              <motion.span
+                                layoutId="portfolio-chart-range-indicator"
                                 className="absolute inset-x-1 -bottom-1 h-0.5 rounded-full bg-accent"
                                 aria-hidden
+                                transition={{ type: 'spring', stiffness: 420, damping: 32 }}
                               />
                             )}
                           </button>
@@ -1197,7 +1297,20 @@ export default function App() {
                       })}
                     </div>
 
-                    <div className="flex-1 min-h-[180px] relative">
+                    <div
+                      className="portfolio-area-chart flex-1 min-h-[180px] relative outline-none select-none"
+                      onPointerDownCapture={(e) => {
+                        e.preventDefault();
+                        const root = e.currentTarget;
+                        const active = document.activeElement;
+                        if (active instanceof HTMLElement && root.contains(active)) {
+                          active.blur();
+                        }
+                        root.querySelectorAll('.recharts-wrapper, .recharts-surface, svg').forEach((el) => {
+                          if (el instanceof HTMLElement) el.blur?.();
+                        });
+                      }}
+                    >
                       {portfolioChartData.length < 2 && (
                         <p className="absolute inset-0 flex items-center justify-center text-center text-[11px] text-text-s px-6 z-[2] pointer-events-none">
                           History builds as daily totals are recorded. Open the history icon above to add past dates.
@@ -1206,8 +1319,11 @@ export default function App() {
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart
                           key={activePortfolioChartRange}
+                          accessibilityLayer={false}
                           data={portfolioChartDisplayData}
                           margin={{ top: 8, right: 12, left: 0, bottom: 4 }}
+                          style={{ outline: 'none' }}
+                          tabIndex={-1}
                         >
                           <defs>
                             <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
@@ -1245,6 +1361,9 @@ export default function App() {
                             tickLine={false}
                           />
                           <Tooltip
+                            cursor={false}
+                            trigger="hover"
+                            isAnimationActive={false}
                             formatter={(value: number) => [
                               formatPortfolioChartTooltipValue(Number(value)),
                               '',
@@ -1273,11 +1392,6 @@ export default function App() {
                               fontWeight: '900',
                               fontSize: '14px',
                             }}
-                            cursor={{
-                              stroke: 'var(--color-accent)',
-                              strokeWidth: 1,
-                              strokeDasharray: '4 4',
-                            }}
                           />
                           <Area
                             type="linear"
@@ -1287,6 +1401,7 @@ export default function App() {
                             fill="url(#colorValue)"
                             strokeWidth={3}
                             animationDuration={1000}
+                            activeDot={false}
                           />
                         </AreaChart>
                       </ResponsiveContainer>
@@ -1294,113 +1409,12 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4 min-h-0">
-                  <div className="glass-panel !overflow-visible p-6 flex flex-col flex-1 min-h-[480px] lg:min-h-[520px]">
-                    <div className="mb-3">
+                <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4 min-h-0 overflow-visible">
+                  <div className="glass-panel !overflow-visible p-6 pb-5 flex flex-col flex-1 min-h-[480px] lg:min-h-[540px]">
+                    <div className="mb-2">
                       <h3 className="card-title mb-0">Allocation</h3>
                     </div>
-                    <div
-                      className="allocation-pie-glow relative flex-1 w-full min-h-0 min-w-0"
-                      aria-busy={feedMetricsLoading}
-                    >
-                      {feedMetricsLoading ? (
-                        <div className="absolute inset-0 flex items-center justify-center z-[1]">
-                          <SkeletonBlock className="h-44 w-44 rounded-full" />
-                        </div>
-                      ) : null}
-                      <ResponsiveContainer
-                        width="100%"
-                        height="100%"
-                        className={feedMetricsLoading ? 'opacity-0 pointer-events-none' : undefined}
-                        onResize={handleAllocationPieResize}
-                      >
-                        <PieChart margin={{ ...ALLOCATION_PIE_CHART_MARGIN }}>
-                          <AllocationPieDefs />
-                          <Pie
-                            key={
-                              allocationSlices.length > 0
-                                ? [...new Set(allocationSlices.map((r) => r.key))].sort().join('|')
-                                : 'empty-allocation'
-                            }
-                            data={
-                              allocationSlices.length > 0
-                                ? allocationSlices
-                                : [{ key: 'empty', name: 'No holdings', value: 1, percent: 0 }]
-                            }
-                            cx="50%"
-                            cy="50%"
-                            innerRadius="0%"
-                            outerRadius="75%"
-                            dataKey="value"
-                            nameKey="name"
-                            startAngle={90}
-                            endAngle={-270}
-                            paddingAngle={ALLOCATION_PIE_PADDING_ANGLE}
-                            stroke="rgba(15, 23, 42, 0.85)"
-                            strokeWidth={1.5}
-                            isAnimationActive={false}
-                            label={false}
-                            labelLine={false}
-                          >
-                            {allocationSlices.length > 0 ? (
-                              allocationSlices.map((row, index) => {
-                                const chrome = allocationPieSliceChrome(
-                                  row.key,
-                                  index,
-                                  allocationSlices.length
-                                );
-                                return (
-                                  <Cell
-                                    key={row.key}
-                                    fill={`url(#${chrome.gradientId})`}
-                                    stroke={chrome.stroke}
-                                    strokeWidth={2}
-                                  />
-                                );
-                              })
-                            ) : (
-                              <Cell fill="rgba(39, 39, 42, 0.6)" stroke="rgba(59, 130, 246, 0.2)" />
-                            )}
-                          </Pie>
-                          <Tooltip
-                            cursor={{ fill: 'rgba(255,255,255,0.06)' }}
-                            content={({ active, payload }) => {
-                              if (!active || !payload?.length) return null;
-                              const row = payload[0].payload as {
-                                name: string;
-                                value: number;
-                              };
-                              return (
-                                <div
-                                  className="rounded-xl border border-border px-3 py-2.5 shadow-xl max-w-[min(100vw-24px,280px)]"
-                                  style={{ backgroundColor: 'var(--color-card)' }}
-                                >
-                                  <div className="text-sm font-semibold text-text-p leading-snug">{row.name}</div>
-                                  <div className="text-xs font-mono font-bold text-accent mt-1.5 tabular-nums">
-                                    {formatCurrency(row.value, 'EUR')}
-                                  </div>
-                                </div>
-                              );
-                            }}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      {!feedMetricsLoading &&
-                      allocationSlices.length > 0 &&
-                      allocationPieCalloutMap.size > 0 &&
-                      allocationPieBox.width > 0 &&
-                      allocationPieBox.height > 0 ? (
-                        <svg
-                          className="absolute left-0 top-0 z-[2] pointer-events-none"
-                          width={allocationPieBox.width}
-                          height={allocationPieBox.height}
-                          style={{ overflow: 'visible' }}
-                          aria-hidden
-                        >
-                          <AllocationPieCalloutLayer layout={allocationPieCalloutMap} />
-                        </svg>
-                      ) : null}
-                    </div>
+                    <AllocationPieChart slices={allocationSlices} loading={feedMetricsLoading} />
                   </div>
                 </div>
 
@@ -1424,12 +1438,12 @@ export default function App() {
                     minWidth={1120}
                     columns={[
                       { key: 'asset', label: 'Asset' },
+                      { key: 'value', label: 'Total value', align: 'right' },
                       { key: 'shares', label: 'Shares', align: 'right' },
                       { key: 'price', label: 'Share price', align: 'right' },
-                      { key: 'value', label: 'Total value', align: 'right' },
                       { key: 'cost', label: 'Cost basis', align: 'right' },
                       { key: 'gain', label: 'Unrealized gain', align: 'right' },
-                      { key: 'today', label: 'Today Gain', align: 'right' },
+                      { key: 'today', label: 'Today gain', align: 'right' },
                       {
                         key: 'actions',
                         label: '',
@@ -1438,85 +1452,10 @@ export default function App() {
                         cellClassName: 'px-3 py-2 text-right',
                       },
                     ]}
-                    rows={
-                      feedMetricsLoading
-                        ? holdingsTableSkeletonRows
-                        : [...assets]
-                      .sort((a, b) => {
-                        const valA =
-                          a.quantity *
-                          (marketPrices[a.symbol] || a.averagePrice) *
-                          holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
-                        const valB =
-                          b.quantity *
-                          (marketPrices[b.symbol] || b.averagePrice) *
-                          holdingQuoteFxToEur(b.symbol, b.currency, quoteCurrencies, exchangeRates);
-                        return valB - valA;
-                      })
-                      .map((item) => {
-                        const price = marketPrices[item.symbol] || item.averagePrice;
-                        const priceFx = holdingQuoteFxToEur(
-                          item.symbol,
-                          item.currency,
-                          quoteCurrencies,
-                          exchangeRates
-                        );
-                        const costFx = fxToEur(item.currency, exchangeRates) || 1;
-                        const priceInEur = price * priceFx;
-                        const costBasisInEur = item.quantity * item.averagePrice * costFx;
-                        const totalValue = item.quantity * priceInEur;
-                        const totalGainInEur = totalValue - costBasisInEur;
-                        const totalGainPercent =
-                          costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
-                        const change = marketChanges[item.symbol] || 0;
-                        const todayGainEur = todayGainEurFromChange(totalValue, change);
-                        const ticker = displayTickerForAsset(item);
-
-                        return {
-                          asset: (
-                            <AssetNameCell
-                              name={item.name}
-                              ticker={ticker}
-                              yahooSymbol={item.symbol}
-                              type={item.type}
-                            />
-                          ),
-                          shares: formatShares(item.quantity),
-                          price: formatCurrency(priceInEur, 'EUR'),
-                          value: formatCurrency(totalValue, 'EUR'),
-                          cost: (
-                            <span className="text-text-s/50">{formatCurrency(costBasisInEur, 'EUR')}</span>
-                          ),
-                          gain: (
-                            <GainDisplay amountEur={totalGainInEur} percent={totalGainPercent} />
-                          ),
-                          today: <GainDisplay amountEur={todayGainEur} percent={change} />,
-                          actions: (
-                            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingAsset(item);
-                                  setIsModalOpen(true);
-                                }}
-                                className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
-                                aria-label="Edit holding"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => removeAsset(item.id!)}
-                                className="p-1.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
-                                aria-label="Remove holding"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ),
-                        };
-                      })
-                    }
+                    rows={feedMetricsLoading ? holdingsTableSkeletonRows : holdingsTableRows}
+                    rowKeys={feedMetricsLoading ? undefined : holdingsRowKeys}
+                    enterStaggerKey={feedMetricsLoading ? undefined : holdingsStaggerKey}
+                    enterStaggerMax={12}
                     emptyState={
                       <div className="flex flex-col items-center gap-4 opacity-50 py-8">
                         <Wallet className="w-12 h-12" />
@@ -1581,6 +1520,31 @@ export default function App() {
                   <p className="page-subtitle mb-6">Integrations, data & backup</p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
+                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
+                        UI sounds
+                      </h3>
+                      <p className="text-xs text-text-s/80 mb-4 leading-relaxed">
+                        Optional chimes when you add a holding or redeem a dividend. Respects reduced motion in your OS.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={toggleUiSoundsMuted}
+                        aria-pressed={uiSoundsMuted}
+                        className="btn-secondary w-full justify-center py-2.5 gap-2"
+                      >
+                        {uiSoundsMuted ? (
+                          <>
+                            <VolumeX className="w-4 h-4" /> Sounds muted
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 className="w-4 h-4" /> Sounds on
+                          </>
+                        )}
+                      </button>
+                    </div>
+
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio data (SQLite)

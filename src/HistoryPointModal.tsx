@@ -5,6 +5,7 @@ import type { HistoryPoint } from './types';
 import { formatDecimalEn, formatDecimalInputEn, parseDecimalInput } from './formatNumber';
 import { todayIsoDateHelsinki } from './formatDate';
 import { EurAmountInput } from './EurAmountField';
+import { ThemeDatePicker } from './ThemeDatePicker';
 
 export const HistoryPointModal = ({
   modal,
@@ -97,12 +98,10 @@ export const HistoryPointModal = ({
         <div className="space-y-4">
           <div>
             <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">Date</label>
-            <input
-              type="date"
-              className="w-full bg-bg/50 border border-border rounded-xl px-4 py-3 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50"
+            <ThemeDatePicker
               value={dateStr}
+              onChange={setDateStr}
               disabled={modal.type === 'edit'}
-              onChange={(e) => setDateStr(e.target.value)}
             />
             {modal.type === 'edit' && (
               <p className="text-[9px] text-text-s mt-1.5 opacity-70">Date cannot be changed; delete and re-add if needed.</p>

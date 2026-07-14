@@ -50,7 +50,9 @@ export function allocationPieSliceChrome(
   if (sliceCount <= 1) return SIZE_TIERS[0];
   const t = sizeRank / (sliceCount - 1);
   const tierIdx = Math.round(t * (SIZE_TIERS.length - 1));
-  return SIZE_TIERS[Math.min(SIZE_TIERS.length - 1, Math.max(0, tierIdx))];
+  /** Keep smallest slices visibly blue — avoid near-white tiers when many holdings. */
+  const maxTier = sliceCount >= 8 ? 6 : SIZE_TIERS.length - 1;
+  return SIZE_TIERS[Math.min(maxTier, Math.max(0, tierIdx))];
 }
 
 export function AllocationPieDefs() {
@@ -62,6 +64,19 @@ export function AllocationPieDefs() {
           in="blur"
           type="matrix"
           values="0 0 0 0 0.18  0 0 0 0 0.38  0 0 0 0 0.82  0 0 0 0.28 0"
+          result="glow"
+        />
+        <feMerge>
+          <feMergeNode in="glow" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id="allocationPieGlowHover" x="-55%" y="-55%" width="210%" height="210%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
+        <feColorMatrix
+          in="blur"
+          type="matrix"
+          values="0 0 0 0 0.35  0 0 0 0 0.55  0 0 0 0 1  0 0 0 0.72 0"
           result="glow"
         />
         <feMerge>

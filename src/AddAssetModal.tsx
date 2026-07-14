@@ -15,8 +15,78 @@ import {
   sanitizeShareDraft,
 } from './formatNumber';
 import { EurAmountInput } from './EurAmountField';
+import { MARKET_SUBCARD } from './marketTheme';
+import { playAssetAddedChime } from './uiFeedback';
 
-export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: { 
+type AssetSearchResult = {
+  symbol: string;
+  shortName?: string;
+  longName?: string;
+  name?: string;
+  price?: number;
+  currency?: string;
+  exchange?: string;
+  dividendYieldPercent?: number | null;
+  quoteType?: string;
+  typeDisp?: string;
+};
+
+function assetSearchDisplayName(result: AssetSearchResult): string {
+  return result.shortName || result.longName || result.name || result.symbol;
+}
+
+function assetSearchMetaLine(result: AssetSearchResult): string {
+  const parts: string[] = [result.symbol];
+  if (result.exchange?.trim()) parts.push(result.exchange.trim());
+  if (typeof result.price === 'number' && Number.isFinite(result.price)) {
+    parts.push(
+      result.currency === 'EUR'
+        ? formatCurrency(result.price, 'EUR')
+        : formatCurrency(result.price, result.currency)
+    );
+  }
+  return parts.join(' · ');
+}
+
+function AssetSearchResultRow({
+  result,
+  onSelect,
+}: {
+  result: AssetSearchResult;
+  onSelect: (result: AssetSearchResult) => void;
+}) {
+  const yieldPct = result.dividendYieldPercent;
+  const showYield =
+    typeof yieldPct === 'number' && Number.isFinite(yieldPct) && yieldPct > 0;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(result)}
+      className={`${MARKET_SUBCARD} w-full p-3 text-left font-sans transition-colors hover:bg-bg/40 hover:border-accent/25`}
+    >
+      <div className="flex items-start justify-between gap-3 min-w-0">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-text-p truncate">{assetSearchDisplayName(result)}</div>
+          <div className="mt-0.5 text-xs text-text-s/75 truncate tabular-nums">{assetSearchMetaLine(result)}</div>
+        </div>
+        {showYield ? (
+          <span
+            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-green/25 bg-green/10 px-1.5 py-0.5 leading-none"
+            title="Trailing / indicated dividend yield (Yahoo)"
+          >
+            <span className="text-[8px] font-bold uppercase tracking-widest text-green/70">Div</span>
+            <span className="text-[10px] font-semibold tabular-nums text-green">
+              {formatPercentEn(yieldPct, 2)}
+            </span>
+          </span>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
   onClose: () => void, 
   onPersist: (
     asset: Asset,
@@ -47,7 +117,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
   const [isValidating, setIsValidating] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<AssetSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +148,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           row &&
           typeof row.symbol === 'string' &&
           row.symbol.trim().length > 0
-      );
+      ) as AssetSearchResult[];
       setSearchResults(cleaned);
       if (query.length >= 2) setError(null);
     } catch (e) {
@@ -90,7 +160,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
     }
   };
 
-  const selectAsset = (asset: any) => {
+  const selectAsset = (asset: AssetSearchResult) => {
     const displayName = asset.longName || asset.shortName || asset.name || asset.symbol;
     // Guess a cleaner display symbol (e.g. O instead of RY6.F)
     let displaySymbol = asset.symbol;
@@ -156,6 +226,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
         }
       }
       await onPersist(newAsset, Boolean(editAsset?.id), opts);
+      if (!editAsset) playAssetAddedChime();
       onClose();
     } catch (err) {
       console.error("Submission failed:", err);
@@ -279,60 +350,18 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           
           <AnimatePresence>
             {searchResults.length > 0 && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: -5 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -5 }}
-                className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-xl shadow-2xl z-[60] max-h-60 overflow-y-auto divide-y divide-border/50"
+                className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-xl shadow-2xl z-[60] max-h-72 overflow-y-auto p-2 space-y-1.5"
               >
-                {searchResults.map((result: any, i: number) => (
-                  <button
-                    key={`${String(result.symbol)}-${i}`}
-                    type="button"
-                    onClick={() => selectAsset(result)}
-                    className="w-full px-5 py-3 text-left hover:bg-white/5 transition-colors group flex items-start justify-between gap-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="text-text-p text-xs font-bold truncate">
-                        {result.shortName || result.longName || result.name || result.symbol}
-                      </div>
-                      <div className="text-[10px] font-mono text-text-s group-hover:text-accent transition-colors truncate">
-                        {result.symbol}
-                        {result.price && (
-                          <span className="ml-2 font-sans opacity-40 group-hover:opacity-100 transition-opacity">
-                            •{' '}
-                            {result.currency === 'EUR'
-                              ? formatCurrency(result.price, 'EUR')
-                              : formatCurrency(result.price, result.currency)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0 flex flex-col items-end gap-0.5">
-                      {typeof result.dividendYieldPercent === 'number' &&
-                      Number.isFinite(result.dividendYieldPercent) &&
-                      result.dividendYieldPercent > 0 ? (
-                        <div
-                          className="text-[10px] font-mono font-bold text-emerald-400/95 tabular-nums tracking-tight"
-                          title="Trailing / indicated dividend yield (Yahoo)"
-                        >
-                          Div {formatPercentEn(result.dividendYieldPercent, 2)}
-                        </div>
-                      ) : (
-                        <div className="text-[9px] font-mono text-text-s/35 uppercase tracking-widest" title="No yield from Yahoo for this listing">
-                          Div —
-                        </div>
-                      )}
-                      <div className="text-[9px] font-bold text-text-s opacity-40 uppercase tracking-widest">
-                        {result.exchange}
-                      </div>
-                      {result.typeDisp && (
-                        <div className="text-[8px] text-text-s font-sans opacity-20 uppercase tracking-tighter max-w-[7rem] truncate">
-                          {result.typeDisp}
-                        </div>
-                      )}
-                    </div>
-                  </button>
+                {searchResults.map((result, i) => (
+                  <AssetSearchResultRow
+                    key={`${result.symbol}-${i}`}
+                    result={result}
+                    onSelect={selectAsset}
+                  />
                 ))}
               </motion.div>
             )}
@@ -358,7 +387,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                 required
                 autoFocus
                 className={`w-full bg-bg/50 border ${isVerified ? 'border-green/30' : 'border-border'} focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20`}
-                placeholder="VWCE.DE"
+                placeholder="Ticker symbol"
                 value={formData.symbol}
                 onBlur={() => checkSymbol(formData.symbol)}
                 onChange={e => setFormData({ ...formData, symbol: e.target.value.toUpperCase() })}
@@ -368,7 +397,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1 text-accent">Display Symbol (Visual)</label>
               <input 
                 className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
-                placeholder="VWC"
+                placeholder="Display symbol"
                 value={formData.displaySymbol}
                 onChange={e => setFormData({ ...formData, displaySymbol: e.target.value.toUpperCase() })}
               />
@@ -392,7 +421,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
             <input 
               required
               className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20"
-              placeholder="Vanguard FTSE All-World"
+              placeholder="Instrument name"
               value={formData.name}
               onChange={e => setFormData({ ...formData, name: e.target.value })}
             />

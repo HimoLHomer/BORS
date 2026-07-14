@@ -1,0 +1,45 @@
+# Refresh heatmap constituent JSON from Wikipedia and open a PR when lists change.
+name: Sync constituents
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync index constituents
+        run: npm run sync:constituents
+
+      - name: Validate constituent files
+        run: npm run test:constituents
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: sync market index constituents from Wikipedia"
+          title: "Sync market index constituents"
+          body: |
+            Automated monthly refresh of S&P 500 and OMX Helsinki 25 heatmap constituent lists from Wikipedia.
+
+            Review symbol add/remove diffs before merging ahead of the next release.
+          branch: chore/sync-constituents
+          delete-branch: true

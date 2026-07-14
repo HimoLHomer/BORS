@@ -55,6 +55,8 @@ export type ApiDividendPaymentInput = {
   ticker: string;
   estimatedAnnualIncomeEur: number;
   payoutFrequency?: DividendPayoutFrequency | null;
+  /** Full server schedule; preferred for calendar projection. */
+  calendarPayoutDates?: string[];
   nextPayDateYmd?: string | null;
   payDateSource?: 'yahoo' | 'estimated' | 'none';
 };
@@ -160,6 +162,166 @@ export function addMonthsToMonthKey(monthKey: string, months: number): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+export type BuildProjectedPaymentsOptions = {
+  /** Fixed "today" for tests (Helsinki YYYY-MM-DD). */
+  todayYmd?: string;
+};
+
+export function endOfCurrentYearYmd(todayYmd: string = todayIsoDateHelsinki()): string {
+  return `${todayYmd.slice(0, 4)}-12-31`;
+}
+
+export function filterPayDatesInRange(
+  dates: string[] | undefined,
+  fromYmd: string,
+  toYmd: string
+): string[] {
+  if (!dates?.length) return [];
+  const valid = dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= fromYmd && d <= toYmd);
+  return [...new Set(valid)].sort();
+}
+
+export function payDateSourceRank(source: PayDateSource | undefined): number {
+  switch (source) {
+    case 'yahoo':
+      return 4;
+    case 'manual':
+      return 3;
+    case 'estimated':
+      return 2;
+    case 'fallback':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function parseYmdUtc(s: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, mo, d] = s.split('-').map(Number);
+  if (!y || !mo || !d) return null;
+  const t = Date.UTC(y, mo - 1, d);
+  return Number.isNaN(t) ? null : new Date(t);
+}
+
+function formatYmdUtc(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function frequencyStepMonths(freq: DividendPayoutFrequency): number {
+  if (freq === 'monthly') return 1;
+  if (freq === 'quarterly') return 3;
+  return 12;
+}
+
+function addMonthsUtc(d: Date, n: number): Date {
+  const x = new Date(d.getTime());
+  x.setUTCMonth(x.getUTCMonth() + n);
+  return x;
+}
+
+/** Project pay dates from anchor through untilYmd (inclusive), starting at first date >= fromYmd. */
+export function projectPayoutDatesFromAnchor(
+  anchorYmd: string,
+  frequency: DividendPayoutFrequency,
+  untilYmd: string,
+  fromYmd: string = todayIsoDateHelsinki()
+): string[] {
+  const anchor = parseYmdUtc(anchorYmd);
+  const until = parseYmdUtc(untilYmd);
+  const from = parseYmdUtc(fromYmd);
+  if (!anchor || !until || !from) return [];
+
+  const step = frequencyStepMonths(frequency);
+  let cur = new Date(anchor.getTime());
+  let guard = 0;
+  while (cur.getTime() < from.getTime() && guard < 600) {
+    cur = addMonthsUtc(cur, step);
+    guard += 1;
+  }
+
+  const out: string[] = [];
+  guard = 0;
+  while (cur.getTime() <= until.getTime() && guard < 600) {
+    const ymd = formatYmdUtc(cur);
+    if (ymd >= fromYmd && ymd <= untilYmd) out.push(ymd);
+    cur = addMonthsUtc(cur, step);
+    guard += 1;
+  }
+  return out;
+}
+
+function projectFallbackMonthKeys(
+  startMonthKey: string,
+  frequency: DividendPayoutFrequency,
+  endMonthKey: string
+): string[] {
+  const out: string[] = [];
+  let cur = startMonthKey;
+  let guard = 0;
+  while (cur <= endMonthKey && guard < 600) {
+    out.push(cur);
+    cur = addMonthsToMonthKey(cur, frequencyStepMonths(frequency));
+    guard += 1;
+  }
+  return out;
+}
+
+type PaymentCandidate = { holdingKey: string; payment: ScheduledDividendPayment };
+
+function compareScheduledPayments(a: ScheduledDividendPayment, b: ScheduledDividendPayment): number {
+  const da = a.payDateYmd ?? '';
+  const db = b.payDateYmd ?? '';
+  if (da && db && da !== db) return da.localeCompare(db);
+  if (da && !db) return -1;
+  if (!da && db) return 1;
+  return a.name.localeCompare(b.name);
+}
+
+function compareByAmountDescThenDateThenName(
+  a: { amountEur: number; payDateYmd?: string; name: string },
+  b: { amountEur: number; payDateYmd?: string; name: string }
+): number {
+  const amountDiff = b.amountEur - a.amountEur;
+  if (amountDiff !== 0) return amountDiff;
+  const da = a.payDateYmd ?? '';
+  const db = b.payDateYmd ?? '';
+  if (da !== db) return da.localeCompare(db);
+  return a.name.localeCompare(b.name);
+}
+
+export function dedupeProjectedPaymentsByMonth(candidates: PaymentCandidate[]): ScheduledDividendPayment[] {
+  const best = new Map<string, ScheduledDividendPayment>();
+
+  for (const { holdingKey, payment } of candidates) {
+    const key = `${holdingKey}|${payment.monthKey}`;
+    const existing = best.get(key);
+    if (!existing) {
+      best.set(key, payment);
+      continue;
+    }
+
+    const rankNew = payDateSourceRank(payment.payDateSource);
+    const rankOld = payDateSourceRank(existing.payDateSource);
+    if (rankNew > rankOld) {
+      best.set(key, payment);
+      continue;
+    }
+    if (rankNew < rankOld) continue;
+
+    const datedNew = payment.payDateYmd != null;
+    const datedOld = existing.payDateYmd != null;
+    if (datedNew && !datedOld) {
+      best.set(key, payment);
+    }
+  }
+
+  return [...best.values()].sort(compareScheduledPayments);
+}
+
 /** First upcoming ISO date from a sorted or unsorted list. */
 export function firstUpcomingPayDateYmd(
   dates: string[] | undefined,
@@ -239,13 +401,12 @@ function projectFallbackNextSlot(
   ticker: string,
   annualIncomeEur: number,
   frequency: DividendPayoutFrequency,
-  startMonthKey: string,
+  monthKey: string,
   redeemedIds: Set<string>,
   dividendTaxRatePercent: number
 ): ScheduledDividendPayment | null {
   if (!Number.isFinite(annualIncomeEur) || annualIncomeEur <= 0) return null;
   const amountEur = paymentAmountEur(annualIncomeEur, frequency, dividendTaxRatePercent);
-  const monthKey = startMonthKey;
   const id = `${source}-${sourceId}-${monthKey}-0`;
   if (redeemedIds.has(id)) return null;
   return {
@@ -260,92 +421,174 @@ function projectFallbackNextSlot(
   };
 }
 
+function pushScheduledDates(
+  candidates: PaymentCandidate[],
+  holdingKey: string,
+  source: DividendPaymentSource,
+  sourceId: string,
+  name: string,
+  ticker: string,
+  annualIncomeEur: number,
+  frequency: DividendPayoutFrequency,
+  dates: string[],
+  payDateSource: PayDateSource,
+  redeemedIds: Set<string>,
+  dividendTaxRatePercent: number
+): void {
+  for (const payDateYmd of dates) {
+    const payment = scheduleOnePayment(
+      source,
+      sourceId,
+      name,
+      ticker,
+      annualIncomeEur,
+      frequency,
+      payDateYmd,
+      payDateSource,
+      redeemedIds,
+      dividendTaxRatePercent
+    );
+    if (payment) candidates.push({ holdingKey, payment });
+  }
+}
+
+function pushFallbackMonths(
+  candidates: PaymentCandidate[],
+  holdingKey: string,
+  source: DividendPaymentSource,
+  sourceId: string,
+  name: string,
+  ticker: string,
+  annualIncomeEur: number,
+  frequency: DividendPayoutFrequency,
+  monthKeys: string[],
+  redeemedIds: Set<string>,
+  dividendTaxRatePercent: number
+): void {
+  for (const monthKey of monthKeys) {
+    const payment = projectFallbackNextSlot(
+      source,
+      sourceId,
+      name,
+      ticker,
+      annualIncomeEur,
+      frequency,
+      monthKey,
+      redeemedIds,
+      dividendTaxRatePercent
+    );
+    if (payment) candidates.push({ holdingKey, payment });
+  }
+}
+
+function apiPayDatesForRow(
+  row: ApiDividendPaymentInput,
+  frequency: DividendPayoutFrequency,
+  todayYmd: string,
+  yearEndYmd: string
+): string[] {
+  const fromCalendar = filterPayDatesInRange(row.calendarPayoutDates, todayYmd, yearEndYmd);
+  if (fromCalendar.length) return fromCalendar;
+
+  const anchor = row.nextPayDateYmd ?? firstUpcomingPayDateYmd(row.calendarPayoutDates, todayYmd);
+  if (anchor) {
+    return projectPayoutDatesFromAnchor(anchor, frequency, yearEndYmd, todayYmd);
+  }
+
+  return [];
+}
+
 export function buildProjectedPayments(
   apiRows: ApiDividendPaymentInput[],
   manualRows: ManualDividendPaymentInput[],
   redeemed: RedeemedDividendPayment[],
   startMonthKey: string = helsinkiMonthKeyFromToday(),
-  dividendTaxRatePercent = 0
+  dividendTaxRatePercent = 0,
+  options?: BuildProjectedPaymentsOptions
 ): ScheduledDividendPayment[] {
+  const todayYmd = options?.todayYmd ?? todayIsoDateHelsinki();
+  const yearEndYmd = endOfCurrentYearYmd(todayYmd);
+  const endMonthKey = yearEndYmd.slice(0, 7);
   const redeemedIds = new Set(redeemed.map((r) => r.id));
-  const out: ScheduledDividendPayment[] = [];
+  const candidates: PaymentCandidate[] = [];
 
   for (const row of apiRows) {
     const frequency = parseFrequency(row.payoutFrequency);
-    const payDateYmd = row.nextPayDateYmd ?? null;
-    if (payDateYmd) {
-      const payment = scheduleOnePayment(
+    const holdingKey = `api-${row.symbol}`;
+    const payDateSource = mapApiPayDateSource(row.payDateSource);
+    const dates = apiPayDatesForRow(row, frequency, todayYmd, yearEndYmd);
+
+    if (dates.length) {
+      pushScheduledDates(
+        candidates,
+        holdingKey,
         'api',
         row.symbol,
         row.name,
         row.ticker,
         row.estimatedAnnualIncomeEur,
         frequency,
-        payDateYmd,
-        mapApiPayDateSource(row.payDateSource),
+        dates,
+        payDateSource,
         redeemedIds,
         dividendTaxRatePercent
       );
-      if (payment) out.push(payment);
     } else {
-      const payment = projectFallbackNextSlot(
+      pushFallbackMonths(
+        candidates,
+        holdingKey,
         'api',
         row.symbol,
         row.name,
         row.ticker,
         row.estimatedAnnualIncomeEur,
         frequency,
-        startMonthKey,
+        projectFallbackMonthKeys(startMonthKey, frequency, endMonthKey),
         redeemedIds,
         dividendTaxRatePercent
       );
-      if (payment) out.push(payment);
     }
   }
 
   for (const m of manualRows) {
     const frequency = m.payoutFrequency;
-    const payDateYmd = nextManualPayoutDateYmd(m.payoutAnchorDate, frequency);
-    if (payDateYmd) {
-      const payment = scheduleOnePayment(
+    const holdingKey = `manual-${m.id}`;
+    const anchorYmd = nextManualPayoutDateYmd(m.payoutAnchorDate, frequency);
+
+    if (anchorYmd) {
+      const dates = projectPayoutDatesFromAnchor(anchorYmd, frequency, yearEndYmd, todayYmd);
+      pushScheduledDates(
+        candidates,
+        holdingKey,
         'manual',
         m.id,
         m.name,
         m.ticker,
         m.annualIncomeEur,
         frequency,
-        payDateYmd,
+        dates,
         'manual',
         redeemedIds,
         dividendTaxRatePercent
       );
-      if (payment) out.push(payment);
     } else {
-      const payment = projectFallbackNextSlot(
+      pushFallbackMonths(
+        candidates,
+        holdingKey,
         'manual',
         m.id,
         m.name,
         m.ticker,
         m.annualIncomeEur,
         frequency,
-        startMonthKey,
+        [startMonthKey],
         redeemedIds,
         dividendTaxRatePercent
       );
-      if (payment) out.push(payment);
     }
   }
 
-  return out;
-}
-
-function compareScheduledPayments(a: ScheduledDividendPayment, b: ScheduledDividendPayment): number {
-  const da = a.payDateYmd ?? '';
-  const db = b.payDateYmd ?? '';
-  if (da && db && da !== db) return da.localeCompare(db);
-  if (da && !db) return -1;
-  if (!da && db) return 1;
-  return a.name.localeCompare(b.name);
+  return dedupeProjectedPaymentsByMonth(candidates);
 }
 
 export function groupScheduledByMonth(
@@ -360,7 +603,7 @@ export function groupScheduledByMonth(
   }
   const keys = [...map.keys()].sort((a, b) => (descending ? b.localeCompare(a) : a.localeCompare(b)));
   return keys.map((monthKey) => {
-    const list = [...(map.get(monthKey) ?? [])].sort(compareScheduledPayments);
+    const list = [...(map.get(monthKey) ?? [])].sort(compareByAmountDescThenDateThenName);
     const totalEur = list.reduce((s, p) => s + p.amountEur, 0);
     return { monthKey, payments: list, totalEur };
   });
@@ -378,9 +621,7 @@ export function groupRedeemedByMonth(
   }
   const keys = [...map.keys()].sort((a, b) => (descending ? b.localeCompare(a) : a.localeCompare(b)));
   return keys.map((monthKey) => {
-    const list = [...(map.get(monthKey) ?? [])].sort(
-      (a, b) => b.redeemedAt.localeCompare(a.redeemedAt) || a.name.localeCompare(b.name)
-    );
+    const list = [...(map.get(monthKey) ?? [])].sort(compareByAmountDescThenDateThenName);
     const totalEur = list.reduce((s, p) => s + p.amountEur, 0);
     return { monthKey, payments: list, totalEur };
   });

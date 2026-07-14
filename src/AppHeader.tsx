@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { RefreshCcw } from 'lucide-react';
 import { BorsMark } from './BorsMark';
 
@@ -15,60 +15,85 @@ export const LoadingScreen = () => (
   </div>
 );
 
-export const AppHeader = ({
+export function AppHeader({
   apiStatus,
   feedDetail,
   onRetryFeed,
   feedRetrying,
+  onRefreshQuotes,
+  quotesRefreshing,
 }: {
   apiStatus: 'connecting' | 'connected' | 'error';
   feedDetail: string | null;
   onRetryFeed: () => void;
   feedRetrying: boolean;
-}) => (
-  <header className="border-b border-border bg-bg px-6 py-4 flex items-center justify-between">
-    <div className="flex items-center gap-2 leading-none">
-      <BorsMark className="w-6 h-6 shrink-0 opacity-90" />
-      <span className="font-black text-xl tracking-tighter text-text-p uppercase">BÖRS</span>
-    </div>
-    
-    <div className="flex items-center gap-8">
-      <div className="hidden md:flex items-center gap-8 text-[10px] text-text-s font-bold uppercase tracking-widest">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            Feed: {apiStatus === 'connected' ? (
-              <span className="text-green flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-green shrink-0" aria-hidden />
-                Yahoo Live
-              </span>
-            ) : apiStatus === 'connecting' ? (
-              <span className="text-text-s flex items-center gap-1.5">
-                <RefreshCcw className="w-3 h-3 animate-spin shrink-0" aria-hidden />
-                Connecting…
-              </span>
-            ) : (
-              <span
-                className="text-red flex items-center gap-1.5 max-w-[min(320px,35vw)] truncate cursor-help"
-                title={feedDetail ?? 'Yahoo health check failed. Run npm run dev (Express + Vite) and ensure outbound network allows Yahoo Finance.'}
+  onRefreshQuotes?: () => void;
+  quotesRefreshing?: boolean;
+}) {
+  const [logoDraw, setLogoDraw] = useState(0);
+
+  return (
+    <header className="border-b border-border bg-bg px-6 py-4 flex items-center justify-between">
+      <button
+        type="button"
+        className="flex items-center gap-2 leading-none rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        aria-label="BÖRS"
+        onClick={() => setLogoDraw((n) => n + 1)}
+      >
+        <BorsMark drawTrigger={logoDraw} className="w-6 h-6 shrink-0 opacity-90" />
+        <span className="font-black text-xl tracking-tighter text-text-p uppercase">BÖRS</span>
+      </button>
+
+      <div className="flex items-center gap-8">
+        <div className="hidden md:flex items-center gap-6 text-[10px] text-text-s font-bold uppercase tracking-widest">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              Feed: {apiStatus === 'connected' ? (
+                <span className="text-green flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green shrink-0" aria-hidden />
+                  Yahoo Live
+                </span>
+              ) : apiStatus === 'connecting' ? (
+                <span className="text-text-s flex items-center gap-1.5">
+                  <RefreshCcw className="w-3 h-3 animate-spin shrink-0" aria-hidden />
+                  Connecting…
+                </span>
+              ) : (
+                <span
+                  className="text-red flex items-center gap-1.5 max-w-[min(320px,35vw)] truncate cursor-help"
+                  title={feedDetail ?? 'Yahoo health check failed. Run npm run dev (Express + Vite) and ensure outbound network allows Yahoo Finance.'}
+                >
+                  Offline
+                </span>
+              )}
+              {onRefreshQuotes ? (
+                <button
+                  type="button"
+                  onClick={onRefreshQuotes}
+                  disabled={quotesRefreshing}
+                  className="p-0.5 rounded text-text-s/45 hover:text-text-s/75 hover:bg-white/[0.04] transition-colors disabled:opacity-40"
+                  title="Refresh holding quotes"
+                  aria-label="Refresh holding quotes"
+                >
+                  <RefreshCcw className={`w-2.5 h-2.5 shrink-0 opacity-80 ${quotesRefreshing ? 'animate-spin' : ''}`} aria-hidden />
+                </button>
+              ) : null}
+            </div>
+            {apiStatus !== 'connected' && (
+              <button
+                type="button"
+                onClick={onRetryFeed}
+                disabled={feedRetrying}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 text-text-s hover:bg-white/10 hover:text-text-p transition-all text-[9px] font-bold uppercase tracking-widest disabled:opacity-40"
+                title={feedDetail ?? 'Retry Yahoo market feed'}
               >
-                Offline
-              </span>
+                <RefreshCcw className={`w-3 h-3 shrink-0 ${feedRetrying ? 'animate-spin' : ''}`} aria-hidden />
+                Retry
+              </button>
             )}
           </div>
-          {apiStatus !== 'connected' && (
-            <button
-              type="button"
-              onClick={onRetryFeed}
-              disabled={feedRetrying}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 text-text-s hover:bg-white/10 hover:text-text-p transition-all text-[9px] font-bold uppercase tracking-widest disabled:opacity-40"
-              title={feedDetail ?? 'Retry Yahoo market feed'}
-            >
-              <RefreshCcw className={`w-3 h-3 shrink-0 ${feedRetrying ? 'animate-spin' : ''}`} aria-hidden />
-              Retry
-            </button>
-          )}
         </div>
       </div>
-    </div>
-  </header>
-);
+    </header>
+  );
+}

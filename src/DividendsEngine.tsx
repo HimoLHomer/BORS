@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { AnimatePresence, motion } from 'motion/react';
-import { Pencil, Plus, Trash2, X } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import type { Asset } from './types';
 import { formatCurrency } from './formatCurrency';
-import { formatDecimalFi, formatDecimalInputFi, formatPercentFi, parseDecimalInput, parseShareInput, formatShareInput, formatShares, sanitizeShareDraft } from './formatNumber';
-import { EurAmountInput } from './EurAmountField';
+import { formatDecimalFi, formatPercentFi, parseDecimalInput } from './formatNumber';
+import { ManualDividendModal } from './ManualDividendModal';
 import {
   computeBlendedYieldSummary,
   isDividendPayerRow,
@@ -31,7 +31,12 @@ import {
 } from './manualDividends';
 import { DividendPayoutCalendar } from './DividendPayoutCalendar';
 import { SummaryStatCard } from './SummaryStatCard';
-import { SkeletonBarChart, buildTableSkeletonRows } from './SkeletonPulse';
+import { SkeletonBarChart, SkeletonCurrency, buildTableSkeletonRows } from './SkeletonPulse';
+import {
+  dividendsHoldingsKey,
+  readDividendsPayloadCache,
+  writeDividendsPayloadCache,
+} from './dividendsPayloadCache';
 import {
   resolveApiNextPayDate,
   type ApiDividendPaymentInput,
@@ -75,12 +80,12 @@ const SECTION_HEAD = 'flex items-center justify-between mb-2 gap-2';
 
 const HOLDINGS_DETAIL_COLUMN_KEYS = [
   'asset',
+  'income',
   'yield',
   'annualShare',
-  'income',
   'freq',
-  'infoLink',
   'actions',
+  'infoLink',
 ] as const;
 
 function shortYahooSymbol(sym: string | null | undefined): string {
@@ -271,13 +276,20 @@ export function DividendsEngine({
   const [err, setErr] = useState<string | null>(null);
   const [manualRows, setManualRows] = useState<ManualDividendPosition[]>(() => loadManualDividendPositions());
   const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [holdingsStaggerKey, setHoldingsStaggerKey] = useState(0);
   const [editingManualId, setEditingManualId] = useState<string | null>(null);
   const [draftAnnual, setDraftAnnual] = useState('');
   const [draftLinkedSymbol, setDraftLinkedSymbol] = useState('');
-  const [draftUnits, setDraftUnits] = useState('');
   const [draftFrequency, setDraftFrequency] = useState<DividendPayoutFrequency>('quarterly');
   const [draftPayoutDate, setDraftPayoutDate] = useState('');
+  const [manualSaveError, setManualSaveError] = useState<string | null>(null);
   const [infoLinks, setInfoLinks] = useState<Record<string, string>>(() => loadDividendInfoLinks());
+  const marketPricesRef = useRef(marketPrices);
+  marketPricesRef.current = marketPrices;
+
+  const holdingsKey = useMemo(() => dividendsHoldingsKey(assets), [assets]);
+
+  const clearManualSaveError = useCallback(() => setManualSaveError(null), []);
 
   const setInfoLink = useCallback((key: string, url: string | null) => {
     const k = key.toUpperCase();
@@ -293,6 +305,10 @@ export function DividendsEngine({
   useEffect(() => {
     saveManualDividendPositions(manualRows);
   }, [manualRows]);
+
+  useEffect(() => {
+    setHoldingsStaggerKey((k) => k + 1);
+  }, []);
 
   useEffect(() => {
     if (!data?.rows?.length) return;
@@ -318,17 +334,31 @@ export function DividendsEngine({
         averagePortfolioYieldPercent: 0,
       });
       setErr(null);
+      setLoading(false);
       return;
     }
-    setLoading(true);
+
+    const cached = readDividendsPayloadCache(holdingsKey);
+    if (cached) {
+      setData(cached.payload as DividendsPayload);
+      setErr(null);
+      if (cached.fresh) {
+        setLoading(false);
+        return;
+      }
+    } else {
+      setLoading(true);
+    }
+
     setErr(null);
     try {
+      const prices = marketPricesRef.current;
       const holdings = assets.map((a) => ({
         symbol: a.symbol,
         displaySymbol: a.displaySymbol ?? null,
         quantity: a.quantity,
         currency: a.currency,
-        livePrice: marketPrices[a.symbol],
+        livePrice: prices[a.symbol],
         averagePrice: a.averagePrice,
       }));
       const res = await fetch('/api/portfolio/dividends', {
@@ -355,14 +385,17 @@ export function DividendsEngine({
       if (!Array.isArray(payload.rows)) {
         throw new Error('Invalid dividends response from server.');
       }
+      writeDividendsPayloadCache(holdingsKey, payload);
       setData(payload);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to load dividends');
-      setData(null);
+      if (!cached) {
+        setErr(e instanceof Error ? e.message : 'Failed to load dividends');
+        setData(null);
+      }
     } finally {
       setLoading(false);
     }
-  }, [assets, marketPrices, exchangeRates]);
+  }, [assets, holdingsKey]);
 
   useEffect(() => {
     void load();
@@ -397,6 +430,14 @@ export function DividendsEngine({
       }));
     return [...api, ...manual].sort((a, b) => b.income - a.income);
   }, [dividendPayingRows, sortedManualRows, data]);
+
+  const holdingsDetailRowKeys = useMemo(
+    () =>
+      holdingsDetailRows.map((entry) =>
+        entry.kind === 'api' ? `api-${entry.row.symbol}` : `manual-${entry.m.id}`
+      ),
+    [holdingsDetailRows]
+  );
 
   const displaySummary = useMemo(() => {
     if (!data?.rows?.length) {
@@ -455,8 +496,9 @@ export function DividendsEngine({
         ticker: a ? displayTickerForAsset(a) : shortYahooSymbol(row.symbol),
         estimatedAnnualIncomeEur: row.estimatedAnnualIncomeEur,
         payoutFrequency: row.payoutFrequency,
+        calendarPayoutDates: row.calendarPayoutDates,
         nextPayDateYmd: resolved?.nextPayDateYmd ?? null,
-        payDateSource: resolved?.payDateSource ?? row.calendarPayoutSource ?? 'none',
+        payDateSource: row.calendarPayoutSource ?? 'none',
       };
     });
   }, [dividendPayingRows, assets]);
@@ -481,13 +523,32 @@ export function DividendsEngine({
     });
   }, [manualRowsForBlended, assets, data]);
 
+  const eligibleHoldings = useMemo(() => {
+    const editingRow = editingManualId ? manualRows.find((m) => m.id === editingManualId) : null;
+    const editingSymbol = editingRow?.linkedSymbol?.trim().toUpperCase() ?? null;
+    const takenManualSymbols = new Set(
+      manualRows
+        .filter((m) => m.id !== editingManualId)
+        .map((m) => m.linkedSymbol?.trim().toUpperCase())
+        .filter((s): s is string => Boolean(s))
+    );
+
+    return assets.filter((a) => {
+      const sym = a.symbol.trim().toUpperCase();
+      if (editingSymbol && sym === editingSymbol) return true;
+      if (takenManualSymbols.has(sym)) return false;
+      if (manualSupersededByApi(data, { linkedSymbol: a.symbol } as ManualDividendPosition)) return false;
+      return true;
+    });
+  }, [assets, manualRows, editingManualId, data]);
+
   const resetDrafts = () => {
     setDraftAnnual('');
     setDraftLinkedSymbol('');
-    setDraftUnits('');
     setDraftFrequency('quarterly');
     setDraftPayoutDate('');
     setEditingManualId(null);
+    setManualSaveError(null);
   };
 
   const openManualModal = () => {
@@ -502,7 +563,6 @@ export function DividendsEngine({
     setDraftLinkedSymbol(
       m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol)[0]?.symbol ?? m.linkedSymbol : ''
     );
-    setDraftUnits(m.units != null ? formatShares(m.units) : '');
     const api = apiRowForSymbol(data, m.linkedSymbol);
     setDraftFrequency(effectivePayoutFrequency(m, api));
     setDraftPayoutDate(m.payoutAnchorDate ?? '');
@@ -511,11 +571,7 @@ export function DividendsEngine({
 
   const saveManual = () => {
     const annual = parseDecimalInput(draftAnnual, 0);
-    const unitsRaw = draftUnits.trim();
-    const unitsParsed = unitsRaw === '' ? null : parseShareInput(unitsRaw, NaN);
-    const units =
-      unitsParsed != null && Number.isFinite(unitsParsed) && unitsParsed > 0 ? unitsParsed : null;
-    if (!Number.isFinite(annual) || annual < 0) return;
+    if (!Number.isFinite(annual) || annual <= 0) return;
     const payoutAnchorDate =
       draftPayoutDate.trim() === '' ? null : draftPayoutDate.trim();
     if (payoutAnchorDate && !/^\d{4}-\d{2}-\d{2}$/.test(payoutAnchorDate)) return;
@@ -524,6 +580,15 @@ export function DividendsEngine({
     if (matchedForSave.length === 0) return;
     const primary = matchedForSave[0];
     const linkedSymbol = primary.symbol;
+    if (!editingManualId) {
+      const dup = manualRows.find(
+        (m) => m.linkedSymbol?.trim().toUpperCase() === linkedSymbol.trim().toUpperCase()
+      );
+      if (dup) {
+        setManualSaveError('This holding already has an estimate—edit it from the table.');
+        return;
+      }
+    }
     const name = primary.name.trim() || primary.symbol;
     const row: ManualDividendPosition = {
       id: editingManualId ?? crypto.randomUUID(),
@@ -531,7 +596,7 @@ export function DividendsEngine({
       annualIncomeEur: annual,
       notionalValueEur: null,
       linkedSymbol,
-      units,
+      units: null,
       payoutFrequency: draftFrequency,
       payoutAnchorDate,
     };
@@ -721,7 +786,13 @@ export function DividendsEngine({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SummaryStatCard
           title="Total annual dividend income"
-          hero={formatCurrency(displaySummary.totalAnnualEur, 'EUR')}
+          hero={
+            dividendsFetchPending ? (
+              <SkeletonCurrency className="h-14 w-40" />
+            ) : (
+              formatCurrency(displaySummary.totalAnnualEur, 'EUR')
+            )
+          }
           footer={
             displaySummary.totalAnnualEur > 0 ? (
               <p className="stat-subline">
@@ -737,7 +808,13 @@ export function DividendsEngine({
         />
         <SummaryStatCard
           title="Average yield (blended)"
-          hero={formatPercentFi(displaySummary.avgYieldPercent, 2)}
+          hero={
+            dividendsFetchPending ? (
+              <SkeletonCurrency className="h-14 w-28" />
+            ) : (
+              formatPercentFi(displaySummary.avgYieldPercent, 2)
+            )
+          }
           footer={
             displaySummary.capitalBaseEur > 0 ? (
               <p className="stat-subline">
@@ -756,7 +833,7 @@ export function DividendsEngine({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="panel min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden">
+        <div className="panel min-h-[400px] h-[400px] max-h-[400px] flex flex-col overflow-hidden">
           <div className={`${SECTION_HEAD} shrink-0`}>
             <h3 className="card-title mb-0">Annual dividend income (by holding)</h3>
           </div>
@@ -821,16 +898,18 @@ export function DividendsEngine({
           )}
         </div>
 
-        <div className="panel min-h-[360px] h-[360px] max-h-[360px] flex flex-col overflow-hidden">
+        <div className="panel min-h-[400px] h-[400px] max-h-[400px] flex flex-col overflow-hidden">
           <div className={`${SECTION_HEAD} shrink-0`}>
             <h3 className="card-title mb-0">Dividend calendar</h3>
           </div>
-          <DividendPayoutCalendar
-            apiRows={dividendsFetchPending ? [] : calendarApiRows}
-            manualRows={dividendsFetchPending ? [] : calendarManualRows}
-            loading={dividendsFetchPending}
-            hasHoldings={assets.length > 0}
-          />
+          <div className="flex-1 min-h-0 flex flex-col">
+            <DividendPayoutCalendar
+              apiRows={dividendsFetchPending ? [] : calendarApiRows}
+              manualRows={dividendsFetchPending ? [] : calendarManualRows}
+              loading={dividendsFetchPending}
+              hasHoldings={assets.length > 0}
+            />
+          </div>
         </div>
       </div>
 
@@ -849,140 +928,35 @@ export function DividendsEngine({
         <HoldingsDetailTable
           rows={dividendsFetchPending ? holdingsDetailSkeletonRows : holdingsDetailTableRows}
           emptyState={holdingsDetailEmptyState ?? undefined}
+          rowKeys={dividendsFetchPending ? undefined : holdingsDetailRowKeys}
+          enterStaggerKey={dividendsFetchPending ? undefined : holdingsStaggerKey}
+          enterStaggerMax={12}
         />
       </div>
 
       <AnimatePresence>
         {manualModalOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-            onClick={() => {
+          <ManualDividendModal
+            open={manualModalOpen}
+            editing={editingManualId != null}
+            eligibleHoldings={eligibleHoldings}
+            allAssets={assets}
+            draftLinkedSymbol={draftLinkedSymbol}
+            draftAnnual={draftAnnual}
+            draftFrequency={draftFrequency}
+            draftPayoutDate={draftPayoutDate}
+            saveError={manualSaveError}
+            onClose={() => {
               setManualModalOpen(false);
               resetDrafts();
             }}
-          >
-            <motion.div
-              initial={{ scale: 0.96, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.96, opacity: 0 }}
-              className="glass-panel w-full max-w-md p-8 shadow-2xl max-h-[90vh] overflow-y-auto border-accent/20"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-black uppercase tracking-tight text-text-p">
-                  {editingManualId ? 'Edit dividend estimate' : 'Add dividend estimate'}
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setManualModalOpen(false);
-                    resetDrafts();
-                  }}
-                  className="p-2 text-text-s hover:text-text-p hover:bg-white/5 rounded-lg transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
-                Holding (from Dashboard)
-              </label>
-              <select
-                value={draftLinkedSymbol}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setDraftLinkedSymbol(v);
-                  if (v) {
-                    const matched = assetsMatchingLink(assets, v);
-                    const q = matched.reduce((s, a) => s + (Number.isFinite(a.quantity) ? a.quantity : 0), 0);
-                    setDraftUnits(q > 0 ? formatShares(q) : '');
-                  } else {
-                    setDraftUnits('');
-                  }
-                }}
-                className="w-full mb-3 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm text-text-p focus:outline-none focus:border-accent/50"
-              >
-                <option value="">Select a holding…</option>
-                {assets.map((a) => (
-                  <option key={a.id ?? `${a.symbol}-${a.name}`} value={a.symbol}>
-                    {a.name} ({a.displaySymbol ?? a.symbol}) · qty {a.quantity}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[10px] font-mono text-text-s/60 mb-5 leading-relaxed">
-                Yield % uses this position’s EUR value on the Dashboard (quantity × price × FX). Leave units blank to
-                use the same quantity for annual/share.
-              </p>
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
-                Annual dividend income (EUR)
-              </label>
-              <EurAmountInput
-                wrapperClassName="mb-5"
-                value={draftAnnual}
-                onChange={(e) => setDraftAnnual(e.target.value)}
-                onBlur={() => setDraftAnnual((v) => formatDecimalInputFi(v, 2))}
-                className="py-3 text-sm"
-                placeholder="0,00"
-              />
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
-                Units / shares (optional)
-              </label>
-              <input
-                value={draftUnits}
-                onChange={(e) => setDraftUnits(sanitizeShareDraft(e.target.value))}
-                onBlur={() => setDraftUnits((v) => (v.trim() === '' ? '' : formatShareInput(v)))}
-                inputMode="numeric"
-                className="w-full mb-2 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
-                placeholder={draftLinkedSymbol.trim() ? 'Leave blank to use holding quantity' : 'Optional override'}
-              />
-              <p className="text-[9px] font-mono text-text-s/50 mb-5 leading-relaxed">
-                Annual/share = annual income ÷ units.
-              </p>
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
-                Payout frequency
-              </label>
-              <select
-                value={draftFrequency}
-                onChange={(e) => setDraftFrequency(e.target.value as DividendPayoutFrequency)}
-                className="w-full mb-5 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm text-text-p focus:outline-none focus:border-accent/50"
-              >
-                <option value="monthly">Monthly</option>
-                <option value="quarterly">Quarterly</option>
-                <option value="annual">Annual</option>
-              </select>
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2 ml-1">
-                Anchor pay date
-              </label>
-              <input
-                type="date"
-                value={draftPayoutDate}
-                onChange={(e) => setDraftPayoutDate(e.target.value)}
-                className="w-full mb-8 bg-bg/50 border border-border rounded-xl px-4 py-3 text-sm font-mono text-text-p focus:outline-none focus:border-accent/50"
-              />
-              <div className="flex flex-wrap justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setManualModalOpen(false);
-                    resetDrafts();
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-border/60 text-[10px] font-black uppercase tracking-widest text-text-p"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={saveManual}
-                  disabled={!draftLinkedSymbol.trim()}
-                  className="px-4 py-2.5 rounded-lg bg-accent text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-accent/20 hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                >
-                  Save
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
+            onSave={saveManual}
+            onDraftLinkedSymbolChange={setDraftLinkedSymbol}
+            onDraftAnnualChange={setDraftAnnual}
+            onDraftFrequencyChange={setDraftFrequency}
+            onDraftPayoutDateChange={setDraftPayoutDate}
+            onClearSaveError={clearManualSaveError}
+          />
         )}
       </AnimatePresence>
     </div>

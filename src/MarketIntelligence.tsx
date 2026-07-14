@@ -37,19 +37,31 @@ const SECTOR_HEADER_H = 22;
 /** Shared treemap label caps — same for S&P 500 and OMX Helsinki 25. */
 const TREEMAP_FONT_CAP_MAIN = 12;
 const TREEMAP_FONT_CAP_SUB = 9;
-const TREEMAP_FONT_CAP_TINY = 7;
-const TREEMAP_FONT_CAP_MICRO = 6;
+const TREEMAP_FONT_CAP_TINY = 8;
+const TREEMAP_FONT_CAP_MICRO = 8;
+/** Never render below this — tiny tiles rely on hover tooltip instead. */
+const TREEMAP_FONT_MIN = 8;
 
 /** Vibrant green/red fills — alpha scales with |change| (matches --color-green / --color-red). */
-function heatmapTileFill(change: number): string {
+function heatmapTileFill(change: number, hover = false): string {
   const t = Math.min(Math.abs(change) / 4, 1);
-  const alpha = 0.28 + t * 0.44;
+  const alpha = hover ? 0.42 + t * 0.5 : 0.28 + t * 0.44;
   return change >= 0
     ? `rgba(34, 197, 94, ${alpha})`
     : `rgba(239, 68, 68, ${alpha})`;
 }
 
-function HeatmapTileGlowDefs({ greenId, redId }: { greenId: string; redId: string }) {
+function HeatmapTileGlowDefs({
+  greenId,
+  redId,
+  greenHoverId,
+  redHoverId,
+}: {
+  greenId: string;
+  redId: string;
+  greenHoverId: string;
+  redHoverId: string;
+}) {
   return (
     <defs>
       <filter id={greenId} x="-30%" y="-30%" width="160%" height="160%">
@@ -78,6 +90,32 @@ function HeatmapTileGlowDefs({ greenId, redId }: { greenId: string; redId: strin
           <feMergeNode in="SourceGraphic" />
         </feMerge>
       </filter>
+      <filter id={greenHoverId} x="-45%" y="-45%" width="190%" height="190%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" result="blur" />
+        <feColorMatrix
+          in="blur"
+          type="matrix"
+          values="0 0 0 0 0.2  0 0 0 0 0.95  0 0 0 0 0.45  0 0 0 0.78 0"
+          result="glow"
+        />
+        <feMerge>
+          <feMergeNode in="glow" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id={redHoverId} x="-45%" y="-45%" width="190%" height="190%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" result="blur" />
+        <feColorMatrix
+          in="blur"
+          type="matrix"
+          values="0 0 0 0 1  0 0 0 0 0.35  0 0 0 0 0.35  0 0 0 0.78 0"
+          result="glow"
+        />
+        <feMerge>
+          <feMergeNode in="glow" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
     </defs>
   );
 }
@@ -88,21 +126,25 @@ function treemapFontSizes(
   area: number
 ): { main: number; sub: number; tiny: number; micro: number } {
   const minDim = Math.min(boxW, boxH);
-  if (area < 120) return { main: 7, sub: 6, tiny: 6, micro: 6 };
+  const clamp = (n: number) => Math.max(TREEMAP_FONT_MIN, n);
+
+  if (area < 120) {
+    return { main: TREEMAP_FONT_MIN, sub: TREEMAP_FONT_MIN, tiny: TREEMAP_FONT_MIN, micro: TREEMAP_FONT_MIN };
+  }
   if (area < 280) {
     return {
-      main: Math.min(8, minDim * 0.38),
-      sub: Math.min(7, minDim * 0.32),
-      tiny: 6,
-      micro: 6,
+      main: clamp(Math.min(8, minDim * 0.38)),
+      sub: clamp(Math.min(8, minDim * 0.32)),
+      tiny: TREEMAP_FONT_MIN,
+      micro: TREEMAP_FONT_MIN,
     };
   }
   if (area < 600) {
     return {
-      main: Math.min(9, minDim / 3.4),
-      sub: Math.min(7, minDim / 4.2),
-      tiny: 6,
-      micro: 5,
+      main: clamp(Math.min(9, minDim / 3.4)),
+      sub: clamp(Math.min(8, minDim / 4.2)),
+      tiny: TREEMAP_FONT_MIN,
+      micro: TREEMAP_FONT_MIN,
     };
   }
   return {
@@ -465,6 +507,9 @@ type TreemapContentProps = {
   sectorLayoutRef?: React.MutableRefObject<Map<string, number>>;
   glowGreenId?: string;
   glowRedId?: string;
+  glowGreenHoverId?: string;
+  glowRedHoverId?: string;
+  hoveredSymbol?: string | null;
   onHover?: (info: HeatmapHover, clientX: number, clientY: number) => void;
   onLeave?: () => void;
 };
@@ -486,12 +531,22 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
     sectorLayoutRef,
     glowGreenId,
     glowRedId,
+    glowGreenHoverId,
+    glowRedHoverId,
+    hoveredSymbol,
   } = props;
 
   if (depth === 0) {
     sectorLayoutRef?.current.clear();
-    if (glowGreenId && glowRedId) {
-      return <HeatmapTileGlowDefs greenId={glowGreenId} redId={glowRedId} />;
+    if (glowGreenId && glowRedId && glowGreenHoverId && glowRedHoverId) {
+      return (
+        <HeatmapTileGlowDefs
+          greenId={glowGreenId}
+          redId={glowRedId}
+          greenHoverId={glowGreenHoverId}
+          redHoverId={glowRedHoverId}
+        />
+      );
     }
   }
 
@@ -552,10 +607,14 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
   if (isGroup || depth < 1 || boxW < 5 || boxH < 5) return null;
 
   const change = typeof props.change === 'number' ? props.change : 0;
-  const color = heatmapTileFill(change);
+  const ticker = name ?? '';
+  const tile = resolveTile(tileLookup, ticker, props.symbol);
+  const tileSymbol = tile?.symbol ?? props.symbol ?? ticker;
+  const isHovered = hoveredSymbol != null && hoveredSymbol === tileSymbol;
+  const color = heatmapTileFill(change, isHovered);
   const tileGlowFilter =
-    glowGreenId && glowRedId
-      ? `url(#${change >= 0 ? glowGreenId : glowRedId})`
+    isHovered && glowGreenHoverId && glowRedHoverId
+      ? `url(#${change >= 0 ? glowGreenHoverId : glowRedHoverId})`
       : undefined;
 
   const inset = Math.min(boxW, boxH) < 32 ? 2 : 4;
@@ -578,8 +637,6 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
         : 2;
   const pctText = formatPercentFi(change, pctDecimals, { showPlus: true });
   const pctCompact = formatPercentFi(change, 0, { showPlus: true });
-  const ticker = name ?? '';
-  const tile = resolveTile(tileLookup, ticker, props.symbol);
 
   const { main: fontMain, sub: fontSub, tiny: fontTiny, micro: fontMicro } = treemapFontSizes(
     innerW,
@@ -618,15 +675,16 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
     !showStacked &&
     !showTickerWithPct &&
     isWideSliver &&
-    innerW >= 20 &&
+    innerW >= 24 &&
+    innerH >= 14 &&
     inlineLabelFits(ticker, pctCompact, innerW, fontMicro);
   const showInline =
     !showBoth &&
     !showStacked &&
     !showTickerWithPct &&
     !showWideSliver &&
-    innerW >= 24 &&
-    innerH >= 12 &&
+    innerW >= 28 &&
+    innerH >= 14 &&
     inlineLabelFits(ticker, pctCompact, innerW, fontMicro);
   const showTickerOnly =
     !showBoth &&
@@ -634,8 +692,8 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
     !showTickerWithPct &&
     !showWideSliver &&
     !showInline &&
-    innerW >= 14 &&
-    innerH >= 12 &&
+    innerW >= 18 &&
+    innerH >= 14 &&
     canFitTickerLine(fontTiny);
   const showSliverVertical =
     !showBoth &&
@@ -645,8 +703,8 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
     !showInline &&
     !showTickerOnly &&
     isTallSliver &&
-    innerH >= 32 &&
-    innerW >= 10 &&
+    innerH >= 36 &&
+    innerW >= 12 &&
     canFitTickerLine(fontMicro);
   const showPctOnly =
     !showBoth &&
@@ -656,7 +714,8 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
     !showInline &&
     !showTickerOnly &&
     !showSliverVertical &&
-    minDim >= 10 &&
+    minDim >= 14 &&
+    innerH >= TREEMAP_FONT_MIN + 6 &&
     (pctOkMicro || pctOkTiny);
 
   const hoverPayload: HeatmapHover = {
@@ -690,9 +749,10 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
         filter={tileGlowFilter}
         style={{
           fill: color,
-          stroke: 'rgba(39,39,42,0.8)',
-          strokeWidth: 1,
+          stroke: isHovered ? 'rgba(255,255,255,0.38)' : 'rgba(39,39,42,0.8)',
+          strokeWidth: isHovered ? 1.5 : 1,
           cursor: 'pointer',
+          transition: 'fill 0.12s ease, stroke 0.12s ease',
         }}
         onMouseEnter={(e) => onHover?.(hoverPayload, e.clientX, e.clientY)}
         onMouseMove={(e) => onHover?.(hoverPayload, e.clientX, e.clientY)}
@@ -848,6 +908,8 @@ function TreemapChart({
   const reactId = React.useId();
   const glowGreenId = `hg-g-${reactId.replace(/:/g, '')}`;
   const glowRedId = `hg-r-${reactId.replace(/:/g, '')}`;
+  const glowGreenHoverId = `hg-gh-${reactId.replace(/:/g, '')}`;
+  const glowRedHoverId = `hg-rh-${reactId.replace(/:/g, '')}`;
 
   const handleHover = useCallback((info: HeatmapHover, clientX: number, clientY: number) => {
     const box = containerRef.current?.getBoundingClientRect();
@@ -916,6 +978,9 @@ function TreemapChart({
               sectorLayoutRef={sectorLayoutRef}
               glowGreenId={glowGreenId}
               glowRedId={glowRedId}
+              glowGreenHoverId={glowGreenHoverId}
+              glowRedHoverId={glowRedHoverId}
+              hoveredSymbol={hover?.symbol ?? null}
               onHover={handleHover}
               onLeave={() => setHover(null)}
             />

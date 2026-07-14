@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 
 export type DataListColumn = {
   key: string;
@@ -34,6 +35,9 @@ export function DataListTable({
   onRowClick,
   tableClassName,
   headerRowClassName,
+  enterStaggerKey,
+  enterStaggerMax = 12,
+  rowKeys,
 }: {
   columns: DataListColumn[];
   rows: Record<string, React.ReactNode>[];
@@ -47,6 +51,10 @@ export function DataListTable({
   onRowClick?: (rowIndex: number) => void;
   tableClassName?: string;
   headerRowClassName?: string;
+  /** When set, rows fade in with stagger on key change (e.g. dashboard open). */
+  enterStaggerKey?: number;
+  enterStaggerMax?: number;
+  rowKeys?: string[];
 }) {
   const colSpan = columns.length;
 
@@ -96,29 +104,55 @@ export function DataListTable({
               </td>
             </tr>
           ) : (
-            rows.map((row, i) => (
-              <tr
-                key={i}
-                className={
-                  [
-                    rowClassName?.(i) ?? dataListRowClassName(i, highlightWhen?.(i)),
-                    onRowClick ? 'cursor-pointer hover:outline hover:outline-1 hover:outline-green/30' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')
-                }
-                onClick={onRowClick ? () => onRowClick(i) : undefined}
-              >
-                {columns.map((c) => (
-                  <td
-                    key={c.key}
-                    className={c.cellClassName ?? dataListCellClassName(c.align ?? 'left')}
+            rows.map((row, i) => {
+              const rowClass = [
+                rowClassName?.(i) ?? dataListRowClassName(i, highlightWhen?.(i)),
+                onRowClick ? 'cursor-pointer hover:outline hover:outline-1 hover:outline-green/30' : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+
+              const cells = columns.map((c) => (
+                <td
+                  key={c.key}
+                  className={c.cellClassName ?? dataListCellClassName(c.align ?? 'left')}
+                >
+                  {row[c.key]}
+                </td>
+              ));
+
+              const rowKey = rowKeys?.[i] ?? String(i);
+
+              if (enterStaggerKey != null) {
+                const staggered = i < enterStaggerMax;
+                return (
+                  <motion.tr
+                    key={`${enterStaggerKey}-${rowKey}`}
+                    className={rowClass}
+                    initial={staggered ? { opacity: 0, y: 6 } : false}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={
+                      staggered
+                        ? { delay: i * 0.04, duration: 0.22, ease: [0.22, 1, 0.36, 1] as const }
+                        : { duration: 0 }
+                    }
+                    onClick={onRowClick ? () => onRowClick(i) : undefined}
                   >
-                    {row[c.key]}
-                  </td>
-                ))}
-              </tr>
-            ))
+                    {cells}
+                  </motion.tr>
+                );
+              }
+
+              return (
+                <tr
+                  key={rowKey}
+                  className={rowClass}
+                  onClick={onRowClick ? () => onRowClick(i) : undefined}
+                >
+                  {cells}
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>

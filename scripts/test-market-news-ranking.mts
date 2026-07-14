@@ -12,9 +12,11 @@ import {
   filterArticlesForFiMarketSecondary,
   filterArticlesForMarketDate,
   filterFreshMarketArticles,
+  filterQuotePageNewsArticles,
   headlineImpliesBeforeMarketDate,
   headlinesAreDuplicates,
   headlinesShareTopic,
+  isQuotePageNewsHeadline,
   rankNewsArticles,
   scoreNewsArticle,
   type RawNewsArticle,
@@ -304,5 +306,51 @@ const parsed = parseGoogleNewsRss(rssXml);
 assert.equal(parsed.length, 1);
 assert.equal(parsed[0]!.title, "OMX Helsinki edges higher");
 assert.equal(parsed[0]!.publisher, "Example");
+
+assert.ok(
+  isQuotePageNewsHeadline("EMUS.PK - Reuters"),
+  "ticker-only PK headline should be rejected"
+);
+assert.ok(
+  isQuotePageNewsHeadline("EMUS.PK - | Stock Price & Latest News - Reuters"),
+  "Reuters quote page title should be rejected"
+);
+assert.ok(
+  isQuotePageNewsHeadline("AXOCF.PK -"),
+  "ticker with trailing dash should be rejected"
+);
+assert.ok(
+  !isQuotePageNewsHeadline("S&P 500, Nasdaq rise after cooler-than-expected CPI report"),
+  "real market headline should pass"
+);
+
+const quoteFiltered = filterQuotePageNewsArticles([
+  article("EMUS.PK - Reuters", { publisher: "Reuters", publishedAt: todayMs }),
+  article("Federal Reserve officials signal patience on rate cuts", {
+    publisher: "Reuters",
+    publishedAt: todayMs,
+  }),
+]);
+assert.equal(quoteFiltered.length, 1);
+assert.ok(quoteFiltered[0]!.title.includes("Federal Reserve"));
+
+const rankedWithoutQuotes = rankNewsArticles(
+  [
+    article("EMUS.PK - Reuters", { publisher: "Reuters", publishedAt: todayMs }),
+    article("Warsh Says Fed Has No Tolerance for Elevated Inflation", {
+      publisher: "Bloomberg",
+      publishedAt: todayMs,
+    }),
+    article("S&P 500, Nasdaq rise after cooler-than-expected CPI report", {
+      publisher: "Yahoo Finance",
+      publishedAt: todayMs,
+    }),
+  ],
+  baseCtx
+);
+assert.ok(
+  rankedWithoutQuotes.every(({ article: a }) => !isQuotePageNewsHeadline(a.title)),
+  "ranked stories should not include quote pages"
+);
 
 console.log("OK: market news ranking tests passed.");

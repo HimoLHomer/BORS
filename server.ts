@@ -13,7 +13,11 @@ if (userDataDir) {
 }
 import { registerPortfolioRoutes } from "./server/portfolio";
 import { yahooFinance } from "./server/yahooClient";
-import { registerMarketHeatmapRoutes } from "./server/marketHeatmap";
+import {
+  onMarketConstituentsSynced,
+  startDailyConstituentSyncIfNeeded,
+} from "./server/marketConstituentStore";
+import { clearHeatmapCache, registerMarketHeatmapRoutes } from "./server/marketHeatmap";
 import { registerMarketOverviewRoutes } from "./server/marketOverview";
 import { registerMarketNewsRoutes } from "./server/marketNews";
 import {
@@ -58,6 +62,8 @@ async function startServer() {
   app.use(express.json());
 
   registerPortfolioRoutes(app, yahooFinance);
+  onMarketConstituentsSynced(() => clearHeatmapCache());
+  startDailyConstituentSyncIfNeeded();
   registerMarketHeatmapRoutes(app, yahooFinance);
   registerMarketOverviewRoutes(app, yahooFinance);
   registerMarketNewsRoutes(app, yahooFinance);
@@ -149,20 +155,52 @@ async function startServer() {
         })
       );
 
-      // Fetch exchange rates for non-base currencies
+      // Fetch exchange rates for non-base currencies (Yahoo uses both CURRBASE=X and BASECURR=X).
       const neededRates = [...new Set(results.filter(r => !r.error && r.currency !== baseCurrency).map(r => r.currency))];
       const rates: Record<string, number> = { [baseCurrency]: 1 };
-      
-      await Promise.all(neededRates.map(async (curr) => {
-        try {
-          const rateQuote: any = await yahooFinance.quote(`${curr}${baseCurrency}=X`);
-          if (rateQuote.regularMarketPrice) rates[curr] = rateQuote.regularMarketPrice;
-        } catch (e) {
-          // Fallback approximate rates if Yahoo fails
-          if (curr === 'USD') rates['USD'] = 0.92;
-          if (curr === 'GBP') rates['GBP'] = 1.17;
+
+      for (const r of results) {
+        if (r.error || !r.currency || r.currency === baseCurrency || typeof r.price !== 'number' || !(r.price > 0)) continue;
+        const curr = r.currency;
+        const directPair = `${curr}${baseCurrency}=X`;
+        const inversePair = `${baseCurrency}${curr}=X`;
+        if (r.symbol === directPair) {
+          rates[curr] = r.price;
+        } else if (r.symbol === inversePair) {
+          rates[curr] = 1 / r.price;
         }
-      }));
+      }
+
+      const fetchFxRateToBase = async (curr: string): Promise<number | undefined> => {
+        try {
+          const direct: any = await yahooFinance.quote(`${curr}${baseCurrency}=X`);
+          if (typeof direct.regularMarketPrice === 'number' && direct.regularMarketPrice > 0) {
+            return direct.regularMarketPrice;
+          }
+        } catch {
+          /* try inverse */
+        }
+        try {
+          const inverse: any = await yahooFinance.quote(`${baseCurrency}${curr}=X`);
+          if (typeof inverse.regularMarketPrice === 'number' && inverse.regularMarketPrice > 0) {
+            return 1 / inverse.regularMarketPrice;
+          }
+        } catch {
+          /* fall through */
+        }
+        if (curr === 'USD') return 0.92;
+        if (curr === 'GBP') return 1.17;
+        return undefined;
+      };
+
+      await Promise.all(
+        neededRates
+          .filter((curr) => !(typeof rates[curr] === 'number' && rates[curr] > 0))
+          .map(async (curr) => {
+            const rate = await fetchFxRateToBase(curr);
+            if (rate != null && rate > 0) rates[curr] = rate;
+          })
+      );
 
       res.json({ quotes: results, rates });
     } catch (error) {

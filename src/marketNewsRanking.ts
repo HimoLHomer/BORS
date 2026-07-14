@@ -380,6 +380,35 @@ export function filterArticlesByMaxAge(
   });
 }
 
+/** Reuters/Google RSS sometimes surface ticker quote pages as news items. */
+const QUOTE_PAGE_PHRASE_RE = /stock\s+price\s*(?:&|and)\s*latest\s+news/i;
+const TICKER_PK_HEADLINE_RE = /^[A-Z0-9][A-Z0-9.-]{0,12}\.PK(?:\s*-\s*(?:\|\s*)?)?\s*$/i;
+
+function stripTrailingPublisherSegments(title: string): string {
+  let t = title.trim();
+  for (let i = 0; i < 4; i++) {
+    const next = t.replace(/\s+[-–|]\s+[^-|–]+$/u, "").trim();
+    if (next === t) break;
+    t = next;
+  }
+  return t;
+}
+
+export function isQuotePageNewsHeadline(title: string): boolean {
+  const raw = title.trim();
+  if (!raw) return true;
+  if (QUOTE_PAGE_PHRASE_RE.test(raw)) return true;
+
+  const stripped = stripTrailingPublisherSegments(raw);
+  if (TICKER_PK_HEADLINE_RE.test(stripped)) return true;
+  if (/^[A-Z0-9][A-Z0-9.-]{0,12}\.PK\s*-\s*$/i.test(stripped)) return true;
+  return false;
+}
+
+export function filterQuotePageNewsArticles(articles: RawNewsArticle[]): RawNewsArticle[] {
+  return articles.filter((article) => !isQuotePageNewsHeadline(article.title));
+}
+
 export function filterArticlesForMarketDate(
   articles: RawNewsArticle[],
   marketDate: string
@@ -398,10 +427,12 @@ export function filterFreshMarketArticles(
   maxAgeHours: number = NEWS_MAX_AGE_HOURS,
   nowMs: number = Date.now()
 ): RawNewsArticle[] {
-  return filterArticlesByMaxAge(
-    filterArticlesForMarketDate(articles, marketDate),
-    maxAgeHours,
-    nowMs
+  return filterQuotePageNewsArticles(
+    filterArticlesByMaxAge(
+      filterArticlesForMarketDate(articles, marketDate),
+      maxAgeHours,
+      nowMs
+    )
   );
 }
 

@@ -23,12 +23,17 @@ import {
 } from './fireStorage';
 import { EurAmountField, EUR_AMOUNT_INPUT_PAD } from './EurAmountField';
 import { DataListTable } from './DataListTable';
+import {
+  isFireGoalCelebratedThisSession,
+  markFireGoalCelebratedThisSession,
+} from './fireGoalCelebration';
+import { playFireGoalChime } from './uiFeedback';
 
 const INPUT =
   'w-full bg-bg/50 border border-border rounded-xl px-3 py-2 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums';
 const LABEL = 'micro-label block mb-1';
 const INLINE_INPUT =
-  'bg-bg/50 border border-border rounded-md px-2 py-1.5 text-xs font-mono focus:outline-none focus:border-accent/40';
+  'bg-bg/50 border border-border rounded-md px-2 py-1.5 text-xs font-sans focus:outline-none focus:border-accent/40';
 const ENTRY_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_5.5rem_1.75rem] gap-2 items-center';
 const ENTRY_GROUP = 'rounded-lg border border-border/40 bg-bg/25 px-3 py-2.5';
 
@@ -142,7 +147,11 @@ function ExpenseAmountInput({
   const { inputProps } = useFiDecimalDraft(value, onChange, { fractionDigits: 2, min: 0 });
 
   return (
-    <EurAmountField className={className || 'w-[5.5rem] shrink-0'}>
+    <EurAmountField
+      className={className || 'w-[5.5rem] shrink-0'}
+      iconClassName="absolute left-2 top-1/2 -translate-y-1/2 text-text-s/55 text-[10px] font-sans font-bold pointer-events-none select-none"
+      inputPadClassName="pl-7"
+    >
       <input
         type="text"
         inputMode="decimal"
@@ -178,6 +187,13 @@ export function FireProjection({
 
   const monthlyTotal = monthlyExpensesTotal(stored.expenses);
   const annualExpenses = monthlyTotal * 12;
+  const sortedExpenses = useMemo(
+    () =>
+      [...stored.expenses].sort(
+        (a, b) => b.monthlyEur - a.monthlyEur || a.label.localeCompare(b.label, 'fi')
+      ),
+    [stored.expenses]
+  );
   const effectiveYield = Math.max(0, stored.capital.blendedYieldPercent);
 
   const projection = useMemo(
@@ -262,6 +278,33 @@ export function FireProjection({
       });
     return { savingsByYear, draftSavings: draft };
   }, [stored.monthlySavings, annualSavingsGoalEur]);
+
+  const [celebratingYear, setCelebratingYear] = useState<string | null>(null);
+  const savingsGoalMetInitRef = useRef(false);
+  const prevGoalMetYearsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const metNow = new Set(savingsByYear.filter((y) => y.goalMet).map((y) => y.year));
+    if (!savingsGoalMetInitRef.current) {
+      savingsGoalMetInitRef.current = true;
+      prevGoalMetYearsRef.current = metNow;
+      return;
+    }
+    let timeoutId: number | undefined;
+    for (const year of metNow) {
+      if (prevGoalMetYearsRef.current.has(year)) continue;
+      if (isFireGoalCelebratedThisSession(year)) continue;
+      markFireGoalCelebratedThisSession(year);
+      playFireGoalChime();
+      setCelebratingYear(year);
+      timeoutId = window.setTimeout(() => setCelebratingYear(null), 1400);
+      break;
+    }
+    prevGoalMetYearsRef.current = metNow;
+    return () => {
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+    };
+  }, [savingsByYear]);
 
   const updateSaving = (id: string, patch: Partial<FireMonthlySaving>) => {
     setStored((s) => ({
@@ -422,15 +465,15 @@ export function FireProjection({
           </div>
           <div className="space-y-3 max-h-[320px] overflow-y-auto">
             {stored.expenses.length === 0 ? (
-              <p className="text-text-s/50 text-xs font-mono py-4 text-center">No entries yet</p>
+              <p className="text-text-s/50 text-xs font-sans py-4 text-center">No entries yet</p>
             ) : (
               <section className={ENTRY_GROUP}>
                 <div className="space-y-1.5">
-                  {stored.expenses.map((e) => (
+                  {sortedExpenses.map((e) => (
                     <div key={e.id} className={ENTRY_ROW_GRID}>
                       <input
                         type="text"
-                        className={`w-full min-w-0 ${INLINE_INPUT} text-text-p font-sans`}
+                        className={`w-full min-w-0 ${INLINE_INPUT} text-text-p`}
                         value={e.label}
                         onChange={(ev) => updateExpense(e.id, { label: ev.target.value })}
                       />
@@ -456,13 +499,13 @@ export function FireProjection({
           <div className="mt-4 pt-3 border-t border-border/50 space-y-1">
             <div className="flex justify-between gap-4">
               <span className="micro-label mb-0">Total monthly</span>
-              <span className="text-sm font-mono font-bold tabular-nums text-text-p">
+              <span className="text-[10px] font-sans font-bold tabular-nums text-text-p">
                 {formatCurrency(monthlyTotal, 'EUR')}
               </span>
             </div>
             <div className="flex justify-between gap-4">
               <span className="micro-label mb-0">Annual expenses</span>
-              <span className="text-sm font-mono font-bold tabular-nums text-text-p">
+              <span className="text-[10px] font-sans font-bold tabular-nums text-text-p">
                 {formatCurrency(annualExpenses, 'EUR')}
               </span>
             </div>
@@ -516,7 +559,10 @@ export function FireProjection({
                 </section>
               ) : null}
               {savingsByYear.map(({ year, rows, total, goalMet, goalPct }) => (
-                <section key={year} className={ENTRY_GROUP}>
+                <section
+                  key={year}
+                  className={`${ENTRY_GROUP}${celebratingYear === year ? ' fire-goal-celebrate' : ''}`}
+                >
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <span className="text-[10px] font-black text-text-p uppercase tracking-widest">
                       {year}

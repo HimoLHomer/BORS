@@ -8,7 +8,7 @@ import {
   type AssetLogoSource,
 } from './assetLogo';
 
-function IssuerLogo({
+export function IssuerLogo({
   ticker,
   name,
   type,
