@@ -1401,7 +1401,13 @@ export default function App() {
                             fill="url(#colorValue)"
                             strokeWidth={3}
                             animationDuration={1000}
-                            activeDot={false}
+                            dot={false}
+                            activeDot={{
+                              r: 4,
+                              fill: 'var(--color-accent)',
+                              stroke: 'var(--color-card)',
+                              strokeWidth: 2,
+                            }}
                           />
                         </AreaChart>
                       </ResponsiveContainer>

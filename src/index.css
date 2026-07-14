@@ -338,10 +338,6 @@
   pointer-events: none !important;
 }
 
-.portfolio-area-chart .recharts-active-dot {
-  display: none !important;
-}
-
 .portfolio-area-chart .recharts-tooltip-wrapper {
   transition: none !important;
 }
