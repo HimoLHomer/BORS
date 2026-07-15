@@ -24,9 +24,16 @@ import { loadFireInputs, FIRE_INPUTS_CHANGED_EVENT } from './fireStorage';
 
 type TileSize = 'featured' | 'cluster' | 'compact';
 
+const DIVIDEND_MONTH_NAV_PILL =
+  'inline-flex items-center rounded-lg border border-border/50 bg-white/[0.04] p-0.5 shrink-0';
+const DIVIDEND_MONTH_NAV_BTN =
+  'h-7 w-7 rounded-md flex items-center justify-center shrink-0 text-text-s hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-30 disabled:pointer-events-none disabled:hover:bg-transparent';
+const DIVIDEND_MONTH_NAV_LABEL =
+  'text-[10px] font-bold uppercase tracking-widest text-text-p px-2 min-w-[5.5rem] text-center truncate';
+
 const TILE_PRESETS = {
   featured: {
-    logoPx: 72,
+    logoPx: 80,
     amountClass: 'text-sm',
     metaClass: 'text-[10px]',
     stackGap: 'gap-2.5',
@@ -42,8 +49,8 @@ const TILE_PRESETS = {
     pad: 'p-1.5',
   },
   compact: {
-    logoPx: 18,
-    amountClass: 'text-[10px]',
+    logoPx: 22,
+    amountClass: 'text-[11px]',
     metaClass: 'text-[8px]',
     stackGap: 'gap-1',
     textGap: 'gap-0',
@@ -61,7 +68,7 @@ function sortByPayDateAsc(payments: ScheduledDividendPayment[]): ScheduledDivide
 }
 
 function historyTileRowClass(): string {
-  return 'dividend-payout-row flex shrink-0 items-stretch gap-1.5 overflow-x-auto overflow-y-hidden flex-nowrap list-none m-0 p-0 pb-0.5 h-[2.75rem] [&>li]:shrink-0 [&>li]:h-full [&>li]:w-[5.25rem]';
+  return 'dividend-payout-row flex shrink-0 items-stretch gap-2 overflow-x-auto overflow-y-hidden flex-nowrap list-none m-0 p-0 pb-0.5 h-[3.25rem] [&>li]:shrink-0 [&>li]:h-full [&>li]:w-[6.25rem]';
 }
 
 function DividendPayoutCard({
@@ -98,6 +105,8 @@ function DividendPayoutCard({
       ? 'group cursor-pointer hover:border-accent/25 hover:bg-accent/[0.06]'
       : '';
 
+  const tileBaseClass = `${MARKET_SUBCARD} dividend-payout-tile`;
+
   if (tileSize === 'compact') {
     return (
       <Tag
@@ -105,7 +114,7 @@ function DividendPayoutCard({
         onClick={onClick}
         title={title}
         aria-label={interactive ? (ariaLabel ?? `${name}, ${formatCurrency(amountEur, 'EUR')}`) : undefined}
-        className={`${MARKET_SUBCARD} flex h-full w-full min-h-0 min-w-0 flex-row items-center ${preset.stackGap} ${preset.pad} overflow-hidden text-left font-sans transition-colors ${interactiveClass} ${className}`}
+        className={`${tileBaseClass} flex h-full w-full min-h-0 min-w-0 flex-row items-center ${preset.stackGap} ${preset.pad} overflow-hidden text-left font-sans transition-colors ${interactiveClass} ${className}`}
       >
         <IssuerLogo ticker={ticker} name={name} size={preset.logoPx} />
         <div className="min-w-0 flex-1 flex flex-col justify-center gap-0 leading-none">
@@ -128,7 +137,7 @@ function DividendPayoutCard({
       onClick={onClick}
       title={title}
       aria-label={interactive ? (ariaLabel ?? `${name}, ${formatCurrency(amountEur, 'EUR')}`) : undefined}
-      className={`${MARKET_SUBCARD} flex h-full w-full min-h-0 min-w-0 flex-col items-center justify-center ${preset.stackGap} ${preset.pad} overflow-hidden text-center font-sans ${interactiveClass} ${className}`}
+      className={`${tileBaseClass} flex h-full w-full min-h-0 min-w-0 flex-col items-center justify-center ${preset.stackGap} ${preset.pad} overflow-hidden text-center font-sans ${interactiveClass} ${className}`}
     >
       {hoverLabel ? (
         <span
@@ -163,14 +172,22 @@ function MonthSectionHeader({
   monthKey,
   totalEur,
   totalClassName = 'text-accent',
+  received = false,
 }: {
   monthKey: string;
   totalEur: number;
   totalClassName?: string;
+  received?: boolean;
 }) {
   return (
-    <div className="flex items-end justify-between gap-2 px-0.5 pb-2 shrink-0">
-      <span className="micro-label mb-0">{formatMonthYearFi(monthKey)}</span>
+    <div
+      className={`flex items-end justify-between gap-2 px-0.5 shrink-0 ${
+        received ? 'border-b border-border/25 pb-1.5 mb-1.5' : 'pb-2'
+      }`}
+    >
+      <span className={`micro-label mb-0 ${received ? 'text-text-s/70' : ''}`}>
+        {formatMonthYearFi(monthKey)}
+      </span>
       <span className={`font-sans text-xs font-bold tabular-nums leading-none shrink-0 ${totalClassName}`}>
         {formatCurrency(totalEur, 'EUR')}
       </span>
@@ -182,16 +199,23 @@ function MonthPayoutRow({
   monthKey,
   totalEur,
   totalClassName,
+  received = false,
   children,
 }: {
   monthKey: string;
   totalEur: number;
   totalClassName?: string;
+  received?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <section className="min-w-0">
-      <MonthSectionHeader monthKey={monthKey} totalEur={totalEur} totalClassName={totalClassName} />
+      <MonthSectionHeader
+        monthKey={monthKey}
+        totalEur={totalEur}
+        totalClassName={totalClassName}
+        received={received}
+      />
       <ul className={historyTileRowClass()}>{children}</ul>
     </section>
   );
@@ -212,7 +236,11 @@ function UpcomingFeaturedGrid({
 
   if (!featured) return null;
 
-  const renderCard = (payment: ScheduledDividendPayment, tileSize: 'featured' | 'cluster') => (
+  const renderCard = (
+    payment: ScheduledDividendPayment,
+    tileSize: 'featured' | 'cluster',
+    extraClass = ''
+  ) => (
     <DividendPayoutCard
       name={payment.name}
       ticker={payment.ticker}
@@ -222,13 +250,25 @@ function UpcomingFeaturedGrid({
       onClick={() => onRedeem(payment)}
       actionHint="Click to redeem"
       hoverLabel="Redeem"
-      className={exitingId === payment.id ? '!bg-green/20 opacity-60' : ''}
+      className={`${exitingId === payment.id ? '!bg-green/20 opacity-60' : ''} ${extraClass}`.trim()}
     />
   );
 
+  if (cluster.length === 0) {
+    return (
+      <div className="flex flex-1 h-full w-full min-h-0 items-center justify-center px-2">
+        <div className="max-w-[11rem] w-full aspect-square min-h-[9rem]">
+          {renderCard(featured, 'featured', 'dividend-payout-tile-featured h-full')}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="dividend-upcoming-grid h-full w-full min-h-0 min-w-0">
-      <div className="dividend-upcoming-featured min-h-0 min-w-0">{renderCard(featured, 'featured')}</div>
+      <div className="dividend-upcoming-featured min-h-0 min-w-0">
+        {renderCard(featured, 'featured', 'dividend-payout-tile-featured h-full')}
+      </div>
       <ul className="dividend-upcoming-cluster list-none m-0 p-0 min-h-0 min-w-0">
         {cluster.map((payment) => (
           <li key={payment.id} className="min-h-0 min-w-0">
@@ -279,28 +319,25 @@ function UpcomingMonthsPanel({
 
   const activeGroup = groups[activeIndex];
 
-  const monthNavBtnClass =
-    'p-1 rounded-md shrink-0 transition-colors text-accent hover:text-accent hover:bg-accent/10 disabled:text-text-s disabled:opacity-30 disabled:pointer-events-none disabled:hover:bg-transparent';
-
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0">
       <div className="flex items-center justify-between gap-2 shrink-0 pb-1.5 px-0.5">
-        <div className="flex items-center gap-0.5 min-w-0">
+        <div className={DIVIDEND_MONTH_NAV_PILL}>
           <button
             type="button"
             onClick={() => setActiveIndex((i) => Math.max(0, i - 1))}
             disabled={activeIndex <= 0}
-            className={monthNavBtnClass}
+            className={DIVIDEND_MONTH_NAV_BTN}
             aria-label="Previous month"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span className="micro-label mb-0 truncate">{formatMonthYearFi(activeGroup.monthKey)}</span>
+          <span className={DIVIDEND_MONTH_NAV_LABEL}>{formatMonthYearFi(activeGroup.monthKey)}</span>
           <button
             type="button"
             onClick={() => setActiveIndex((i) => Math.min(groups.length - 1, i + 1))}
             disabled={activeIndex >= groups.length - 1}
-            className={monthNavBtnClass}
+            className={DIVIDEND_MONTH_NAV_BTN}
             aria-label="Next month"
           >
             <ChevronRight className="w-4 h-4" />
@@ -432,17 +469,28 @@ export function DividendPayoutCalendar({
         <button
           type="button"
           onClick={() => setHistoryOpen((o) => !o)}
-          className="flex w-full items-center justify-between gap-2 text-left min-w-0 px-0.5 shrink-0"
+          className={`flex w-full items-center justify-between gap-2 text-left min-w-0 px-2 py-1.5 -mx-0.5 shrink-0 rounded-lg transition-colors hover:bg-white/[0.04] ${
+            historyOpen ? 'bg-white/[0.03] border border-border/30' : 'border border-transparent'
+          }`}
         >
-          <span className="micro-label mb-0">Received ({redeemed.length})</span>
-          {historyOpen ? (
-            <ChevronUp className="w-3.5 h-3.5 text-text-s shrink-0" />
-          ) : (
-            <ChevronDown className="w-3.5 h-3.5 text-text-s shrink-0" />
-          )}
+          <span className="micro-label mb-0">
+            Received{' '}
+            {redeemed.length > 0 ? (
+              <span className="text-green/90">({redeemed.length})</span>
+            ) : (
+              <span className="text-text-s/50">(0)</span>
+            )}
+          </span>
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/40">
+            {historyOpen ? (
+              <ChevronUp className="w-3.5 h-3.5 text-text-s" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 text-text-s" />
+            )}
+          </span>
         </button>
         {historyOpen && (
-          <div className="mt-2 max-h-[7rem] overflow-y-auto overflow-x-hidden px-0.5">
+          <div className="dividend-received-scroll mt-2 max-h-[8.5rem] overflow-y-auto overflow-x-hidden px-0.5">
             {historyGroups.length === 0 ? (
               <p className="text-sm text-text-s/70 text-center py-3">Nothing redeemed yet</p>
             ) : (
@@ -453,6 +501,7 @@ export function DividendPayoutCalendar({
                     monthKey={group.monthKey}
                     totalEur={group.totalEur}
                     totalClassName="text-green"
+                    received
                   >
                     {group.payments.map((payment) => (
                       <li key={payment.id}>
@@ -465,6 +514,7 @@ export function DividendPayoutCalendar({
                           onClick={() => handleUndo(payment.id)}
                           ariaLabel={`Undo redeem for ${payment.name}`}
                           actionHint="Click to undo"
+                          className="dividend-payout-tile-received hover:border-green/30 hover:bg-green/[0.06]"
                         />
                       </li>
                     ))}

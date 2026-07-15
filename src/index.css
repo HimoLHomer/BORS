@@ -141,11 +141,51 @@
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
+.dividend-payout-row::-webkit-scrollbar {
+  height: 4px;
+}
+
+.dividend-payout-row::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dividend-received-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.dividend-received-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.dividend-received-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dividend-payout-tile {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.dividend-payout-tile-featured {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 4px 20px rgba(0, 0, 0, 0.12);
+}
+
+.dividend-payout-tile-received {
+  border-color: rgba(34, 197, 94, 0.2);
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.06) 0%, rgba(34, 197, 94, 0.02) 100%);
+}
+
 .dividend-upcoming-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0.375rem;
+  gap: 0.5rem;
 }
 
 .dividend-upcoming-featured {
@@ -159,7 +199,7 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 0.375rem;
+  gap: 0.5rem;
 }
 
 .error-banner {
