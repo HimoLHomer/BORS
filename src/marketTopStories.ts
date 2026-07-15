@@ -1,5 +1,7 @@
 /** Top Stories types and display helpers for Market index panels. */
 
+import { isLowQualityNewsArticle } from "./marketNewsRanking";
+
 function normalizeSymbol(symbol: string): string {
   return symbol.split(".")[0]?.toUpperCase() ?? symbol.toUpperCase();
 }
@@ -84,6 +86,9 @@ export function sanitizeTopStory(story: MarketTopStory): MarketTopStory | null {
 
   const source = cleanStoryField(story.source, "News") || "News";
   const url = normalizeStoryUrl(story.url);
+  if (isLowQualityNewsArticle({ title: headline, url, publisher: source }, headline)) {
+    return null;
+  }
   const references = (story.references ?? [])
     .map((ref) => {
       const title = cleanStoryField(ref.title, "Source") || "Source";

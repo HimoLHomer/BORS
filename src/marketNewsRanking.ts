@@ -382,7 +382,40 @@ export function filterArticlesByMaxAge(
 
 /** Reuters/Google RSS sometimes surface ticker quote pages as news items. */
 const QUOTE_PAGE_PHRASE_RE = /stock\s+price\s*(?:&|and)\s*latest\s+news/i;
-const TICKER_PK_HEADLINE_RE = /^[A-Z0-9][A-Z0-9.-]{0,12}\.PK(?:\s*-\s*(?:\|\s*)?)?\s*$/i;
+/** Standalone listing ticker (e.g. JCDX.MU, EMUS.PK, SAP.DE) — not a real headline. */
+const TICKER_ONLY_HEADLINE_RE =
+  /^[A-Z0-9][A-Z0-9-]{0,11}(?:\.[A-Z]{1,4})+(?:\s*[-–|]\s*)?$/i;
+/** Bare ticker with no sentence (e.g. AAPL, NVDA). */
+const BARE_TICKER_HEADLINE_RE = /^[A-Z]{1,5}(?:\s*[-–|]\s*)?$/i;
+/** Syndication spam: long comma-separated ticker tail or "Why … Are Trending". */
+const TICKER_TAIL_SPAM_RE =
+  /:\s*[A-Z]{1,5}(?:,\s*[A-Z]{1,5})+(?:\s+(?:stocks?|in focus|kept traders|on watch|are trending).*)?$/i;
+const TICKER_LIST_TRENDING_RE =
+  /:\s*why\s+(?:[A-Z]{1,5}(?:,\s*)?){2,}[A-Z]{1,5}\s+are\s+trending/i;
+
+const TICKER_TOKEN_STOPWORDS = new Set([
+  "S&P",
+  "US",
+  "UK",
+  "EU",
+  "GDP",
+  "CPI",
+  "PPI",
+  "ECB",
+  "FED",
+  "THE",
+  "AND",
+  "FOR",
+  "ARE",
+  "WHY",
+  "DOW",
+  "OMX",
+  "YTD",
+  "IPO",
+  "ETF",
+  "USD",
+  "EUR",
+]);
 
 function stripTrailingPublisherSegments(title: string): string {
   let t = title.trim();
@@ -400,13 +433,66 @@ export function isQuotePageNewsHeadline(title: string): boolean {
   if (QUOTE_PAGE_PHRASE_RE.test(raw)) return true;
 
   const stripped = stripTrailingPublisherSegments(raw);
-  if (TICKER_PK_HEADLINE_RE.test(stripped)) return true;
-  if (/^[A-Z0-9][A-Z0-9.-]{0,12}\.PK\s*-\s*$/i.test(stripped)) return true;
+  if (TICKER_ONLY_HEADLINE_RE.test(stripped)) return true;
+  if (BARE_TICKER_HEADLINE_RE.test(stripped)) return true;
   return false;
 }
 
+/** Quote-page URLs from Yahoo Finance and similar syndication. */
+export function isQuotePageNewsUrl(url: string | undefined): boolean {
+  if (!url?.trim()) return false;
+  try {
+    const parsed = new URL(url.trim());
+    const host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (host === "finance.yahoo.com" && path.includes("/quote")) return true;
+    if (host.endsWith("finance.yahoo.com") && path.includes("/quote")) return true;
+    if (/\/quote\/[a-z0-9.-]+/i.test(path)) return true;
+    if (path.includes("/stock-price")) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function countTickerLikeTokens(title: string): number {
+  const tokens = title.match(/\b[A-Z]{2,5}\b/g) ?? [];
+  return tokens.filter((token) => !TICKER_TOKEN_STOPWORDS.has(token)).length;
+}
+
+export function isTickerListSpamHeadline(title: string): boolean {
+  const raw = title.trim();
+  if (!raw) return false;
+  if (TICKER_TAIL_SPAM_RE.test(raw)) return true;
+  if (TICKER_LIST_TRENDING_RE.test(raw)) return true;
+
+  const stripped = stripTrailingPublisherSegments(raw);
+  const words = stripped.split(/\s+/).filter((w) => w.length > 0);
+  const meaningfulWords = words.filter((w) => !/^[A-Z]{1,5}$/.test(w) && w.length > 2);
+  const tickerTokens = countTickerLikeTokens(stripped);
+  return tickerTokens >= 4 && meaningfulWords.length < 6;
+}
+
+/** Combined quality gate for ingest, ranking, and display. */
+export function isLowQualityNewsArticle(
+  article: RawNewsArticle,
+  headlineOverride?: string
+): boolean {
+  const title = (headlineOverride ?? article.title).trim();
+  if (!title) return true;
+  if (isQuotePageNewsHeadline(title)) return true;
+  if (isQuotePageNewsUrl(article.url)) return true;
+  if (isTickerListSpamHeadline(title)) return true;
+  return false;
+}
+
+export function filterLowQualityNewsArticles(articles: RawNewsArticle[]): RawNewsArticle[] {
+  return articles.filter((article) => !isLowQualityNewsArticle(article));
+}
+
+/** @deprecated Use filterLowQualityNewsArticles */
 export function filterQuotePageNewsArticles(articles: RawNewsArticle[]): RawNewsArticle[] {
-  return articles.filter((article) => !isQuotePageNewsHeadline(article.title));
+  return filterLowQualityNewsArticles(articles);
 }
 
 export function filterArticlesForMarketDate(
@@ -427,7 +513,7 @@ export function filterFreshMarketArticles(
   maxAgeHours: number = NEWS_MAX_AGE_HOURS,
   nowMs: number = Date.now()
 ): RawNewsArticle[] {
-  return filterQuotePageNewsArticles(
+  return filterLowQualityNewsArticles(
     filterArticlesByMaxAge(
       filterArticlesForMarketDate(articles, marketDate),
       maxAgeHours,
@@ -591,6 +677,8 @@ export function scoreNewsArticle(
   const directional = ctx.changePercent >= 0 ? BULLISH_TERMS : BEARISH_TERMS;
   score += countKeywordHits(text, directional);
 
+  if (isTickerListSpamHeadline(article.title)) score -= 20;
+
   if (article.publishedAt != null && Number.isFinite(article.publishedAt)) {
     const ageHours = (Date.now() - article.publishedAt) / (1000 * 60 * 60);
     if (ageHours <= 6) score += 3;
@@ -607,9 +695,12 @@ function pickDiverseArticles(
 ): RawNewsArticle[] {
   const picked: RawNewsArticle[] = [];
   const usedPublishers = new Set<string>();
+  const hasTier2Plus = scored.some(({ article }) => sourceTier(article) >= 2);
 
   for (const candidate of scored) {
     if (picked.length >= limit) break;
+
+    if (hasTier2Plus && sourceTier(candidate.article) === 1) continue;
 
     const host = publisherHostname(candidate.article);
     if (host && usedPublishers.has(host)) continue;
@@ -675,7 +766,8 @@ export function rankNewsArticles(
   target = TOP_STORIES_TARGET,
   marketDate?: string
 ): RankedNewsArticle[] {
-  const primaryPool = ctx.variant === "fi" ? filterArticlesForFiMarket(articles) : articles;
+  const cleaned = filterLowQualityNewsArticles(articles);
+  const primaryPool = ctx.variant === "fi" ? filterArticlesForFiMarket(cleaned) : cleaned;
   const primaryDeduped = dedupeNewsArticles(primaryPool);
   const primaryScored = scoreAndSortArticles(primaryDeduped, ctx);
   const primaryPicked = pickDiverseArticles(primaryScored, target);
@@ -690,8 +782,8 @@ export function rankNewsArticles(
 
   const secondaryFresh =
     marketDate != null
-      ? filterFreshMarketArticles(articles, marketDate, NEWS_SECONDARY_MAX_AGE_HOURS)
-      : filterArticlesByMaxAge(articles, NEWS_SECONDARY_MAX_AGE_HOURS);
+      ? filterFreshMarketArticles(cleaned, marketDate, NEWS_SECONDARY_MAX_AGE_HOURS)
+      : filterArticlesByMaxAge(cleaned, NEWS_SECONDARY_MAX_AGE_HOURS);
 
   const secondarySource =
     ctx.variant === "fi"

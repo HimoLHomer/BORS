@@ -3,6 +3,7 @@ import type YahooFinance from "yahoo-finance2";
 import { todayIsoDateHelsinki } from "../src/formatDate";
 import {
   filterFreshMarketArticles,
+  isLowQualityNewsArticle,
   rankNewsArticles,
   type RawNewsArticle,
   type MarketNewsRankingContext,
@@ -242,10 +243,11 @@ async function fetchGoogleNewsRss(variant: MarketVariant): Promise<RawNewsArticl
   return articles;
 }
 
-function articleToStory(article: RawNewsArticle, secondary = false): MarketTopStory {
+function articleToStory(article: RawNewsArticle, secondary = false): MarketTopStory | null {
   const source = article.publisher?.trim() || publisherFromUrl(article.url) || "News";
   const url = article.url?.trim();
   const headline = cleanDisplayHeadline(article.title, source);
+  if (isLowQualityNewsArticle({ ...article, title: headline }, headline)) return null;
   return {
     headline,
     source,
@@ -269,7 +271,9 @@ export async function buildMarketNews(
   const todayArticles = filterFreshMarketArticles(articles, marketDate);
   const ranked = rankNewsArticles(todayArticles, ctx, undefined, marketDate);
   const stories = sanitizeTopStories(
-    ranked.map(({ article, secondary }) => articleToStory(article, secondary))
+    ranked
+      .map(({ article, secondary }) => articleToStory(article, secondary))
+      .filter((story): story is MarketTopStory => story != null)
   );
 
   return {

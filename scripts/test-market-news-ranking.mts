@@ -12,11 +12,15 @@ import {
   filterArticlesForFiMarketSecondary,
   filterArticlesForMarketDate,
   filterFreshMarketArticles,
+  filterLowQualityNewsArticles,
   filterQuotePageNewsArticles,
   headlineImpliesBeforeMarketDate,
   headlinesAreDuplicates,
   headlinesShareTopic,
+  isLowQualityNewsArticle,
   isQuotePageNewsHeadline,
+  isQuotePageNewsUrl,
+  isTickerListSpamHeadline,
   rankNewsArticles,
   scoreNewsArticle,
   type RawNewsArticle,
@@ -135,8 +139,8 @@ const publisherCapPool = [
 const publisherCapped = rankNewsArticles(publisherCapPool, baseCtx);
 assert.equal(publisherCapped.length, 3, "should return three stories");
 assert.ok(
-  publisherCapped.filter((r) => publisherHostname(r.article).includes("stocktwits")).length <= 1,
-  "at most one Stocktwits story in final list"
+  publisherCapped.filter((r) => publisherHostname(r.article).includes("stocktwits")).length === 0,
+  "tier-1 syndication should not fill primary slots when tier-2+ alternatives exist"
 );
 
 const reutersScore = scoreNewsArticle(
@@ -320,6 +324,18 @@ assert.ok(
   "ticker with trailing dash should be rejected"
 );
 assert.ok(
+  isQuotePageNewsHeadline("JCDX.MU"),
+  "ticker-only MU headline should be rejected"
+);
+assert.ok(
+  isQuotePageNewsHeadline("JCDX.MU - Reuters"),
+  "ticker-only MU headline with publisher suffix should be rejected"
+);
+assert.ok(
+  isQuotePageNewsHeadline("SAP.DE"),
+  "ticker-only DE headline should be rejected"
+);
+assert.ok(
   !isQuotePageNewsHeadline("S&P 500, Nasdaq rise after cooler-than-expected CPI report"),
   "real market headline should pass"
 );
@@ -351,6 +367,60 @@ const rankedWithoutQuotes = rankNewsArticles(
 assert.ok(
   rankedWithoutQuotes.every(({ article: a }) => !isQuotePageNewsHeadline(a.title)),
   "ranked stories should not include quote pages"
+);
+
+assert.ok(isQuotePageNewsHeadline("AAPL"), "bare ticker headline should be rejected");
+assert.ok(
+  isQuotePageNewsUrl("https://finance.yahoo.com/quote/JCDX.MU/"),
+  "Yahoo quote URL should be rejected"
+);
+assert.ok(
+  !isQuotePageNewsUrl("https://www.reuters.com/markets/stocks/inflation-2026-07-15/"),
+  "Reuters article URL should pass"
+);
+assert.ok(
+  isTickerListSpamHeadline(
+    "Dow, S&P 500, Nasdaq Futures Rise After Chip Stock Selloff: Why CBRS, PLTR, BLZE, MU, FDX Are Trending"
+  ),
+  "Stocktwits-style ticker list headline should be rejected"
+);
+assert.ok(
+  filterLowQualityNewsArticles([
+    article("JCDX.MU", { url: "https://www.reuters.com/markets/quote/JCDX.MU" }),
+    article("Stocks gain on drop in US inflation rate; ASML tops forecasts", {
+      url: "https://www.reuters.com/markets/stocks/inflation-2026-07-15/",
+    }),
+  ]).length === 1,
+  "low-quality filter should drop quote pages by title and URL"
+);
+
+const spamRanked = rankNewsArticles(
+  [
+    article(
+      "Dow, S&P 500, Nasdaq Futures Rise After Chip Stock Selloff: Why CBRS, PLTR, BLZE, MU, FDX Are Trending",
+      { publisher: "Stocktwits", url: "https://stocktwits.com/trending", publishedAt: todayMs }
+    ),
+    article("Stocks gain on drop in US inflation rate; ASML tops forecasts", {
+      publisher: "Reuters",
+      url: "https://www.reuters.com/markets/stocks/inflation-2026-07-15/",
+      publishedAt: todayMs,
+    }),
+    article("S&P 500 futures climb as traders parse latest inflation data", {
+      publisher: "Bloomberg",
+      url: "https://www.bloomberg.com/inflation",
+      publishedAt: todayMs,
+    }),
+  ],
+  baseCtx
+);
+assert.ok(
+  spamRanked[0]!.article.title.includes("inflation") ||
+    spamRanked[0]!.article.title.includes("S&P 500 futures"),
+  "legitimate macro headline should rank above ticker-list spam"
+);
+assert.ok(
+  spamRanked.every(({ article: a }) => !isTickerListSpamHeadline(a.title)),
+  "ranked list should exclude ticker-list spam"
 );
 
 console.log("OK: market news ranking tests passed.");
