@@ -31,7 +31,7 @@ import {
 } from './manualDividends';
 import { DividendPayoutCalendar } from './DividendPayoutCalendar';
 import { SummaryStatCard } from './SummaryStatCard';
-import { SkeletonBarChart, SkeletonCurrency, buildTableSkeletonRows } from './SkeletonPulse';
+import { SkeletonBarChart, SkeletonBlock, SkeletonCurrency, buildTableSkeletonRows } from './SkeletonPulse';
 import {
   dividendsHoldingsKey,
   readDividendsPayloadCache,
@@ -804,7 +804,13 @@ export function DividendsEngine({
               </p>
             ) : undefined
           }
-          emptyFooter={<p className="stat-subline text-text-s/60">No dividend income yet</p>}
+          emptyFooter={
+            dividendsFetchPending ? (
+              <SkeletonBlock className="h-3 w-44 mt-3" aria-busy aria-label="Loading" />
+            ) : (
+              <p className="stat-subline text-text-s/60">No dividend income yet</p>
+            )
+          }
         />
         <SummaryStatCard
           title="Average yield (blended)"
@@ -827,7 +833,11 @@ export function DividendsEngine({
             ) : undefined
           }
           emptyFooter={
-            <p className="stat-subline text-text-s/60">No dividend-paying capital base yet</p>
+            dividendsFetchPending ? (
+              <SkeletonBlock className="h-3 w-52 mt-3" aria-busy aria-label="Loading" />
+            ) : (
+              <p className="stat-subline text-text-s/60">No dividend-paying capital base yet</p>
+            )
           }
         />
       </div>

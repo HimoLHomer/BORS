@@ -31,7 +31,7 @@ function AllocationPieLegendList({
     <div className="allocation-pie-legend flex max-h-full min-h-0 w-max max-w-[13rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 overflow-y-auto overflow-x-hidden">
       <ul className="m-0 list-none space-y-0.5 p-0">
         {slices.map((slice, index) => {
-          const chrome = allocationPieSliceChrome(slice.key, index, slices.length);
+          const chrome = allocationPieSliceChrome(slice.key, index, slices.length, slice.label);
           const active = hoveredIndex === index;
           return (
             <li key={slice.key}>
@@ -192,7 +192,7 @@ export function AllocationPieChart({
             >
               {slices.length > 0 ? (
                 slices.map((row, index) => {
-                  const chrome = allocationPieSliceChrome(row.key, index, slices.length);
+                  const chrome = allocationPieSliceChrome(row.key, index, slices.length, row.label);
                   const active = hoveredIndex === index;
                   return (
                     <Cell

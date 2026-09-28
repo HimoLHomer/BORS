@@ -61,10 +61,14 @@ const quarterlyFromCalendar = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(quarterlyFromCalendar.length, 2, 'quarterly: only dates within current year');
+assert.equal(
+  quarterlyFromCalendar.length,
+  3,
+  'quarterly: remaining year dates plus unredeemed prior payout'
+);
 assert.deepEqual(
   quarterlyFromCalendar.map((p) => p.payDateYmd),
-  ['2026-07-15', '2026-10-15']
+  ['2026-04-15', '2026-07-15', '2026-10-15']
 );
 assert.ok(quarterlyFromCalendar.every((p) => p.payDateSource === 'yahoo'));
 
@@ -86,7 +90,7 @@ const monthlyProjected = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(monthlyProjected.length, 6, 'monthly: Jul–Dec from anchor');
+assert.equal(monthlyProjected.length, 7, 'monthly: Jun past-due plus Jul–Dec from anchor');
 assert.ok(monthlyProjected.every((p) => p.payDateSource === 'estimated'));
 
 const withRedeemed = buildProjectedPayments(
@@ -118,8 +122,11 @@ const withRedeemed = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(withRedeemed.length, 1, 'redeemed slot excluded');
-assert.equal(withRedeemed[0]?.payDateYmd, '2026-10-15');
+assert.deepEqual(
+  withRedeemed.map((p) => p.payDateYmd),
+  ['2026-04-15', '2026-10-15'],
+  'redeemed July slot excluded; unredeemed prior April kept'
+);
 
 const deduped = dedupeProjectedPaymentsByMonth([
   {
@@ -162,10 +169,10 @@ const manualRecurring = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(manualRecurring.length, 2, 'manual anchor: Jul and Oct through year-end');
+assert.equal(manualRecurring.length, 3, 'manual anchor: unredeemed April plus Jul and Oct');
 assert.deepEqual(
   manualRecurring.map((p) => p.payDateYmd),
-  ['2026-07-15', '2026-10-15']
+  ['2026-04-15', '2026-07-15', '2026-10-15']
 );
 assert.ok(manualRecurring.every((p) => p.payDateSource === 'manual'));
 
@@ -264,5 +271,30 @@ assert.deepEqual(
   ['Large', 'Medium A', 'Small'],
   'redeemed within month: highest amount first'
 );
+
+{
+  const pastDueKeep = buildProjectedPayments(
+    [
+      {
+        symbol: 'O.US',
+        name: 'Realty Income',
+        ticker: 'O',
+        estimatedAnnualIncomeEur: 100,
+        payoutFrequency: 'quarterly',
+        calendarPayoutDates: ['2026-07-15', '2026-10-15'],
+        payDateSource: 'yahoo',
+      },
+    ],
+    [],
+    [],
+    '2026-07',
+    0,
+    { todayYmd: '2026-07-16' }
+  );
+  assert.ok(
+    pastDueKeep.some((p) => p.payDateYmd === '2026-07-15'),
+    'unredeemed past-due payout stays on the calendar after the pay date'
+  );
+}
 
 console.log('OK: dividend calendar projection tests passed.');

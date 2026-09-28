@@ -20,15 +20,11 @@ export function AppHeader({
   feedDetail,
   onRetryFeed,
   feedRetrying,
-  onRefreshQuotes,
-  quotesRefreshing,
 }: {
   apiStatus: 'connecting' | 'connected' | 'error';
   feedDetail: string | null;
   onRetryFeed: () => void;
   feedRetrying: boolean;
-  onRefreshQuotes?: () => void;
-  quotesRefreshing?: boolean;
 }) {
   const [logoDraw, setLogoDraw] = useState(0);
 
@@ -54,10 +50,7 @@ export function AppHeader({
                   Yahoo Live
                 </span>
               ) : apiStatus === 'connecting' ? (
-                <span className="text-text-s flex items-center gap-1.5">
-                  <RefreshCcw className="w-3 h-3 animate-spin shrink-0" aria-hidden />
-                  Connecting…
-                </span>
+                <span className="text-text-s flex items-center gap-1.5">Connecting…</span>
               ) : (
                 <span
                   className="text-red flex items-center gap-1.5 max-w-[min(320px,35vw)] truncate cursor-help"
@@ -66,18 +59,6 @@ export function AppHeader({
                   Offline
                 </span>
               )}
-              {onRefreshQuotes ? (
-                <button
-                  type="button"
-                  onClick={onRefreshQuotes}
-                  disabled={quotesRefreshing}
-                  className="p-0.5 rounded text-text-s/45 hover:text-text-s/75 hover:bg-white/[0.04] transition-colors disabled:opacity-40"
-                  title="Refresh holding quotes"
-                  aria-label="Refresh holding quotes"
-                >
-                  <RefreshCcw className={`w-2.5 h-2.5 shrink-0 opacity-80 ${quotesRefreshing ? 'animate-spin' : ''}`} aria-hidden />
-                </button>
-              ) : null}
             </div>
             {apiStatus !== 'connected' && (
               <button

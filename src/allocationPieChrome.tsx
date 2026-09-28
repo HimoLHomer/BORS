@@ -33,9 +33,17 @@ const TIER_STOPS: Record<string, [string, string]> = {
   pieTier8: ['#dbeafe', '#93c5fd'],
   pieTier9: ['#f1f5f9', '#e2e8f0'],
   pieGradCash: ['#22c55e', '#14532d'],
+  pieGradBtc: ['#fbbf24', '#854d0e'],
 };
 
 const CASH_CHROME: PieSliceChrome = { gradientId: 'pieGradCash', stroke: '#4ade80' };
+const BTC_CHROME: PieSliceChrome = { gradientId: 'pieGradBtc', stroke: '#facc15' };
+
+function isBitcoinAllocationSlice(key: string, label?: string): boolean {
+  const fromLabel = (label ?? '').trim().toUpperCase();
+  if (fromLabel === 'BTC') return true;
+  return key.trim().toUpperCase() === 'BTC';
+}
 
 /**
  * @param sizeRank 0 = largest slice (darkest), higher = smaller (lighter).
@@ -44,9 +52,11 @@ const CASH_CHROME: PieSliceChrome = { gradientId: 'pieGradCash', stroke: '#4ade8
 export function allocationPieSliceChrome(
   key: string,
   sizeRank: number,
-  sliceCount: number
+  sliceCount: number,
+  label?: string
 ): PieSliceChrome {
   if (key === 'cash') return CASH_CHROME;
+  if (isBitcoinAllocationSlice(key, label)) return BTC_CHROME;
   if (sliceCount <= 1) return SIZE_TIERS[0];
   const t = sizeRank / (sliceCount - 1);
   const tierIdx = Math.round(t * (SIZE_TIERS.length - 1));

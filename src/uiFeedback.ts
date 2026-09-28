@@ -1,4 +1,4 @@
-/** Optional UI sounds — respects reduced motion; user mute in Options. */
+/** Optional UI sounds — respects reduced motion and legacy localStorage mute flags. */
 
 export const UI_SOUNDS_MUTE_KEY = 'bors_ui_sounds_muted';
 /** @deprecated use UI_SOUNDS_MUTE_KEY */

@@ -20,8 +20,6 @@ import {
   History,
   Copy,
   ChevronDown,
-  Volume2,
-  VolumeX,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Asset, PortfolioStats, HistoryPoint, PortfolioFlow } from './types';
@@ -73,13 +71,13 @@ import { View, dedupeHistoryByDate, normalizeCashAmountEur, parseCashInputEur, f
 import { HistoryPointModal } from './HistoryPointModal';
 import { AllocationPieChart } from './AllocationPieChart';
 import { useAnimatedNumber } from './useAnimatedNumber';
-import { isUiSoundsMuted, setUiSoundsMuted } from './uiFeedback';
 import { LoadingScreen, AppHeader } from './AppHeader';
 import { WhisperBanner } from './WhisperBanner';
 import {
   findNewPortfolioMilestone,
   formatMilestoneLabel,
   markPortfolioMilestoneShown,
+  markPortfolioMilestonesAtOrBelow,
 } from './portfolioMilestones';
 import { NavButton } from './AppNav';
 import { AddAssetModal } from './AddAssetModal';
@@ -110,12 +108,11 @@ export default function App() {
   const [feedDetail, setFeedDetail] = useState<string | null>(null);
   const [feedRetrying, setFeedRetrying] = useState(false);
   const [quotesRefreshEpoch, setQuotesRefreshEpoch] = useState(0);
-  const [quotesRefreshing, setQuotesRefreshing] = useState(false);
-  const [uiSoundsMuted, setUiSoundsMutedState] = useState(() => isUiSoundsMuted());
   const [milestoneBannerEur, setMilestoneBannerEur] = useState<number | null>(null);
   const portfolioMilestonePrevRef = useRef<number | null>(null);
   const apiStatusRef = useRef(apiStatus);
   apiStatusRef.current = apiStatus;
+  const feedCheckSeqRef = useRef(0);
   const [portfolioLoadError, setPortfolioLoadError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
   const [holdingsStaggerKey, setHoldingsStaggerKey] = useState(0);
@@ -143,6 +140,11 @@ export default function App() {
   }, [cashEur]);
 
   const checkYahooFeed = useCallback(async (opts?: { manual?: boolean }) => {
+    const seq = ++feedCheckSeqRef.current;
+    const apply = (fn: () => void) => {
+      if (seq === feedCheckSeqRef.current) fn();
+    };
+
     if (opts?.manual) {
       setFeedRetrying(true);
       setApiStatus('connecting');
@@ -155,41 +157,51 @@ export default function App() {
       try {
         data = JSON.parse(text) as typeof data;
       } catch {
-        setApiStatus('error');
-        setFeedDetail(
-          res.ok
-            ? 'Invalid JSON from /api/health/yahoo'
-            : `HTTP ${res.status} — use npm run dev so API routes are served (not vite alone).`
-        );
+        apply(() => {
+          setApiStatus('error');
+          setFeedDetail(
+            res.ok
+              ? 'Invalid JSON from /api/health/yahoo'
+              : `HTTP ${res.status} — use npm run dev so API routes are served (not vite alone).`
+          );
+        });
         return;
       }
       if (res.ok && data.status === 'connected') {
         const wasConnected = apiStatusRef.current === 'connected';
-        setApiStatus('connected');
-        setFeedDetail(null);
-        if (!wasConnected) {
-          dispatchFeedReconnected();
-          setQuotesRefreshEpoch((n) => n + 1);
-        }
+        apply(() => {
+          setApiStatus('connected');
+          setFeedDetail(null);
+          if (!wasConnected) {
+            dispatchFeedReconnected();
+            setQuotesRefreshEpoch((n) => n + 1);
+          }
+        });
       } else {
-        setApiStatus('error');
-        const hint =
-          data.error ||
-          data.message ||
-          (typeof data.status === 'string' ? data.status : null) ||
-          `HTTP ${res.status}`;
-        setFeedDetail(hint);
+        apply(() => {
+          setApiStatus('error');
+          const hint =
+            data.error ||
+            data.message ||
+            (typeof data.status === 'string' ? data.status : null) ||
+            `HTTP ${res.status}`;
+          setFeedDetail(hint);
+        });
       }
     } catch (e) {
-      setApiStatus('error');
       const msg = e instanceof Error ? e.message : String(e);
-      setFeedDetail(
-        /failed to fetch|networkerror|load failed/i.test(msg)
-          ? `${msg} — is the app server running (npm run dev on the same origin)?`
-          : msg
-      );
+      apply(() => {
+        setApiStatus('error');
+        setFeedDetail(
+          /failed to fetch|networkerror|load failed/i.test(msg)
+            ? `${msg} — is the app server running (npm run dev on the same origin)?`
+            : msg
+        );
+      });
     } finally {
-      if (opts?.manual) setFeedRetrying(false);
+      if (opts?.manual) {
+        apply(() => setFeedRetrying(false));
+      }
     }
   }, []);
 
@@ -199,6 +211,9 @@ export default function App() {
 
   useEffect(() => {
     void checkYahooFeed();
+  }, [checkYahooFeed]);
+
+  useEffect(() => {
     const ms = apiStatus === 'connected' ? 30_000 : 8_000;
     const interval = window.setInterval(() => void checkYahooFeed(), ms);
     return () => window.clearInterval(interval);
@@ -403,21 +418,6 @@ export default function App() {
     return () => clearInterval(dataInterval);
   }, [fetchQuotes, quotesRefreshEpoch]);
 
-  const refreshQuotes = useCallback(async () => {
-    setQuotesRefreshing(true);
-    try {
-      await fetchQuotes(false);
-    } finally {
-      setQuotesRefreshing(false);
-    }
-  }, [fetchQuotes]);
-
-  const toggleUiSoundsMuted = useCallback(() => {
-    const next = !uiSoundsMuted;
-    setUiSoundsMuted(next);
-    setUiSoundsMutedState(next);
-  }, [uiSoundsMuted]);
-
   const holdingsTableSkeletonRows = useMemo(
     () =>
       buildTableSkeletonRows(Math.min(Math.max(assets.length, 4), 10), [
@@ -558,19 +558,6 @@ export default function App() {
 
   statsTotalValueRef.current = stats.totalValue;
   const animatedTotalValue = useAnimatedNumber(stats.totalValue, { minDelta: 50 });
-
-  useEffect(() => {
-    if (loading) return;
-    const next = stats.totalValue;
-    const prev = portfolioMilestonePrevRef.current;
-    if (prev === null) {
-      portfolioMilestonePrevRef.current = next;
-      return;
-    }
-    const crossed = findNewPortfolioMilestone(prev, next);
-    portfolioMilestonePrevRef.current = next;
-    if (crossed != null) setMilestoneBannerEur(crossed);
-  }, [loading, stats.totalValue]);
 
   // Real daily change calculation based on history
   const yesterday = history.length > 1 ? history[history.length - 2] : null;
@@ -719,6 +706,28 @@ export default function App() {
     if (initialQuotesPending) return false;
     return portfolioFxReady(assets, quoteCurrencies, exchangeRates);
   }, [loading, assets, initialQuotesPending, quoteCurrencies, exchangeRates]);
+
+  useEffect(() => {
+    if (loading || !portfolioValuationReady) return;
+    const next = stats.totalValue;
+    const prev = portfolioMilestonePrevRef.current;
+    if (prev === null) {
+      const todayStr = todayIsoDateHelsinki();
+      const prior = [...history].reverse().find((p) => p.date !== todayStr);
+      const baseline = prior && Number.isFinite(prior.value) ? prior.value : next;
+      const crossed = findNewPortfolioMilestone(baseline, next);
+      portfolioMilestonePrevRef.current = next;
+      markPortfolioMilestonesAtOrBelow(next);
+      if (crossed != null) setMilestoneBannerEur(crossed);
+      return;
+    }
+    const crossed = findNewPortfolioMilestone(prev, next);
+    portfolioMilestonePrevRef.current = next;
+    if (crossed != null) {
+      markPortfolioMilestonesAtOrBelow(next);
+      setMilestoneBannerEur(crossed);
+    }
+  }, [loading, portfolioValuationReady, stats.totalValue, history]);
 
   /** Quotes/FX not ready, or Yahoo health still connecting — skeleton feed-dependent EUR fields. */
   const feedMetricsLoading = useMemo(() => {
@@ -998,9 +1007,7 @@ export default function App() {
         apiStatus={apiStatus}
         feedDetail={feedDetail}
         onRetryFeed={retryYahooFeed}
-        feedRetrying={feedRetrying || apiStatus === 'connecting'}
-        onRefreshQuotes={() => void refreshQuotes()}
-        quotesRefreshing={quotesRefreshing}
+        feedRetrying={feedRetrying}
       />
       {(portfolioLoadError) && (
         <div
@@ -1526,31 +1533,6 @@ export default function App() {
                   <p className="page-subtitle mb-6">Integrations, data & backup</p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
-                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
-                        UI sounds
-                      </h3>
-                      <p className="text-xs text-text-s/80 mb-4 leading-relaxed">
-                        Optional chimes when you add a holding or redeem a dividend. Respects reduced motion in your OS.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={toggleUiSoundsMuted}
-                        aria-pressed={uiSoundsMuted}
-                        className="btn-secondary w-full justify-center py-2.5 gap-2"
-                      >
-                        {uiSoundsMuted ? (
-                          <>
-                            <VolumeX className="w-4 h-4" /> Sounds muted
-                          </>
-                        ) : (
-                          <>
-                            <Volume2 className="w-4 h-4" /> Sounds on
-                          </>
-                        )}
-                      </button>
-                    </div>
-
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
                       <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
                         Portfolio data (SQLite)

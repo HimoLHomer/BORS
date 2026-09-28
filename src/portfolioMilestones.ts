@@ -36,6 +36,20 @@ export function markPortfolioMilestoneShown(thresholdEur: number): void {
   }
 }
 
+/** Persist every crossed threshold so a later dip-and-recross does not re-fire. */
+export function markPortfolioMilestonesAtOrBelow(totalEur: number): void {
+  if (!Number.isFinite(totalEur)) return;
+  try {
+    const shown = readShown();
+    for (const t of PORTFOLIO_MILESTONE_THRESHOLDS_EUR) {
+      if (t <= totalEur) shown.add(t);
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...shown].sort((a, b) => a - b)));
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Highest threshold newly crossed upward (prev → next) that has not been shown yet. */
 export function findNewPortfolioMilestone(prevEur: number, nextEur: number): number | null {
   if (!Number.isFinite(prevEur) || !Number.isFinite(nextEur) || nextEur <= prevEur) return null;

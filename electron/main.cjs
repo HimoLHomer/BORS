@@ -261,7 +261,7 @@ async function createWindow() {
     minHeight: 640,
     title: "BÖRS",
     icon,
-    show: true,
+    show: false,
     backgroundColor: "#09090b",
     webPreferences: {
       contextIsolation: true,
@@ -272,6 +272,7 @@ async function createWindow() {
   });
 
   mainWindow.once("ready-to-show", () => {
+    mainWindow.maximize();
     mainWindow.show();
     mainWindow.focus();
   });

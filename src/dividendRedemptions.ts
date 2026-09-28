@@ -223,6 +223,54 @@ function addMonthsUtc(d: Date, n: number): Date {
   return x;
 }
 
+function subtractMonthsFromYmd(ymd: string, frequency: DividendPayoutFrequency): string | null {
+  const d = parseYmdUtc(ymd);
+  if (!d) return null;
+  return formatYmdUtc(addMonthsUtc(d, -frequencyStepMonths(frequency)));
+}
+
+/** Most recent pay date before today that is still unredeemed (walk back from first upcoming). */
+export function latestUnredeemedPastDuePayDateYmd(
+  firstUpcomingYmd: string | null | undefined,
+  frequency: DividendPayoutFrequency,
+  todayYmd: string,
+  redeemedIds: Set<string>,
+  paymentIdPrefix: string
+): string | null {
+  if (!firstUpcomingYmd || !/^\d{4}-\d{2}-\d{2}$/.test(firstUpcomingYmd)) return null;
+  let cur = firstUpcomingYmd;
+  let guard = 0;
+  while (guard < 600) {
+    const prev = subtractMonthsFromYmd(cur, frequency);
+    if (!prev || prev >= todayYmd) break;
+    const id = `${paymentIdPrefix}${prev}`;
+    if (!redeemedIds.has(id)) return prev;
+    cur = prev;
+    guard += 1;
+  }
+  return null;
+}
+
+function mergeUpcomingWithUnredeemedPastDue(
+  upcomingDates: string[],
+  frequency: DividendPayoutFrequency,
+  todayYmd: string,
+  redeemedIds: Set<string>,
+  paymentIdPrefix: string
+): string[] {
+  const merged = new Set(upcomingDates);
+  const firstUpcoming = [...upcomingDates].sort()[0];
+  const pastDue = latestUnredeemedPastDuePayDateYmd(
+    firstUpcoming,
+    frequency,
+    todayYmd,
+    redeemedIds,
+    paymentIdPrefix
+  );
+  if (pastDue) merged.add(pastDue);
+  return [...merged].sort();
+}
+
 /** Project pay dates from anchor through untilYmd (inclusive), starting at first date >= fromYmd. */
 export function projectPayoutDatesFromAnchor(
   anchorYmd: string,
@@ -485,14 +533,19 @@ function apiPayDatesForRow(
   row: ApiDividendPaymentInput,
   frequency: DividendPayoutFrequency,
   todayYmd: string,
-  yearEndYmd: string
+  yearEndYmd: string,
+  redeemedIds: Set<string>
 ): string[] {
+  const idPrefix = `api-${row.symbol}-`;
   const fromCalendar = filterPayDatesInRange(row.calendarPayoutDates, todayYmd, yearEndYmd);
-  if (fromCalendar.length) return fromCalendar;
+  if (fromCalendar.length) {
+    return mergeUpcomingWithUnredeemedPastDue(fromCalendar, frequency, todayYmd, redeemedIds, idPrefix);
+  }
 
   const anchor = row.nextPayDateYmd ?? firstUpcomingPayDateYmd(row.calendarPayoutDates, todayYmd);
   if (anchor) {
-    return projectPayoutDatesFromAnchor(anchor, frequency, yearEndYmd, todayYmd);
+    const upcoming = projectPayoutDatesFromAnchor(anchor, frequency, yearEndYmd, todayYmd);
+    return mergeUpcomingWithUnredeemedPastDue(upcoming, frequency, todayYmd, redeemedIds, idPrefix);
   }
 
   return [];
@@ -516,7 +569,7 @@ export function buildProjectedPayments(
     const frequency = parseFrequency(row.payoutFrequency);
     const holdingKey = `api-${row.symbol}`;
     const payDateSource = mapApiPayDateSource(row.payDateSource);
-    const dates = apiPayDatesForRow(row, frequency, todayYmd, yearEndYmd);
+    const dates = apiPayDatesForRow(row, frequency, todayYmd, yearEndYmd, redeemedIds);
 
     if (dates.length) {
       pushScheduledDates(
@@ -553,10 +606,21 @@ export function buildProjectedPayments(
   for (const m of manualRows) {
     const frequency = m.payoutFrequency;
     const holdingKey = `manual-${m.id}`;
-    const anchorYmd = nextManualPayoutDateYmd(m.payoutAnchorDate, frequency);
+    const anchorYmd =
+      m.payoutAnchorDate && /^\d{4}-\d{2}-\d{2}$/.test(m.payoutAnchorDate.trim())
+        ? m.payoutAnchorDate.trim()
+        : null;
 
     if (anchorYmd) {
-      const dates = projectPayoutDatesFromAnchor(anchorYmd, frequency, yearEndYmd, todayYmd);
+      const idPrefix = `manual-${m.id}-`;
+      const upcoming = projectPayoutDatesFromAnchor(anchorYmd, frequency, yearEndYmd, todayYmd);
+      const dates = mergeUpcomingWithUnredeemedPastDue(
+        upcoming,
+        frequency,
+        todayYmd,
+        redeemedIds,
+        idPrefix
+      );
       pushScheduledDates(
         candidates,
         holdingKey,
