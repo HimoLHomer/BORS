@@ -197,11 +197,12 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
     setError(null);
     try {
       const opts: { flowAmountEur?: number } = {};
+      // Flow amounts must be EUR. Without a rate, send no hint and let the server convert.
       if (!editAsset) {
         const cost = newAsset.quantity * newAsset.averagePrice;
-        const fx = fxToEur(newAsset.currency, exchangeRates) || 1;
+        const fx = fxToEur(newAsset.currency, exchangeRates);
         const flowAmountEur = cost * fx;
-        if (flowAmountEur > 0) opts.flowAmountEur = flowAmountEur;
+        if (fx > 0 && flowAmountEur > 0) opts.flowAmountEur = flowAmountEur;
       } else {
         const addQty = parseShareInput(purchaseAddQty, 0);
         const addPrice = parseDecimalInput(purchaseAddPrice, 0);
@@ -215,12 +216,23 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
             addCurrency: purchaseAddCurrency,
             exchangeRates,
           });
-          if (!('error' in preview) && preview.totalCostBasisEur > 0) {
+          const holdingFx = fxToEur(formData.currency, exchangeRates);
+          if (!('error' in preview) && preview.totalCostBasisEur > 0 && holdingFx > 0) {
             const prevCostEur =
               parseShareInput(formData.quantity, 0) *
               parseDecimalInput(formData.averagePrice, 0) *
-              (fxToEur(formData.currency, exchangeRates) || 1);
+              holdingFx;
             const delta = preview.totalCostBasisEur - prevCostEur;
+            if (Math.abs(delta) >= 0.01) opts.flowAmountEur = delta;
+          }
+        } else {
+          // Direct edit of shares/average price: log the cost-basis change in EUR.
+          const prevFx = fxToEur(editAsset.currency, exchangeRates);
+          const nextFx = fxToEur(newAsset.currency, exchangeRates);
+          if (prevFx > 0 && nextFx > 0) {
+            const delta =
+              newAsset.quantity * newAsset.averagePrice * nextFx -
+              editAsset.quantity * editAsset.averagePrice * prevFx;
             if (Math.abs(delta) >= 0.01) opts.flowAmountEur = delta;
           }
         }

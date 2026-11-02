@@ -96,7 +96,10 @@ export function insertPortfolioFlow(
   };
 }
 
-/** Cost basis in EUR for a holding snapshot. */
+/**
+ * Cost basis in EUR for a holding snapshot. NaN when the holding's currency has no rate,
+ * so a native amount is never stored as if it were EUR.
+ */
 export function assetCostBasisEur(
   asset: Pick<Asset, "quantity" | "averagePrice" | "currency">,
   exchangeRates: Record<string, number> = { EUR: 1 }
@@ -106,7 +109,7 @@ export function assetCostBasisEur(
   if (!Number.isFinite(qty) || !Number.isFinite(price) || qty <= 0 || price < 0) return 0;
   const cost = qty * price;
   const fx = fxToEur(asset.currency || "EUR", { EUR: 1, ...exchangeRates });
-  return fx > 0 ? cost * fx : cost;
+  return fx > 0 ? cost * fx : NaN;
 }
 
 function parseOptionalFlowAmountEur(body: unknown): number | undefined {
@@ -127,6 +130,10 @@ export function recordAssetCreateFlow(
     hinted != null && hinted > 0
       ? hinted
       : assetCostBasisEur(asset, exchangeRates);
+  if (Number.isNaN(amount)) {
+    console.warn(`No EUR rate for ${asset.currency}; skipped flow for new ${asset.symbol}`);
+    return;
+  }
   if (!(amount > 0)) return;
   insertPortfolioFlow(db, {
     amountEur: amount,
@@ -147,7 +154,7 @@ export function recordAssetUpdateFlows(
   const prevCost = assetCostBasisEur(prev, exchangeRates);
   const nextCost = assetCostBasisEur(next, exchangeRates);
   const delta = nextCost - prevCost;
-  if (Math.abs(delta) < 0.01) return;
+  if (Number.isFinite(delta) && Math.abs(delta) < 0.01) return;
 
   if (hinted != null && Math.abs(hinted) >= 0.01) {
     insertPortfolioFlow(db, {
@@ -159,6 +166,10 @@ export function recordAssetUpdateFlows(
     return;
   }
 
+  if (!Number.isFinite(delta)) {
+    console.warn(`No EUR rate for ${next.currency}; skipped flow for ${next.symbol} edit`);
+    return;
+  }
   insertPortfolioFlow(db, {
     amountEur: delta,
     kind: delta > 0 ? "buy" : "sell",

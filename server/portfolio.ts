@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { registerDividendRoutes } from "./dividends";
 import { backfillPortfolioHistory } from "./portfolioHistoryBackfill";
 import { appRoot } from "./appRoot";
+import { getEurRates } from "./fxRates";
 import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
@@ -208,16 +209,17 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
     }
   });
 
-  app.post("/api/portfolio/assets", (req: Request, res: Response) => {
+  app.post("/api/portfolio/assets", async (req: Request, res: Response) => {
     try {
       const body = req.body as Asset & { flowAmountEur?: number };
       const id = body.id || crypto.randomUUID();
       const { id: _omit, flowAmountEur: _flow, ...rest } = body;
       const asset: Asset = { ...rest, id, updatedAt: rest.updatedAt || new Date().toISOString() };
       const payload = JSON.stringify(asset);
+      const rates = await getEurRates(yahooFinance, [asset.currency]);
       const d = getPortfolioDb();
       d.prepare("INSERT INTO assets (id, payload) VALUES (?, ?)").run(id, payload);
-      recordAssetCreateFlow(d, asset, body);
+      recordAssetCreateFlow(d, asset, body, rates);
       res.status(201).json(asset);
     } catch (e) {
       console.error(e);
@@ -225,7 +227,7 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
     }
   });
 
-  app.patch("/api/portfolio/assets/:id", (req: Request, res: Response) => {
+  app.patch("/api/portfolio/assets/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const d = getPortfolioDb();
@@ -235,14 +237,16 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       if (!row) return res.status(404).json({ error: "Asset not found" });
       const prev = JSON.parse(row.payload) as Asset;
       const patch = req.body as Partial<Asset> & { flowAmountEur?: number };
+      const { flowAmountEur: _flow, ...assetPatch } = patch;
       const next: Asset = {
         ...prev,
-        ...patch,
+        ...assetPatch,
         id,
         updatedAt: new Date().toISOString(),
       };
+      const rates = await getEurRates(yahooFinance, [prev.currency, next.currency]);
       d.prepare("UPDATE assets SET payload = ? WHERE id = ?").run(JSON.stringify(next), id);
-      recordAssetUpdateFlows(d, prev, next, patch);
+      recordAssetUpdateFlows(d, prev, next, patch, rates);
       res.json(next);
     } catch (e) {
       console.error(e);
