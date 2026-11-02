@@ -11,6 +11,7 @@ import {
   groupRedeemedByMonth,
   groupScheduledByMonth,
   projectPayoutDatesFromAnchor,
+  reconcileTrackingState,
   type RedeemedDividendPayment,
   type ScheduledDividendPayment,
 } from '../src/dividendRedemptions.ts';
@@ -63,12 +64,12 @@ const quarterlyFromCalendar = buildProjectedPayments(
 );
 assert.equal(
   quarterlyFromCalendar.length,
-  3,
-  'quarterly: remaining year dates plus unredeemed prior payout'
+  2,
+  'quarterly: remaining year dates; April is outside the grace window'
 );
 assert.deepEqual(
   quarterlyFromCalendar.map((p) => p.payDateYmd),
-  ['2026-04-15', '2026-07-15', '2026-10-15']
+  ['2026-07-15', '2026-10-15']
 );
 assert.ok(quarterlyFromCalendar.every((p) => p.payDateSource === 'yahoo'));
 
@@ -90,7 +91,7 @@ const monthlyProjected = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(monthlyProjected.length, 7, 'monthly: Jun past-due plus Jul–Dec from anchor');
+assert.equal(monthlyProjected.length, 6, 'monthly: Jul–Dec from anchor; no tracking start means no past payouts');
 assert.ok(monthlyProjected.every((p) => p.payDateSource === 'estimated'));
 
 const withRedeemed = buildProjectedPayments(
@@ -124,8 +125,8 @@ const withRedeemed = buildProjectedPayments(
 );
 assert.deepEqual(
   withRedeemed.map((p) => p.payDateYmd),
-  ['2026-04-15', '2026-10-15'],
-  'redeemed July slot excluded; unredeemed prior April kept'
+  ['2026-10-15'],
+  'redeemed July slot excluded; April is outside the grace window and does not resurface'
 );
 
 const deduped = dedupeProjectedPaymentsByMonth([
@@ -169,10 +170,10 @@ const manualRecurring = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(manualRecurring.length, 3, 'manual anchor: unredeemed April plus Jul and Oct');
+assert.equal(manualRecurring.length, 2, 'manual anchor: Jul and Oct; April is too old to show');
 assert.deepEqual(
   manualRecurring.map((p) => p.payDateYmd),
-  ['2026-04-15', '2026-07-15', '2026-10-15']
+  ['2026-07-15', '2026-10-15']
 );
 assert.ok(manualRecurring.every((p) => p.payDateSource === 'manual'));
 
@@ -289,12 +290,164 @@ assert.deepEqual(
     [],
     '2026-07',
     0,
-    { todayYmd: '2026-07-16' }
+    { todayYmd: '2026-07-16', trackingStarts: { 'api-O.US': '2026-07-01' } }
   );
   assert.ok(
     pastDueKeep.some((p) => p.payDateYmd === '2026-07-15'),
     'unredeemed past-due payout stays on the calendar after the pay date'
   );
+}
+
+{
+  const monthlyRow = {
+    symbol: 'M.US',
+    name: 'Monthly Co',
+    ticker: 'M',
+    estimatedAnnualIncomeEur: 120,
+    payoutFrequency: 'monthly' as const,
+    nextPayDateYmd: '2026-07-15',
+    payDateSource: 'estimated' as const,
+  };
+  const redeemedJune: RedeemedDividendPayment = {
+    id: 'api-M.US-2026-06-15',
+    redeemedAt: '2026-06-16T08:00:00.000Z',
+    monthKey: '2026-06',
+    name: 'Monthly Co',
+    ticker: 'M',
+    amountEur: 10,
+    source: 'api',
+    frequency: 'monthly',
+  };
+  const afterRedeem = buildProjectedPayments([monthlyRow], [], [redeemedJune], START_MONTH, 0, {
+    todayYmd: TODAY,
+  });
+  assert.equal(
+    afterRedeem[0]?.payDateYmd,
+    '2026-07-15',
+    'redeeming the past-due slot does not pull an older (May) payout onto the calendar'
+  );
+}
+
+{
+  const annualOld = buildProjectedPayments(
+    [
+      {
+        symbol: 'A.US',
+        name: 'Annual Co',
+        ticker: 'A',
+        estimatedAnnualIncomeEur: 50,
+        payoutFrequency: 'annual',
+        calendarPayoutDates: ['2026-11-20'],
+        payDateSource: 'yahoo',
+      },
+    ],
+    [],
+    [],
+    START_MONTH,
+    0,
+    { todayYmd: TODAY }
+  );
+  assert.deepEqual(
+    annualOld.map((p) => p.payDateYmd),
+    ['2026-11-20'],
+    'annual: last year\'s payout is not shown as past-due'
+  );
+}
+
+{
+  const quarterlyRow = {
+    symbol: 'O.US',
+    name: 'Realty Income',
+    ticker: 'O',
+    estimatedAnnualIncomeEur: 100,
+    payoutFrequency: 'quarterly' as const,
+    calendarPayoutDates: ['2026-10-15'],
+    payDateSource: 'yahoo' as const,
+  };
+
+  const neverDisappears = buildProjectedPayments([quarterlyRow], [], [], '2026-12', 0, {
+    todayYmd: '2026-12-20',
+    trackingStarts: { 'api-O.US': '2026-06-01' },
+  });
+  assert.deepEqual(
+    neverDisappears.map((p) => p.payDateYmd),
+    ['2026-07-15', '2026-10-15'],
+    'unredeemed payouts since the holding was added stay until redeemed, however old'
+  );
+
+  const addedAfterPayout = buildProjectedPayments([quarterlyRow], [], [], '2026-08', 0, {
+    todayYmd: '2026-08-01',
+    trackingStarts: { 'api-O.US': '2026-07-20' },
+  });
+  assert.deepEqual(
+    addedAfterPayout.map((p) => p.payDateYmd),
+    ['2026-10-15'],
+    'payouts from before the holding was added are never shown'
+  );
+
+  const redeemedJuly: RedeemedDividendPayment = {
+    id: 'api-O.US-2026-07-15',
+    redeemedAt: '2026-07-16T08:00:00.000Z',
+    monthKey: '2026-07',
+    name: 'Realty Income',
+    ticker: 'O',
+    amountEur: 25,
+    source: 'api',
+    frequency: 'quarterly',
+  };
+  const afterRedeem = buildProjectedPayments([quarterlyRow], [], [redeemedJuly], '2026-12', 0, {
+    todayYmd: '2026-12-20',
+    trackingStarts: { 'api-O.US': '2026-06-01' },
+  });
+  assert.deepEqual(
+    afterRedeem.map((p) => p.payDateYmd),
+    ['2026-10-15'],
+    'redeemed payouts leave; nothing older than the tracking start replaces them'
+  );
+
+  const manualSinceStart = buildProjectedPayments(
+    [],
+    [
+      {
+        id: 'manual-1',
+        name: 'Manual Fund',
+        ticker: 'MF',
+        annualIncomeEur: 48,
+        payoutFrequency: 'quarterly',
+        payoutAnchorDate: '2026-01-15',
+      },
+    ],
+    [],
+    START_MONTH,
+    0,
+    { todayYmd: TODAY, trackingStarts: { 'manual-manual-1': '2026-03-01' } }
+  );
+  assert.deepEqual(
+    manualSinceStart.map((p) => p.payDateYmd),
+    ['2026-04-15', '2026-07-15', '2026-10-15'],
+    'manual: payouts since tracking start (not January) are kept'
+  );
+}
+
+{
+  // First run: rows arrive in parts (manual first, API later the same day) — both get the lookback.
+  const manualOnly = reconcileTrackingState(null, ['manual-1'], '2026-11-02');
+  const both = reconcileTrackingState(manualOnly, ['manual-1', 'api-O.US'], '2026-11-02');
+  assert.deepEqual(
+    both.holdings,
+    { 'manual-1': '2026-10-02', 'api-O.US': '2026-10-02' },
+    'first run: 31-day lookback, including rows that arrive later that day'
+  );
+
+  const sameDay = reconcileTrackingState(both, ['manual-1', 'api-O.US'], '2026-11-02');
+  assert.equal(sameDay, both, 'no change returns the same object');
+
+  const added = reconcileTrackingState(both, ['manual-1', 'api-O.US', 'api-NEW.US'], '2026-11-20');
+  assert.equal(added.holdings['api-NEW.US'], '2026-11-20', 'newly added holding starts on the day it appears');
+  assert.equal(added.holdings['api-O.US'], '2026-10-02', 'existing start dates are kept, even after a long break');
+
+  const partial = reconcileTrackingState(added, ['manual-1'], '2026-11-21');
+  assert.equal(partial, added, 'holdings missing from a partial load are not dropped');
 }
 
 console.log('OK: dividend calendar projection tests passed.');

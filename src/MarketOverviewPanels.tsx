@@ -252,6 +252,8 @@ function useIndexNews(
     void fetchStoriesRef.current();
   }, [price]);
 
+  useEffect(() => onFeedReconnected(() => void fetchStories(true)), [fetchStories]);
+
   const canRefresh = price != null;
 
   const refreshStories = useCallback(() => {

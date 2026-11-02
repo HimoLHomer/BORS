@@ -4,7 +4,7 @@
  */
 import { ASSET_LOGO_OVERRIDES_STORAGE_KEY } from './assetLogo';
 import { DIVIDEND_INFO_LINKS_STORAGE_KEY } from './dividendInfoLinks';
-import { REDEEMED_DIVIDENDS_STORAGE_KEY } from './dividendRedemptions';
+import { DIVIDEND_TRACKING_START_STORAGE_KEY, REDEEMED_DIVIDENDS_STORAGE_KEY } from './dividendRedemptions';
 import { MANUAL_DIVIDENDS_STORAGE_KEY } from './manualDividends';
 import { FIRE_STORAGE_KEY } from './fireStorage';
 import { REDEEM_MUTE_STORAGE_KEY } from './redeemDividendFeedback';
@@ -13,6 +13,7 @@ export const CLIENT_SETTINGS_KEYS = [
   DIVIDEND_INFO_LINKS_STORAGE_KEY,
   ASSET_LOGO_OVERRIDES_STORAGE_KEY,
   REDEEMED_DIVIDENDS_STORAGE_KEY,
+  DIVIDEND_TRACKING_START_STORAGE_KEY,
   REDEEM_MUTE_STORAGE_KEY,
   FIRE_STORAGE_KEY,
 ] as const;

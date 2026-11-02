@@ -38,6 +38,8 @@ import {
   writeDividendsPayloadCache,
 } from './dividendsPayloadCache';
 import {
+  forgetTrackedHoldings,
+  manualHoldingKey,
   resolveApiNextPayDate,
   type ApiDividendPaymentInput,
   type ManualDividendPaymentInput,
@@ -610,6 +612,7 @@ export function DividendsEngine({
 
   const removeManual = (id: string) => {
     setManualRows((prev) => prev.filter((m) => m.id !== id));
+    forgetTrackedHoldings([manualHoldingKey(id)]);
   };
 
   const hasAnyDividendDisplay = dividendPayingRows.length > 0 || manualRows.length > 0;

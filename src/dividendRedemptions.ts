@@ -165,6 +165,11 @@ export function addMonthsToMonthKey(monthKey: string, months: number): string {
 export type BuildProjectedPaymentsOptions = {
   /** Fixed "today" for tests (Helsinki YYYY-MM-DD). */
   todayYmd?: string;
+  /**
+   * Per-holding start dates (keyed by apiHoldingKey/manualHoldingKey). Unredeemed payouts on or
+   * after the start stay on the calendar until redeemed; holdings without one start today.
+   */
+  trackingStarts?: DividendTrackingStarts;
 };
 
 export function endOfCurrentYearYmd(todayYmd: string = todayIsoDateHelsinki()): string {
@@ -229,46 +234,134 @@ function subtractMonthsFromYmd(ymd: string, frequency: DividendPayoutFrequency):
   return formatYmdUtc(addMonthsUtc(d, -frequencyStepMonths(frequency)));
 }
 
-/** Most recent pay date before today that is still unredeemed (walk back from first upcoming). */
-export function latestUnredeemedPastDuePayDateYmd(
+/**
+ * Pay dates before today but on/after the holding's tracking start, walking back from the
+ * first upcoming date. Payouts from before the holding was added never appear.
+ */
+export function pastPayDatesSinceTrackingStart(
   firstUpcomingYmd: string | null | undefined,
   frequency: DividendPayoutFrequency,
-  todayYmd: string,
-  redeemedIds: Set<string>,
-  paymentIdPrefix: string
-): string | null {
-  if (!firstUpcomingYmd || !/^\d{4}-\d{2}-\d{2}$/.test(firstUpcomingYmd)) return null;
+  trackingStartYmd: string,
+  todayYmd: string
+): string[] {
+  if (!firstUpcomingYmd || !/^\d{4}-\d{2}-\d{2}$/.test(firstUpcomingYmd)) return [];
+  const out: string[] = [];
   let cur = firstUpcomingYmd;
   let guard = 0;
   while (guard < 600) {
     const prev = subtractMonthsFromYmd(cur, frequency);
-    if (!prev || prev >= todayYmd) break;
-    const id = `${paymentIdPrefix}${prev}`;
-    if (!redeemedIds.has(id)) return prev;
+    if (!prev || prev < trackingStartYmd) break;
+    if (prev < todayYmd) out.push(prev);
     cur = prev;
     guard += 1;
   }
-  return null;
+  return out.sort();
 }
 
-function mergeUpcomingWithUnredeemedPastDue(
+function mergeUpcomingWithPastSinceTrackingStart(
   upcomingDates: string[],
   frequency: DividendPayoutFrequency,
-  todayYmd: string,
-  redeemedIds: Set<string>,
-  paymentIdPrefix: string
+  trackingStartYmd: string,
+  todayYmd: string
 ): string[] {
-  const merged = new Set(upcomingDates);
   const firstUpcoming = [...upcomingDates].sort()[0];
-  const pastDue = latestUnredeemedPastDuePayDateYmd(
-    firstUpcoming,
-    frequency,
-    todayYmd,
-    redeemedIds,
-    paymentIdPrefix
-  );
-  if (pastDue) merged.add(pastDue);
-  return [...merged].sort();
+  const past = pastPayDatesSinceTrackingStart(firstUpcoming, frequency, trackingStartYmd, todayYmd);
+  return [...new Set([...past, ...upcomingDates])].sort();
+}
+
+/* ------------------------------------------------------------------ */
+/* Tracking start: the day the calendar first saw each holding.        */
+/* ------------------------------------------------------------------ */
+
+export const DIVIDEND_TRACKING_START_STORAGE_KEY = 'bors_dividend_tracking_start';
+
+/** One-time leniency for holdings that existed when tracking was introduced. */
+export const TRACKING_MIGRATION_LOOKBACK_DAYS = 31;
+
+export const DIVIDEND_TRACKING_CHANGED_EVENT = 'bors-dividend-tracking-changed';
+
+/** Start date per holding key, as consumed by buildProjectedPayments. */
+export type DividendTrackingStarts = Record<string, string>;
+
+export type DividendTrackingState = {
+  /** Day tracking was first introduced; holdings first seen that day get the lookback. */
+  migratedOn: string;
+  holdings: DividendTrackingStarts;
+};
+
+export function apiHoldingKey(symbol: string): string {
+  return `api-${symbol}`;
+}
+
+export function manualHoldingKey(id: string): string {
+  return `manual-${id}`;
+}
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Returns null when nothing valid has been stored yet (first run). */
+export function loadTrackingState(): DividendTrackingState | null {
+  try {
+    const raw = localStorage.getItem(DIVIDEND_TRACKING_START_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const o = parsed as Record<string, unknown>;
+    if (typeof o.migratedOn !== 'string' || !YMD_RE.test(o.migratedOn)) return null;
+    if (!o.holdings || typeof o.holdings !== 'object' || Array.isArray(o.holdings)) return null;
+    const holdings: DividendTrackingStarts = {};
+    for (const [k, v] of Object.entries(o.holdings as Record<string, unknown>)) {
+      if (typeof v === 'string' && YMD_RE.test(v)) holdings[k] = v;
+    }
+    return { migratedOn: o.migratedOn, holdings };
+  } catch {
+    return null;
+  }
+}
+
+export function saveTrackingState(state: DividendTrackingState): void {
+  try {
+    localStorage.setItem(DIVIDEND_TRACKING_START_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Call when a holding is deleted, so re-adding it later starts fresh. */
+export function forgetTrackedHoldings(holdingKeys: string[]): void {
+  const state = loadTrackingState();
+  if (!state || !holdingKeys.some((k) => k in state.holdings)) return;
+  const holdings = { ...state.holdings };
+  for (const k of holdingKeys) delete holdings[k];
+  saveTrackingState({ ...state, holdings });
+  window.dispatchEvent(new Event(DIVIDEND_TRACKING_CHANGED_EVENT));
+}
+
+function subtractDaysFromYmd(ymd: string, days: number): string {
+  const d = parseYmdUtc(ymd);
+  if (!d) return ymd;
+  d.setUTCDate(d.getUTCDate() - days);
+  return formatYmdUtc(d);
+}
+
+/**
+ * Records today as the start for holdings seen for the first time. Holdings are never dropped
+ * here, since rows can arrive in parts; deleting a holding clears it via forgetTrackedHoldings.
+ * Returns the same object when nothing changed.
+ */
+export function reconcileTrackingState(
+  stored: DividendTrackingState | null,
+  holdingKeys: string[],
+  todayYmd: string
+): DividendTrackingState {
+  const prev: DividendTrackingState = stored ?? { migratedOn: todayYmd, holdings: {} };
+  const newStart =
+    prev.migratedOn === todayYmd ? subtractDaysFromYmd(todayYmd, TRACKING_MIGRATION_LOOKBACK_DAYS) : todayYmd;
+  const missing = [...new Set(holdingKeys)].filter((k) => !(k in prev.holdings));
+  if (missing.length === 0 && stored != null) return prev;
+  const holdings = { ...prev.holdings };
+  for (const key of missing) holdings[key] = newStart;
+  return { migratedOn: prev.migratedOn, holdings };
 }
 
 /** Project pay dates from anchor through untilYmd (inclusive), starting at first date >= fromYmd. */
@@ -534,21 +627,22 @@ function apiPayDatesForRow(
   frequency: DividendPayoutFrequency,
   todayYmd: string,
   yearEndYmd: string,
-  redeemedIds: Set<string>
+  trackingStartYmd: string
 ): string[] {
-  const idPrefix = `api-${row.symbol}-`;
-  const fromCalendar = filterPayDatesInRange(row.calendarPayoutDates, todayYmd, yearEndYmd);
-  if (fromCalendar.length) {
-    return mergeUpcomingWithUnredeemedPastDue(fromCalendar, frequency, todayYmd, redeemedIds, idPrefix);
-  }
+  const fromCalendar = filterPayDatesInRange(row.calendarPayoutDates, trackingStartYmd, yearEndYmd);
+  const hasUpcomingInCalendar = fromCalendar.some((d) => d >= todayYmd);
 
-  const anchor = row.nextPayDateYmd ?? firstUpcomingPayDateYmd(row.calendarPayoutDates, todayYmd);
-  if (anchor) {
-    const upcoming = projectPayoutDatesFromAnchor(anchor, frequency, yearEndYmd, todayYmd);
-    return mergeUpcomingWithUnredeemedPastDue(upcoming, frequency, todayYmd, redeemedIds, idPrefix);
+  let known = fromCalendar;
+  if (!hasUpcomingInCalendar) {
+    const anchor = row.nextPayDateYmd ?? firstUpcomingPayDateYmd(row.calendarPayoutDates, todayYmd);
+    if (anchor) {
+      known = [...new Set([...known, ...projectPayoutDatesFromAnchor(anchor, frequency, yearEndYmd, todayYmd)])];
+    }
   }
+  if (!known.length) return [];
 
-  return [];
+  // Fill in past slots the server schedule no longer lists, back to the tracking start.
+  return mergeUpcomingWithPastSinceTrackingStart(known, frequency, trackingStartYmd, todayYmd);
 }
 
 export function buildProjectedPayments(
@@ -565,11 +659,16 @@ export function buildProjectedPayments(
   const redeemedIds = new Set(redeemed.map((r) => r.id));
   const candidates: PaymentCandidate[] = [];
 
+  const trackingStartFor = (holdingKey: string): string => {
+    const start = options?.trackingStarts?.[holdingKey];
+    return start && start < todayYmd ? start : todayYmd;
+  };
+
   for (const row of apiRows) {
     const frequency = parseFrequency(row.payoutFrequency);
-    const holdingKey = `api-${row.symbol}`;
+    const holdingKey = apiHoldingKey(row.symbol);
     const payDateSource = mapApiPayDateSource(row.payDateSource);
-    const dates = apiPayDatesForRow(row, frequency, todayYmd, yearEndYmd, redeemedIds);
+    const dates = apiPayDatesForRow(row, frequency, todayYmd, yearEndYmd, trackingStartFor(holdingKey));
 
     if (dates.length) {
       pushScheduledDates(
@@ -605,22 +704,14 @@ export function buildProjectedPayments(
 
   for (const m of manualRows) {
     const frequency = m.payoutFrequency;
-    const holdingKey = `manual-${m.id}`;
+    const holdingKey = manualHoldingKey(m.id);
     const anchorYmd =
       m.payoutAnchorDate && /^\d{4}-\d{2}-\d{2}$/.test(m.payoutAnchorDate.trim())
         ? m.payoutAnchorDate.trim()
         : null;
 
     if (anchorYmd) {
-      const idPrefix = `manual-${m.id}-`;
-      const upcoming = projectPayoutDatesFromAnchor(anchorYmd, frequency, yearEndYmd, todayYmd);
-      const dates = mergeUpcomingWithUnredeemedPastDue(
-        upcoming,
-        frequency,
-        todayYmd,
-        redeemedIds,
-        idPrefix
-      );
+      const dates = projectPayoutDatesFromAnchor(anchorYmd, frequency, yearEndYmd, trackingStartFor(holdingKey));
       pushScheduledDates(
         candidates,
         holdingKey,

@@ -80,6 +80,7 @@ import {
   markPortfolioMilestonesAtOrBelow,
 } from './portfolioMilestones';
 import { NavButton } from './AppNav';
+import { apiHoldingKey, forgetTrackedHoldings } from './dividendRedemptions';
 import { AddAssetModal } from './AddAssetModal';
 
 
@@ -444,6 +445,10 @@ export default function App() {
       const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Delete failed');
       const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
+      const removedSymbol = assets.find((a) => a.id === id)?.symbol?.trim();
+      if (removedSymbol && !list.some((a) => a.symbol?.trim() === removedSymbol)) {
+        forgetTrackedHoldings([apiHoldingKey(removedSymbol)]);
+      }
       setAssets(list);
       await reloadFlows();
     } catch (err) {

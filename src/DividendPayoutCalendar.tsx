@@ -9,15 +9,22 @@ import {
   type ManualDividendPaymentInput,
   type RedeemedDividendPayment,
   type ScheduledDividendPayment,
+  apiHoldingKey,
   buildProjectedPayments,
   groupRedeemedByMonth,
   groupScheduledByMonth,
   loadRedeemed,
+  loadTrackingState,
+  manualHoldingKey,
+  reconcileTrackingState,
   redeemPayment,
   saveRedeemed,
+  saveTrackingState,
   unredeemPayment,
+  DIVIDEND_TRACKING_CHANGED_EVENT,
   REDEEMED_DIVIDENDS_CHANGED_EVENT,
 } from './dividendRedemptions';
+import { todayIsoDateHelsinki } from './formatDate';
 import { formatRedeemAnnouncement, playRedeemChime } from './redeemDividendFeedback';
 import { SkeletonDividendCalendar } from './SkeletonPulse';
 import { loadFireInputs, FIRE_INPUTS_CHANGED_EVENT } from './fireStorage';
@@ -392,9 +399,36 @@ export function DividendPayoutCalendar({
     return () => window.removeEventListener(FIRE_INPUTS_CHANGED_EVENT, syncTax);
   }, []);
 
+  const [trackingState, setTrackingState] = useState(() => loadTrackingState());
+
+  useEffect(() => {
+    const sync = () => setTrackingState(loadTrackingState());
+    window.addEventListener('bors-client-settings-applied', sync);
+    window.addEventListener(DIVIDEND_TRACKING_CHANGED_EVENT, sync);
+    return () => {
+      window.removeEventListener('bors-client-settings-applied', sync);
+      window.removeEventListener(DIVIDEND_TRACKING_CHANGED_EVENT, sync);
+    };
+  }, []);
+
+  // Record the day each holding first appears; payouts before that never reach the calendar.
+  useEffect(() => {
+    if (loading) return;
+    const keys = [...apiRows.map((r) => apiHoldingKey(r.symbol)), ...manualRows.map((m) => manualHoldingKey(m.id))];
+    if (keys.length === 0) return;
+    const next = reconcileTrackingState(trackingState, keys, todayIsoDateHelsinki());
+    if (next !== trackingState) {
+      saveTrackingState(next);
+      setTrackingState(next);
+    }
+  }, [apiRows, manualRows, loading, trackingState]);
+
   const projected = useMemo(
-    () => buildProjectedPayments(apiRows, manualRows, redeemed, undefined, dividendTaxRatePercent),
-    [apiRows, manualRows, redeemed, dividendTaxRatePercent]
+    () =>
+      buildProjectedPayments(apiRows, manualRows, redeemed, undefined, dividendTaxRatePercent, {
+        trackingStarts: trackingState?.holdings,
+      }),
+    [apiRows, manualRows, redeemed, dividendTaxRatePercent, trackingState]
   );
 
   const upcomingGroups = useMemo(() => groupScheduledByMonth(projected, false), [projected]);
