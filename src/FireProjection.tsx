@@ -14,6 +14,7 @@ import {
   type FireExpenseLine,
 } from './fireProjectionEngine';
 import {
+  currentMonthKey,
   formatMonthDisplay,
   isMonthlySavingComplete,
   loadFireInputs,
@@ -37,6 +38,20 @@ const INLINE_INPUT =
   'bg-bg/50 border border-border rounded-md px-2 py-1.5 text-xs font-sans focus:outline-none focus:border-accent/40';
 const ENTRY_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_5.5rem_1.75rem] gap-2 items-center';
 const ENTRY_GROUP = 'rounded-lg border border-border/40 bg-bg/25 px-3 py-2.5';
+
+/**
+ * Month for a new savings row: the current month, or the most recent earlier month that has no
+ * entry yet (so repeated adds fill in gaps instead of creating blank or duplicate months).
+ */
+function nextUnloggedMonth(rows: FireMonthlySaving[]): string {
+  const logged = new Set(rows.map((r) => r.month));
+  let key = currentMonthKey();
+  for (let i = 0; i < 36 && logged.has(key); i++) {
+    const [y, m] = key.split('-').map(Number);
+    key = m === 1 ? `${y! - 1}-12` : `${y}-${String(m! - 1).padStart(2, '0')}`;
+  }
+  return logged.has(key) ? '' : key;
+}
 
 function FireNumInput({
   label,
@@ -107,10 +122,12 @@ function MonthYearInput({
   value,
   onChange,
   className = '',
+  ariaLabel,
 }: {
   value: string;
   onChange: (monthKey: string) => void;
   className?: string;
+  ariaLabel?: string;
 }) {
   const [draft, setDraft] = useState(() => formatMonthDisplay(value));
   const editingRef = useRef(false);
@@ -126,6 +143,7 @@ function MonthYearInput({
       type="text"
       inputMode="numeric"
       placeholder="Jan 2026"
+      aria-label={ariaLabel}
       className={`${INLINE_INPUT} text-text-p ${className || 'w-[7.25rem]'}`}
       value={draft}
       onFocus={() => {
@@ -150,10 +168,12 @@ function ExpenseAmountInput({
   value,
   onChange,
   className = '',
+  ariaLabel,
 }: {
   value: number;
   onChange: (n: number) => void;
   className?: string;
+  ariaLabel?: string;
 }) {
   const { inputProps } = useFiDecimalDraft(value, onChange, { fractionDigits: 2, min: 0 });
 
@@ -166,6 +186,7 @@ function ExpenseAmountInput({
       <input
         type="text"
         inputMode="decimal"
+        aria-label={ariaLabel}
         className={`${INLINE_INPUT} w-full text-right tabular-nums text-text-p`}
         {...inputProps}
       />
@@ -332,7 +353,7 @@ export function FireProjection({
     setStored((s) => ({
       ...s,
       monthlySavings: [
-        { id: `save-${Date.now()}`, month: '', savedEur: 0 },
+        { id: `save-${Date.now()}`, month: nextUnloggedMonth(s.monthlySavings), savedEur: 0 },
         ...s.monthlySavings,
       ],
     }));
@@ -416,7 +437,11 @@ export function FireProjection({
           ) : null}
 
           <div className="pt-3 border-t border-border/40">
-            {fiRow ? (
+            {monthlyTotal <= 0 ? (
+              <p className="text-[11px] text-text-s/60 uppercase tracking-widest leading-relaxed">
+                Add your monthly expenses to estimate time to FIRE
+              </p>
+            ) : fiRow ? (
               <p className="text-[11px] text-green font-bold uppercase tracking-widest">
                 Estimated time to FIRE:{' '}
                 {fiYearIndex === 0
@@ -516,10 +541,12 @@ export function FireProjection({
                         type="text"
                         className={`w-full min-w-0 ${INLINE_INPUT} text-text-p`}
                         value={e.label}
+                        aria-label="Expense name"
                         onChange={(ev) => updateExpense(e.id, { label: ev.target.value })}
                       />
                       <ExpenseAmountInput
                         value={e.monthlyEur}
+                        ariaLabel={`${e.label || 'Expense'} per month (EUR)`}
                         onChange={(n) => updateExpense(e.id, { monthlyEur: n })}
                         className="w-full"
                       />
@@ -579,11 +606,13 @@ export function FireProjection({
                       >
                         <MonthYearInput
                           value={row.month}
+                          ariaLabel="Month"
                           onChange={(month) => updateSaving(row.id, { month })}
                           className="w-full"
                         />
                         <ExpenseAmountInput
                           value={row.savedEur}
+                          ariaLabel="Saved that month (EUR)"
                           onChange={(n) => updateSaving(row.id, { savedEur: n })}
                         />
                         <button
@@ -640,11 +669,13 @@ export function FireProjection({
                       >
                         <MonthYearInput
                           value={row.month}
+                          ariaLabel="Month"
                           onChange={(month) => updateSaving(row.id, { month })}
                           className="w-full"
                         />
                         <ExpenseAmountInput
                           value={row.savedEur}
+                          ariaLabel="Saved that month (EUR)"
                           onChange={(n) => updateSaving(row.id, { savedEur: n })}
                         />
                         <button
@@ -669,7 +700,7 @@ export function FireProjection({
       <div className="panel">
         <h3 className="card-title mb-2">FIRE projection</h3>
         <DataListTable
-        highlightWhen={(i) => i === fiYearIndex}
+        highlightWhen={(i) => monthlyTotal > 0 && i === fiYearIndex}
         minWidth={720}
         columns={[
           { key: 'age', label: 'Age' },

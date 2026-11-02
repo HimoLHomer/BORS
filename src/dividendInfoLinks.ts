@@ -14,7 +14,8 @@ export function loadDividendInfoLinks(): Record<string, string> {
     if (!parsed || typeof parsed !== 'object') return {};
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof k === 'string' && typeof v === 'string' && v.trim()) {
+      // Stored links can come from an imported backup: keep web links only.
+      if (typeof k === 'string' && typeof v === 'string' && /^https?:\/\//i.test(v.trim())) {
         out[k.trim().toUpperCase()] = v.trim();
       }
     }
@@ -46,8 +47,15 @@ export function dividendInfoLinkKeyForManual(
 export function normalizeDividendInfoUrl(raw: string): string | null {
   const t = raw.trim();
   if (!t) return null;
-  if (/^https?:\/\//i.test(t)) return t;
-  return `https://${t}`;
+  const url = /^https?:\/\//i.test(t) ? t : `https://${t}`;
+  // Only real web addresses: a host with a dot and no spaces ("not a url" is rejected).
+  try {
+    const { hostname } = new URL(url);
+    if (!hostname.includes('.') || /\s/.test(t)) return null;
+  } catch {
+    return null;
+  }
+  return url;
 }
 
 export function dividendInfoLinkLabel(url: string): string {

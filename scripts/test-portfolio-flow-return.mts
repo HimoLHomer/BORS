@@ -159,6 +159,20 @@ assert.ok(
   "5D gain should match first history point vs live total"
 );
 
+// Buys on the first saved day are already in that day's total: not money put in during the range.
+{
+  const hist = [
+    { date: "2026-09-20", value: 7_000 },
+    { date: "2026-10-30", value: 7_200 },
+  ];
+  const flows = [
+    { date: "2026-09-20", amountEur: 5_000, assetSymbol: "X", kind: "buy" as const },
+    { date: "2026-10-15", amountEur: 100, kind: "cash" as const },
+  ];
+  const g = computePortfolioRangeReturnFromHistory(hist, flows, 7_400, "1Y", "2026-11-02");
+  assert.equal(g.gainEur, 7_400 - 7_000 - 100, "first-day buy excluded, later deposit counted");
+}
+
 // Today gain: shares bought today only count their move since purchase.
 {
   const today = "2026-11-02";

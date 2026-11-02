@@ -623,6 +623,7 @@ export function DividendsEngine({
   };
 
   const removeManual = (id: string) => {
+    if (!window.confirm('Remove this dividend estimate?')) return;
     setManualRows((prev) => prev.filter((m) => m.id !== id));
     forgetTrackedHoldings([manualHoldingKey(id)]);
   };

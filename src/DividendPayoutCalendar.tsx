@@ -416,12 +416,12 @@ export function DividendPayoutCalendar({
     if (loading) return;
     const keys = [...apiRows.map((r) => apiHoldingKey(r.symbol)), ...manualRows.map((m) => manualHoldingKey(m.id))];
     if (keys.length === 0) return;
-    const next = reconcileTrackingState(trackingState, keys, todayIsoDateHelsinki());
+    const next = reconcileTrackingState(trackingState, keys, todayIsoDateHelsinki(), redeemed.length > 0);
     if (next !== trackingState) {
       saveTrackingState(next);
       setTrackingState(next);
     }
-  }, [apiRows, manualRows, loading, trackingState]);
+  }, [apiRows, manualRows, loading, trackingState, redeemed.length]);
 
   const projected = useMemo(
     () =>

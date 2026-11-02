@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useEscapeToClose } from './useEscapeToClose';
 import { X } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { HistoryPoint } from './types';
@@ -17,6 +18,7 @@ export const HistoryPointModal = ({
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) => {
+  useEscapeToClose(onClose);
   const [dateStr, setDateStr] = useState(
     modal.type === 'edit' ? modal.point.date : todayIsoDateHelsinki()
   );

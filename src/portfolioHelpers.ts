@@ -33,7 +33,10 @@ export function normalizeCashAmountEur(raw: unknown): number | null {
 /** Parses the cash text field (comma or dot decimals). */
 export function parseCashInputEur(raw: string): number | null {
   if (raw.trim() === '') return null;
-  const n = parseDecimalInput(raw, NaN);
+  // Allow a pasted "€ 1 234,50"; reject anything else that isn't a number ("12abc").
+  const cleaned = raw.replace(/[€\s ]/g, '');
+  if (!/^\d[\d.,]*$/.test(cleaned)) return null;
+  const n = parseDecimalInput(cleaned, NaN);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
 }

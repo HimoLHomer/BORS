@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useEscapeToClose } from './useEscapeToClose';
 import { X, Search, RefreshCcw, Zap, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Asset } from './types';
@@ -86,6 +87,29 @@ function AssetSearchResultRow({
   );
 }
 
+/** Currencies offered for holdings and purchases (Yahoo quotes them all against EUR). */
+const HOLDING_CURRENCIES: { code: string; label: string }[] = [
+  { code: 'EUR', label: 'EUR (€)' },
+  { code: 'USD', label: 'USD ($)' },
+  { code: 'GBP', label: 'GBP (£)' },
+  { code: 'SEK', label: 'SEK (kr)' },
+  { code: 'NOK', label: 'NOK (kr)' },
+  { code: 'DKK', label: 'DKK (kr)' },
+  { code: 'CHF', label: 'CHF (Fr)' },
+  { code: 'CAD', label: 'CAD ($)' },
+  { code: 'AUD', label: 'AUD ($)' },
+  { code: 'JPY', label: 'JPY (¥)' },
+  { code: 'HKD', label: 'HKD ($)' },
+  { code: 'PLN', label: 'PLN (zł)' },
+];
+
+/** The standard list, plus the current value if it is something else, so the form never shows a wrong currency. */
+function currencyOptionsWith(current: string | undefined): { code: string; label: string }[] {
+  const code = (current || '').toUpperCase();
+  if (!code || HOLDING_CURRENCIES.some((c) => c.code === code)) return HOLDING_CURRENCIES;
+  return [...HOLDING_CURRENCIES, { code, label: code }];
+}
+
 export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
   onClose: () => void, 
   onPersist: (
@@ -96,6 +120,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
   editAsset?: Asset,
   exchangeRates: Record<string, number>,
 }) => {
+  useEscapeToClose(onClose);
   const [formData, setFormData] = useState({
     symbol: editAsset?.symbol || '',
     displaySymbol: editAsset?.displaySymbol || '',
@@ -424,9 +449,11 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                 value={formData.currency}
                 onChange={e => setFormData({ ...formData, currency: e.target.value })}
               >
-                <option value="EUR">EUR (€)</option>
-                <option value="USD">USD ($)</option>
-                <option value="GBP">GBP (£)</option>
+                {currencyOptionsWith(formData.currency).map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
@@ -510,9 +537,11 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                         value={purchaseAddCurrency}
                         onChange={(e) => setPurchaseAddCurrency(e.target.value)}
                       >
-                        <option value="EUR">EUR (€)</option>
-                        <option value="USD">USD ($)</option>
-                        <option value="GBP">GBP (£)</option>
+                        {currencyOptionsWith(purchaseAddCurrency).map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.label}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -582,9 +611,12 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               />
             </div>
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Cost Per Unit</label>
+              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                Cost Per Unit ({formData.currency || 'EUR'})
+              </label>
               <EurAmountInput
                 required
+                currency={formData.currency}
                 className="py-4 text-sm transition-all placeholder:opacity-20"
                 placeholder="0.00"
                 value={formData.averagePrice}

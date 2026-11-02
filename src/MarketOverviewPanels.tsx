@@ -95,7 +95,8 @@ function TopStorySourcePill({ ref: storyRef }: { ref: { title: string; url?: str
   const pillClass =
     'inline-flex max-w-full items-center rounded border border-border/30 bg-white/5 px-1.5 py-px font-sans text-[10px] font-medium leading-tight text-accent transition-colors';
 
-  if (storyRef.url) {
+  // News comes from outside feeds: only web links are made clickable.
+  if (storyRef.url && /^https?:\/\//i.test(storyRef.url)) {
     return (
       <a
         href={storyRef.url}

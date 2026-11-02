@@ -259,9 +259,22 @@ export function importPortfolioFlows(
     `INSERT INTO portfolio_flows (date, amount_eur, kind, asset_symbol, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
   );
+  // Merging the same backup again must not duplicate entries (each would count as new money).
+  const exists = db.prepare(
+    `SELECT 1 FROM portfolio_flows
+     WHERE date = ? AND amount_eur = ? AND kind = ? AND COALESCE(asset_symbol, '') = ? AND created_at = ?
+     LIMIT 1`
+  );
   let count = 0;
   for (const flow of flows) {
     if (!flow.date || !Number.isFinite(flow.amountEur) || flow.amountEur === 0) continue;
+    if (
+      mode === "merge" &&
+      flow.createdAt &&
+      exists.get(flow.date, flow.amountEur, flow.kind, flow.assetSymbol ?? "", flow.createdAt)
+    ) {
+      continue;
+    }
     insert.run(
       flow.date,
       flow.amountEur,

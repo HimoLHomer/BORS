@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useEscapeToClose } from './useEscapeToClose';
 import { ChevronDown, Search, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { Asset } from './types';
@@ -112,6 +113,7 @@ export function ManualDividendModal({
   onClearSaveError,
 }: ManualDividendModalProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  useEscapeToClose(onClose, open);
   const [filterQuery, setFilterQuery] = useState('');
 
   const selectedAsset = useMemo(
@@ -270,7 +272,7 @@ export function ManualDividendModal({
               }}
               onBlur={() => onDraftAnnualChange(formatDecimalInputFi(draftAnnual, 2))}
               className="py-4 text-sm"
-              placeholder="0,00"
+              placeholder="0.00"
             />
             <p className="text-xs text-text-s/60 px-1 leading-relaxed">
               Yield uses this holding&apos;s EUR value on the Dashboard.

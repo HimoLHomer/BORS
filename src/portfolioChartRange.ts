@@ -279,7 +279,7 @@ export function sumFlowsInRange(
   endDate: string
 ): number {
   return flows
-    .filter((flow) => flow.date >= startDate && flow.date <= endDate)
+    .filter((flow) => flow.date > startDate && flow.date <= endDate)
     .reduce((sum, flow) => sum + flow.amountEur, 0);
 }
 
@@ -289,7 +289,7 @@ export function sumPositiveFlowsInRange(
   endDate: string
 ): number {
   return flows
-    .filter((flow) => flow.date >= startDate && flow.date <= endDate && flow.amountEur > 0)
+    .filter((flow) => flow.date > startDate && flow.date <= endDate && flow.amountEur > 0)
     .reduce((sum, flow) => sum + flow.amountEur, 0);
 }
 
@@ -310,7 +310,7 @@ export function computePortfolioMarketReturn(
 
   const startDate = visibleData[0]!.date;
   const endDate = visibleData[visibleData.length - 1]!.date;
-  const rangeFlows = flows.filter((flow) => flow.date >= startDate && flow.date <= endDate);
+  const rangeFlows = flows.filter((flow) => flow.date > startDate && flow.date <= endDate);
   if (rangeFlows.length === 0) {
     return {
       gainEur: raw.gainEur,
@@ -451,8 +451,10 @@ export function computePortfolioRangeReturnFromHistory(
   const bmv = inRange[0]!.value;
   const emv = liveTotal;
   const startDate = inRange[0]!.date;
+  // A saved day's total is its end-of-day value, so it already includes that day's buys and
+  // deposits; only money moved after the start day is subtracted.
   const rangeFlows = flows.filter(
-    (flow) => flow.date >= startDate && flow.date <= referenceIso
+    (flow) => flow.date > startDate && flow.date <= referenceIso
   );
   const cf = netPerformanceFlows(rangeFlows);
   const netContributionsEur = netPositiveContributions(rangeFlows);

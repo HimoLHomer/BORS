@@ -176,6 +176,14 @@ export function endOfCurrentYearYmd(todayYmd: string = todayIsoDateHelsinki()): 
   return `${todayYmd.slice(0, 4)}-12-31`;
 }
 
+/** Calendar horizon: the end of the month 11 months ahead, i.e. 12 monthly buckets from now. */
+export function calendarHorizonEndYmd(todayYmd: string = todayIsoDateHelsinki()): string {
+  const y = Number(todayYmd.slice(0, 4));
+  const m = Number(todayYmd.slice(5, 7));
+  const end = new Date(Date.UTC(y, m - 1 + 12, 0));
+  return end.toISOString().slice(0, 10);
+}
+
 export function filterPayDatesInRange(
   dates: string[] | undefined,
   fromYmd: string,
@@ -275,6 +283,9 @@ function mergeUpcomingWithPastSinceTrackingStart(
 
 export const DIVIDEND_TRACKING_START_STORAGE_KEY = 'bors_dividend_tracking_start';
 
+/** migratedOn for users who started after tracking existed (never equals a real date). */
+const NO_MIGRATION_LOOKBACK = "1970-01-01";
+
 /** One-time leniency for holdings that existed when tracking was introduced. */
 export const TRACKING_MIGRATION_LOOKBACK_DAYS = 31;
 
@@ -352,9 +363,15 @@ function subtractDaysFromYmd(ymd: string, days: number): string {
 export function reconcileTrackingState(
   stored: DividendTrackingState | null,
   holdingKeys: string[],
-  todayYmd: string
+  todayYmd: string,
+  /** First run for someone who already used the calendar: give their holdings the lookback. */
+  existingUser = true
 ): DividendTrackingState {
-  const prev: DividendTrackingState = stored ?? { migratedOn: todayYmd, holdings: {} };
+  // A brand-new user gets no lookback: their payouts start from the day each holding is added.
+  const prev: DividendTrackingState = stored ?? {
+    migratedOn: existingUser ? todayYmd : NO_MIGRATION_LOOKBACK,
+    holdings: {},
+  };
   const newStart =
     prev.migratedOn === todayYmd ? subtractDaysFromYmd(todayYmd, TRACKING_MIGRATION_LOOKBACK_DAYS) : todayYmd;
   const missing = [...new Set(holdingKeys)].filter((k) => !(k in prev.holdings));
@@ -626,20 +643,24 @@ function apiPayDatesForRow(
   row: ApiDividendPaymentInput,
   frequency: DividendPayoutFrequency,
   todayYmd: string,
-  yearEndYmd: string,
+  horizonEndYmd: string,
   trackingStartYmd: string
 ): string[] {
-  const fromCalendar = filterPayDatesInRange(row.calendarPayoutDates, trackingStartYmd, yearEndYmd);
+  const fromCalendar = filterPayDatesInRange(row.calendarPayoutDates, trackingStartYmd, horizonEndYmd);
   const hasUpcomingInCalendar = fromCalendar.some((d) => d >= todayYmd);
 
   let known = fromCalendar;
   if (!hasUpcomingInCalendar) {
     const anchor = row.nextPayDateYmd ?? firstUpcomingPayDateYmd(row.calendarPayoutDates, todayYmd);
     if (anchor) {
-      known = [...new Set([...known, ...projectPayoutDatesFromAnchor(anchor, frequency, yearEndYmd, todayYmd)])];
+      known = [...new Set([...known, ...projectPayoutDatesFromAnchor(anchor, frequency, horizonEndYmd, todayYmd)])];
     }
   }
   if (!known.length) return [];
+
+  // The server schedule may stop short of the horizon: keep stepping from its last date.
+  const lastKnown = [...known].sort().pop()!;
+  known = [...new Set([...known, ...projectPayoutDatesFromAnchor(lastKnown, frequency, horizonEndYmd, lastKnown)])];
 
   // Fill in past slots the server schedule no longer lists, back to the tracking start.
   return mergeUpcomingWithPastSinceTrackingStart(known, frequency, trackingStartYmd, todayYmd);
@@ -654,8 +675,8 @@ export function buildProjectedPayments(
   options?: BuildProjectedPaymentsOptions
 ): ScheduledDividendPayment[] {
   const todayYmd = options?.todayYmd ?? todayIsoDateHelsinki();
-  const yearEndYmd = endOfCurrentYearYmd(todayYmd);
-  const endMonthKey = yearEndYmd.slice(0, 7);
+  const horizonEndYmd = calendarHorizonEndYmd(todayYmd);
+  const endMonthKey = horizonEndYmd.slice(0, 7);
   const redeemedIds = new Set(redeemed.map((r) => r.id));
   const candidates: PaymentCandidate[] = [];
 
@@ -668,7 +689,7 @@ export function buildProjectedPayments(
     const frequency = parseFrequency(row.payoutFrequency);
     const holdingKey = apiHoldingKey(row.symbol);
     const payDateSource = mapApiPayDateSource(row.payDateSource);
-    const dates = apiPayDatesForRow(row, frequency, todayYmd, yearEndYmd, trackingStartFor(holdingKey));
+    const dates = apiPayDatesForRow(row, frequency, todayYmd, horizonEndYmd, trackingStartFor(holdingKey));
 
     if (dates.length) {
       pushScheduledDates(
@@ -711,7 +732,7 @@ export function buildProjectedPayments(
         : null;
 
     if (anchorYmd) {
-      const dates = projectPayoutDatesFromAnchor(anchorYmd, frequency, yearEndYmd, trackingStartFor(holdingKey));
+      const dates = projectPayoutDatesFromAnchor(anchorYmd, frequency, horizonEndYmd, trackingStartFor(holdingKey));
       pushScheduledDates(
         candidates,
         holdingKey,

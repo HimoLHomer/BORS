@@ -60,6 +60,16 @@ if (!gotSingleInstanceLock) {
   });
 }
 
+/** True for http(s) URLs only. */
+function isWebUrl(url) {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function userDataDir() {
   return app.getPath("userData");
 }
@@ -278,7 +288,9 @@ async function createWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // Links can come from outside data (news feeds, imported backups): only hand web pages to
+    // the system, never file: or other protocol handlers.
+    if (isWebUrl(url)) shell.openExternal(url);
     return { action: "deny" };
   });
 

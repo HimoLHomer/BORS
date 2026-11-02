@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   buildProjectedPayments,
   dedupeProjectedPaymentsByMonth,
+  calendarHorizonEndYmd,
   endOfCurrentYearYmd,
   filterPayDatesInRange,
   groupRedeemedByMonth,
@@ -33,6 +34,8 @@ function paymentStub(
 }
 
 assert.equal(endOfCurrentYearYmd(TODAY), '2026-12-31');
+assert.equal(calendarHorizonEndYmd(TODAY), '2027-06-30', 'horizon: 12 monthly buckets (Jul 2026 – Jun 2027)');
+assert.equal(calendarHorizonEndYmd('2026-12-20'), '2027-11-30', 'late December still sees a year ahead');
 
 assert.deepEqual(
   filterPayDatesInRange(['2026-06-01', '2026-07-15', '2027-01-15'], TODAY, '2026-12-31'),
@@ -64,12 +67,12 @@ const quarterlyFromCalendar = buildProjectedPayments(
 );
 assert.equal(
   quarterlyFromCalendar.length,
-  2,
-  'quarterly: remaining year dates; April is outside the grace window'
+  4,
+  'quarterly: next 12 months, extended past the server schedule; past April not shown'
 );
 assert.deepEqual(
   quarterlyFromCalendar.map((p) => p.payDateYmd),
-  ['2026-07-15', '2026-10-15']
+  ['2026-07-15', '2026-10-15', '2027-01-15', '2027-04-15']
 );
 assert.ok(quarterlyFromCalendar.every((p) => p.payDateSource === 'yahoo'));
 
@@ -91,7 +94,7 @@ const monthlyProjected = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(monthlyProjected.length, 6, 'monthly: Jul–Dec from anchor; no tracking start means no past payouts');
+assert.equal(monthlyProjected.length, 12, 'monthly: Jul 2026 – Jun 2027 from anchor; no tracking start means no past payouts');
 assert.ok(monthlyProjected.every((p) => p.payDateSource === 'estimated'));
 
 const withRedeemed = buildProjectedPayments(
@@ -125,8 +128,8 @@ const withRedeemed = buildProjectedPayments(
 );
 assert.deepEqual(
   withRedeemed.map((p) => p.payDateYmd),
-  ['2026-10-15'],
-  'redeemed July slot excluded; April is outside the grace window and does not resurface'
+  ['2026-10-15', '2027-01-15', '2027-04-15'],
+  'redeemed July slot excluded; past April does not resurface'
 );
 
 const deduped = dedupeProjectedPaymentsByMonth([
@@ -170,10 +173,10 @@ const manualRecurring = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(manualRecurring.length, 2, 'manual anchor: Jul and Oct; April is too old to show');
+assert.equal(manualRecurring.length, 4, 'manual anchor: next 12 months; past April is too old to show');
 assert.deepEqual(
   manualRecurring.map((p) => p.payDateYmd),
-  ['2026-07-15', '2026-10-15']
+  ['2026-07-15', '2026-10-15', '2027-01-15', '2027-04-15']
 );
 assert.ok(manualRecurring.every((p) => p.payDateSource === 'manual'));
 
@@ -194,7 +197,7 @@ const fallbackMonths = buildProjectedPayments(
   0,
   { todayYmd: TODAY }
 );
-assert.equal(fallbackMonths.length, 2, 'fallback: Jul and Oct month buckets');
+assert.equal(fallbackMonths.length, 4, 'fallback: Jul, Oct, Jan and Apr month buckets');
 assert.ok(fallbackMonths.every((p) => p.payDateSource === 'fallback'));
 assert.ok(fallbackMonths.every((p) => p.payDateYmd == null));
 
@@ -371,7 +374,7 @@ assert.deepEqual(
   });
   assert.deepEqual(
     neverDisappears.map((p) => p.payDateYmd),
-    ['2026-07-15', '2026-10-15'],
+    ['2026-07-15', '2026-10-15', '2027-01-15', '2027-04-15', '2027-07-15', '2027-10-15'],
     'unredeemed payouts since the holding was added stay until redeemed, however old'
   );
 
@@ -381,7 +384,7 @@ assert.deepEqual(
   });
   assert.deepEqual(
     addedAfterPayout.map((p) => p.payDateYmd),
-    ['2026-10-15'],
+    ['2026-10-15', '2027-01-15', '2027-04-15', '2027-07-15'],
     'payouts from before the holding was added are never shown'
   );
 
@@ -401,7 +404,7 @@ assert.deepEqual(
   });
   assert.deepEqual(
     afterRedeem.map((p) => p.payDateYmd),
-    ['2026-10-15'],
+    ['2026-10-15', '2027-01-15', '2027-04-15', '2027-07-15', '2027-10-15'],
     'redeemed payouts leave; nothing older than the tracking start replaces them'
   );
 
@@ -424,7 +427,7 @@ assert.deepEqual(
   );
   assert.deepEqual(
     manualSinceStart.map((p) => p.payDateYmd),
-    ['2026-04-15', '2026-07-15', '2026-10-15'],
+    ['2026-04-15', '2026-07-15', '2026-10-15', '2027-01-15', '2027-04-15'],
     'manual: payouts since tracking start (not January) are kept'
   );
 }
@@ -445,6 +448,11 @@ assert.deepEqual(
   const added = reconcileTrackingState(both, ['manual-1', 'api-O.US', 'api-NEW.US'], '2026-11-20');
   assert.equal(added.holdings['api-NEW.US'], '2026-11-20', 'newly added holding starts on the day it appears');
   assert.equal(added.holdings['api-O.US'], '2026-10-02', 'existing start dates are kept, even after a long break');
+
+  const newUser = reconcileTrackingState(null, ['api-O.US'], '2026-11-02', false);
+  assert.equal(newUser.holdings['api-O.US'], '2026-11-02', 'brand-new user: no lookback, starts today');
+  const newUserLater = reconcileTrackingState(newUser, ['api-O.US', 'api-X.US'], '2026-11-02', false);
+  assert.equal(newUserLater.holdings['api-X.US'], '2026-11-02', 'rows arriving later the same day also start today');
 
   const partial = reconcileTrackingState(added, ['manual-1'], '2026-11-21');
   assert.equal(partial, added, 'holdings missing from a partial load are not dropped');

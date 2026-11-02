@@ -130,6 +130,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
   const [holdingsStaggerKey, setHoldingsStaggerKey] = useState(0);
   const importBackupRef = useRef<HTMLInputElement>(null);
+  const [backupNote, setBackupNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
   const portfolioMutationEpochRef = useRef(0);
   /** After first SQLite UI-prefs hydrate (or failed fetch); enables debounced PUT without clobbering server before read. */
@@ -466,6 +467,15 @@ export default function App() {
       const removed = assets.find((a) => a.id === id);
       // Removing a holding is a sale at today's value; without a live price the server looks it up.
       const saleValueEur = removed ? holdingLiveValueEur(removed, removed.quantity) : undefined;
+      const valueText = saleValueEur != null ? ` at today's value (${formatCurrency(saleValueEur, 'EUR')})` : '';
+      if (
+        removed &&
+        !window.confirm(
+          `Remove ${removed.name || removed.symbol}?\n\nIt is recorded as sold${valueText}. If you added it by mistake today, nothing is recorded.`
+        )
+      ) {
+        return;
+      }
       const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -1050,11 +1060,23 @@ export default function App() {
       if (data.clientSettings && typeof data.clientSettings === 'object' && !Array.isArray(data.clientSettings)) {
         payload.clientSettings = data.clientSettings;
       }
-      await fetch('/api/portfolio/import?mode=merge', {
+      const summary = `${payload.assets.length} holdings, ${payload.history.length} history days, ${
+        payload.flows?.length ?? 0
+      } buy/sale/cash entries`;
+      if (
+        !window.confirm(
+          `Merge this backup (${summary}) into your portfolio?\n\nMatching holdings and days are updated; entries already in the portfolio are skipped.`
+        )
+      ) {
+        return;
+      }
+      const res = await fetch('/api/portfolio/import?mode=merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) throw new Error(`Import failed (HTTP ${res.status})`);
+      const result = (await res.json()) as { flowsImported?: number };
       const pf = { cache: 'no-store' as RequestCache };
       const [a, h, flowsRes, cashRes] = await Promise.all([
         fetch('/api/portfolio/assets', pf).then((r) => r.json()),
@@ -1075,8 +1097,21 @@ export default function App() {
         applyClientSettingsToLocalStorage(data.clientSettings as Record<string, unknown>);
       }
       portfolioMutationEpochRef.current += 1;
+      setBackupNote({
+        kind: 'ok',
+        text: `Imported ${payload.assets.length} holdings and ${payload.history.length} history days; ${
+          result.flowsImported ?? 0
+        } new buy/sale/cash entries (others were already present).`,
+      });
     } catch (e) {
       console.error('Import failed', e);
+      setBackupNote({
+        kind: 'error',
+        text:
+          e instanceof SyntaxError
+            ? 'That file is not a valid BÖRS backup (could not read it as JSON).'
+            : 'Import failed. Nothing may have been imported; check the file and try again.',
+      });
     } finally {
       if (importBackupRef.current) importBackupRef.current.value = '';
     }
@@ -1858,6 +1893,16 @@ export default function App() {
                           />
                         </label>
                       </div>
+                      {backupNote ? (
+                        <p
+                          role="status"
+                          className={`mt-3 text-[11px] leading-relaxed ${
+                            backupNote.kind === 'error' ? 'text-red' : 'text-green'
+                          }`}
+                        >
+                          {backupNote.text}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
