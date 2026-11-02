@@ -55,6 +55,9 @@ import {
   applyLiveTodayPortfolioPoint,
   buildPortfolio1DaySeries,
   buildPortfolio1DaySeriesFromTodayGain,
+  buildPortfolioIntradaySeries,
+  computePortfolioIntradayXAxis,
+  computePortfolioMultiDayXAxis,
   computePortfolioRangeReturnFromHistory,
   filterPortfolioChartByRange,
   formatPortfolioChartYTick,
@@ -66,6 +69,7 @@ import {
   portfolioChartRangeGainLabel,
   type PortfolioChartPoint,
   type PortfolioChartRangeId,
+  type PortfolioIntradayPayload,
 } from './portfolioChartRange';
 import { View, dedupeHistoryByDate, normalizeCashAmountEur, parseCashInputEur, formatCashEurTwoDecimals, isAbortError } from './portfolioHelpers';
 import { HistoryPointModal } from './HistoryPointModal';
@@ -82,11 +86,15 @@ import {
 import { NavButton } from './AppNav';
 import { apiHoldingKey, forgetTrackedHoldings } from './dividendRedemptions';
 import { AddAssetModal } from './AddAssetModal';
+import { InfoHint } from './InfoHint';
+import { gainPercentOf, holdingTodayGainEur, todaysPurchasesBySymbol } from './todayGain';
 
 /** Delay before saving today's total after a holding or cash change. */
 const HISTORY_SAVE_DEBOUNCE_MS = 2000;
 /** Minimum spacing between saves when only quotes/FX moved the total. */
 const HISTORY_PRICE_SAVE_INTERVAL_MS = 60_000;
+/** How often the 1D intraday series is refreshed while the 1D view is open. */
+const INTRADAY_REFRESH_MS = 3 * 60_000;
 
 // --- Main App Logic ---
 
@@ -136,6 +144,8 @@ export default function App() {
   const [cashEur, setCashEur] = useState(0);
   const [cashInput, setCashInput] = useState('');
   const [cashSaving, setCashSaving] = useState(false);
+  const [cashEditing, setCashEditing] = useState(false);
+  const cashEditCancelledRef = useRef(false);
 
   const cashLineEur = useMemo(() => {
     const n = normalizeCashAmountEur(cashEur);
@@ -444,9 +454,23 @@ export default function App() {
     }
   }, [activeView]);
 
+  /** EUR value of `quantity` shares of a holding at the price shown, or undefined if unpriced. */
+  const holdingLiveValueEur = (asset: Asset, quantity: number): number | undefined => {
+    const price = marketPrices[asset.symbol];
+    if (!(price > 0) || !(quantity > 0)) return undefined;
+    return quantity * price * holdingQuoteFxToEur(asset.symbol, asset.currency, quoteCurrencies, exchangeRates);
+  };
+
   const removeAsset = async (id: string) => {
     try {
-      const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const removed = assets.find((a) => a.id === id);
+      // Removing a holding is a sale at today's value; without a live price the server looks it up.
+      const saleValueEur = removed ? holdingLiveValueEur(removed, removed.quantity) : undefined;
+      const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(saleValueEur != null ? { saleValueEur } : {}),
+      });
       if (!res.ok) throw new Error('Delete failed');
       const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
       const removedSymbol = assets.find((a) => a.id === id)?.symbol?.trim();
@@ -481,9 +505,15 @@ export default function App() {
     [sortedHoldings]
   );
 
+  const todaysPurchases = useMemo(
+    () => todaysPurchasesBySymbol(portfolioFlows, todayIsoDateHelsinki()),
+    [portfolioFlows]
+  );
+
   const holdingsTableRows = useMemo(
     () =>
       sortedHoldings.map((item) => {
+        const hasLivePrice = marketPrices[item.symbol] > 0;
         const price = marketPrices[item.symbol] || item.averagePrice;
         const priceFx = holdingQuoteFxToEur(item.symbol, item.currency, quoteCurrencies, exchangeRates);
         const costFx = fxToEur(item.currency, exchangeRates) || 1;
@@ -493,7 +523,8 @@ export default function App() {
         const totalGainInEur = totalValue - costBasisInEur;
         const totalGainPercent = costBasisInEur > 0 ? (totalGainInEur / costBasisInEur) * 100 : 0;
         const change = marketChanges[item.symbol] || 0;
-        const todayGainEur = todayGainEurFromChange(totalValue, change);
+        const todayGainEur = holdingTodayGainEur(totalValue, change, todaysPurchases.get(item.symbol));
+        const todayGainPercent = gainPercentOf(totalValue, todayGainEur);
         const ticker = displayTickerForAsset(item);
 
         return {
@@ -507,10 +538,23 @@ export default function App() {
           ),
           value: formatCurrency(totalValue, 'EUR'),
           shares: formatShares(item.quantity),
-          price: formatCurrency(priceInEur, 'EUR'),
+          price:
+            hasLivePrice || initialQuotesPending ? (
+              formatCurrency(priceInEur, 'EUR')
+            ) : (
+              <span
+                className="inline-flex items-center gap-1.5"
+                title="No market price for this symbol; valued at your average purchase price."
+              >
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">
+                  No price
+                </span>
+                {formatCurrency(priceInEur, 'EUR')}
+              </span>
+            ),
           cost: <span className="text-text-s/50">{formatCurrency(costBasisInEur, 'EUR')}</span>,
           gain: <GainDisplay amountEur={totalGainInEur} percent={totalGainPercent} />,
-          today: <GainDisplay amountEur={todayGainEur} percent={change} />,
+          today: <GainDisplay amountEur={todayGainEur} percent={todayGainPercent} />,
           actions: (
             <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
@@ -536,7 +580,7 @@ export default function App() {
           ),
         };
       }),
-    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges]
+    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, initialQuotesPending]
   );
 
   const holdingsStats = assets.reduce((acc, asset) => {
@@ -619,14 +663,60 @@ export default function App() {
       const priceFx = holdingQuoteFxToEur(asset.symbol, asset.currency, quoteCurrencies, exchangeRates);
       const valInEur = asset.quantity * livePrice * priceFx;
       portfolioValueEur += valInEur;
-      todayGainEur += todayGainEurFromChange(valInEur, marketChanges[asset.symbol] || 0);
+      todayGainEur += holdingTodayGainEur(
+        valInEur,
+        marketChanges[asset.symbol] || 0,
+        todaysPurchases.get(asset.symbol)
+      );
     }
-    const priorValueEur = portfolioValueEur - todayGainEur;
-    const todayGainPercent = priorValueEur > 0 ? (todayGainEur / priorValueEur) * 100 : 0;
+    const todayGainPercent = gainPercentOf(portfolioValueEur, todayGainEur);
     return { todayGainEur, todayGainPercent };
-  }, [assets, marketPrices, quoteCurrencies, exchangeRates, marketChanges, cashLineEur]);
+  }, [assets, marketPrices, quoteCurrencies, exchangeRates, marketChanges, cashLineEur, todaysPurchases]);
+
+  /** Intraday series for the 1D (5-minute) and 5D (30-minute) views; refreshed while open. */
+  const [portfolioIntraday, setPortfolioIntraday] = useState<{
+    range: PortfolioChartRangeId;
+    data: PortfolioIntradayPayload | null;
+  } | null>(null);
+  const intradayRangeActive = activePortfolioChartRange === '1D' || activePortfolioChartRange === '5D';
+  const intradayHoldingsKey = useMemo(
+    () => `${assets.map((a) => `${a.symbol}:${a.quantity}`).join('|')}#${cashLineEur}`,
+    [assets, cashLineEur]
+  );
+
+  useEffect(() => {
+    if (!intradayRangeActive) return;
+    const range = activePortfolioChartRange;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/portfolio/intraday?range=${range}`, { cache: 'no-store' });
+        const json = res.ok ? ((await res.json()) as PortfolioIntradayPayload | null) : null;
+        if (!cancelled) setPortfolioIntraday({ range, data: json });
+      } catch {
+        /* keep the last series; the history-based chart covers a first-load failure */
+      }
+    };
+    void load();
+    const id = window.setInterval(() => void load(), INTRADAY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [intradayRangeActive, activePortfolioChartRange, intradayHoldingsKey, quotesRefreshEpoch]);
+
+  const portfolioIntradaySeries = useMemo(
+    () =>
+      intradayRangeActive && portfolioIntraday?.range === activePortfolioChartRange
+        ? buildPortfolioIntradaySeries(portfolioIntraday.data, stats.totalValue, Date.now(), undefined, {
+            compressTime: activePortfolioChartRange === '5D',
+          })
+        : null,
+    [intradayRangeActive, activePortfolioChartRange, portfolioIntraday, stats.totalValue]
+  );
 
   const portfolioChartDisplayData = useMemo(() => {
+    if (portfolioIntradaySeries) return portfolioIntradaySeries;
     if (activePortfolioChartRange === '1D') {
       const oneDaySeries = buildPortfolio1DaySeriesFromTodayGain(
         stats.totalValue,
@@ -639,6 +729,7 @@ export default function App() {
     return portfolioChartVisibleData;
   }, [
     activePortfolioChartRange,
+    portfolioIntradaySeries,
     portfolioHistoryValues,
     portfolioTodayGain.todayGainEur,
     stats.totalValue,
@@ -651,8 +742,13 @@ export default function App() {
   );
 
   const portfolioChartXAxis = useMemo(
-    () => computePortfolioChartXAxis(portfolioChartDisplayData, activePortfolioChartRange),
-    [portfolioChartDisplayData, activePortfolioChartRange]
+    () =>
+      portfolioIntradaySeries
+        ? activePortfolioChartRange === '5D'
+          ? computePortfolioMultiDayXAxis(portfolioIntradaySeries)
+          : computePortfolioIntradayXAxis(portfolioIntradaySeries)
+        : computePortfolioChartXAxis(portfolioChartDisplayData, activePortfolioChartRange),
+    [portfolioIntradaySeries, portfolioChartDisplayData, activePortfolioChartRange]
   );
 
   const portfolioRangeGain = useMemo(() => {
@@ -1033,17 +1129,23 @@ export default function App() {
   const persistAsset = async (
     asset: Asset,
     isEdit: boolean,
-    opts?: { flowAmountEur?: number }
+    opts?: { flowAmountEur?: number; transferIn?: boolean }
   ) => {
-    const flowBody =
-      opts?.flowAmountEur != null && Number.isFinite(opts.flowAmountEur)
+    const flowBody = {
+      ...(opts?.flowAmountEur != null && Number.isFinite(opts.flowAmountEur)
         ? { flowAmountEur: opts.flowAmountEur }
-        : {};
+        : {}),
+      ...(opts?.transferIn ? { transferIn: true } : {}),
+    };
     if (isEdit && asset.id) {
+      // Fewer shares = a sale: send the value of the removed shares at the price shown.
+      const prev = assets.find((a) => a.id === asset.id);
+      const soldQty = prev ? prev.quantity - asset.quantity : 0;
+      const saleValueEur = prev && soldQty > 0 ? holdingLiveValueEur(prev, soldQty) : undefined;
       const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(asset.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...asset, ...flowBody }),
+        body: JSON.stringify({ ...asset, ...flowBody, ...(saleValueEur != null ? { saleValueEur } : {}) }),
       });
       if (!res.ok) throw new Error('Update failed');
     } else {
@@ -1064,6 +1166,87 @@ export default function App() {
     setHistory(dedupeHistoryByDate(list));
     portfolioMutationEpochRef.current += 1;
   };
+
+  const startCashEdit = () => {
+    cashEditCancelledRef.current = false;
+    setCashEditing(true);
+  };
+
+  /** Cash as the last holdings row: shown like a holding's value, edited in place. */
+  const cashTableRow: Record<string, React.ReactNode> = {
+    asset: (
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-text-s">
+          <Wallet className="h-3.5 w-3.5" aria-hidden />
+        </span>
+        <div className="min-w-0">
+          <div className="text-text-p text-sm font-sans truncate">Cash</div>
+          <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest">EUR</div>
+        </div>
+      </div>
+    ),
+    value: cashEditing ? (
+      <div className="flex justify-end">
+        <EurAmountInput
+          compact
+          autoFocus
+          aria-label="Cash in EUR"
+          className="text-right"
+          wrapperClassName="w-[8.5rem] -my-1.5"
+          placeholder="0.00"
+          value={cashInput}
+          disabled={cashSaving}
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => setCashInput(e.target.value)}
+          onBlur={() => {
+            setCashEditing(false);
+            if (cashEditCancelledRef.current) {
+              setCashInput(formatCashEurTwoDecimals(cashLineEur));
+              return;
+            }
+            void commitCashOnBlur();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+            if (e.key === 'Escape') {
+              cashEditCancelledRef.current = true;
+              e.currentTarget.blur();
+            }
+          }}
+        />
+      </div>
+    ) : (
+      <button
+        type="button"
+        onClick={startCashEdit}
+        className="tabular-nums hover:text-accent transition-colors"
+        aria-label="Edit cash"
+        title="Click to edit cash"
+      >
+        {formatCurrency(cashLineEur, 'EUR')}
+      </button>
+    ),
+    shares: null,
+    price: null,
+    cost: null,
+    gain: null,
+    today: null,
+    actions: (
+      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          type="button"
+          onClick={startCashEdit}
+          className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
+          aria-label="Edit cash"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    ),
+  };
+
+  const holdingsTableRowsWithCash = [...holdingsTableRows, cashTableRow];
+  const holdingsRowKeysWithCash = [...holdingsRowKeys, 'cash'];
 
   if (loading) return <LoadingScreen />;
 
@@ -1286,16 +1469,54 @@ export default function App() {
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                     <div>
-                      <p
-                        className="micro-label mb-1"
-                        title={
-                          activePortfolioChartRange === '1D'
-                            ? "Sum of each holding's today gain from live quotes; cash excluded."
-                            : 'Return from market movement using daily history; purchases and cash deposits are excluded.'
-                        }
-                      >
-                        {portfolioChartRangeGainLabel(activePortfolioChartRange)}
-                      </p>
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <p className="micro-label mb-0">
+                          {portfolioChartRangeGainLabel(activePortfolioChartRange)}
+                        </p>
+                        <InfoHint label={`About ${portfolioChartRangeGainLabel(activePortfolioChartRange)}`}>
+                          {activePortfolioChartRange === '1D' ? (
+                            <>
+                              <p>
+                                <strong>Today&rsquo;s market move</strong> of your holdings: each
+                                holding&rsquo;s value × its change since the previous close, from live quotes.
+                              </p>
+                              <p>
+                                Holdings bought today count only their move since you bought them; cash and
+                                deposits don&rsquo;t count as gain. The % is relative to the portfolio&rsquo;s value
+                                before today&rsquo;s move.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <p>
+                                <strong>Market gain</strong> over this period: today&rsquo;s value − the value at
+                                the start − money you put in (buys and cash deposits) during it. It shows what
+                                the market earned, not how much your total grew.
+                              </p>
+                              {portfolioChartVisibleData[0]?.date ? (
+                                <p>
+                                  Measured from <strong>{formatDateEn(portfolioChartVisibleData[0].date)}</strong>
+                                  {portfolioRangeGain.netContributionsEur > 0 ? (
+                                    <>
+                                      , with{' '}
+                                      <strong>
+                                        {formatCurrency(portfolioRangeGain.netContributionsEur, 'EUR')}
+                                      </strong>{' '}
+                                      put in since
+                                    </>
+                                  ) : null}
+                                  . If your saved history starts later than the period, it&rsquo;s measured
+                                  from your first saved day.
+                                </p>
+                              ) : null}
+                              <p>
+                                The % is gain ÷ (start value + half the money put in), since that money was
+                                invested for part of the period.
+                              </p>
+                            </>
+                          )}
+                        </InfoHint>
+                      </div>
                       <GainDisplay
                         amountEur={portfolioRangeGain.gainEur}
                         percent={portfolioRangeGain.gainPercent}
@@ -1303,29 +1524,25 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <p className="micro-label mb-1" title="Holdings only vs average cost (EUR); cash excluded">
-                        Unrealized gain
-                      </p>
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <p className="micro-label mb-0">Unrealized gain</p>
+                        <InfoHint label="About Unrealized gain">
+                          <p>
+                            <strong>Total gain on what you hold now</strong>, since you bought it: each
+                            holding&rsquo;s value today − shares × your average purchase price. It&rsquo;s the
+                            sum of the Unrealized gain column in Holdings.
+                          </p>
+                          <p>
+                            The % is relative to what you paid. Cash, dividends and sold positions are not
+                            included. Unlike the range figure, it includes gains from before your history
+                            starts.
+                          </p>
+                        </InfoHint>
+                      </div>
                       <GainDisplay
                         amountEur={stats.totalGain}
                         percent={stats.totalGainPercent}
                         loading={feedMetricsLoading}
-                      />
-                    </div>
-                    <div className="border-l border-border/30 pl-6 shrink-0">
-                      <p className="micro-label mb-1">Cash (EUR)</p>
-                      <EurAmountInput
-                        compact
-                        className="!text-green"
-                        wrapperClassName="w-[6.75rem] [&>span]:!text-green/70"
-                        placeholder="0.00"
-                        value={cashInput}
-                        disabled={cashSaving}
-                        onChange={(e) => setCashInput(e.target.value)}
-                        onBlur={() => void commitCashOnBlur()}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') e.currentTarget.blur();
-                        }}
                       />
                     </div>
                   </div>
@@ -1531,16 +1748,10 @@ export default function App() {
                         cellClassName: 'px-3 py-2 text-right',
                       },
                     ]}
-                    rows={feedMetricsLoading ? holdingsTableSkeletonRows : holdingsTableRows}
-                    rowKeys={feedMetricsLoading ? undefined : holdingsRowKeys}
+                    rows={feedMetricsLoading ? holdingsTableSkeletonRows : holdingsTableRowsWithCash}
+                    rowKeys={feedMetricsLoading ? undefined : holdingsRowKeysWithCash}
                     enterStaggerKey={feedMetricsLoading ? undefined : holdingsStaggerKey}
                     enterStaggerMax={12}
-                    emptyState={
-                      <div className="flex flex-col items-center gap-4 opacity-50 py-8">
-                        <Wallet className="w-12 h-12" />
-                        <p className="text-[10px] uppercase font-bold tracking-widest">No Holdings Registered</p>
-                      </div>
-                    }
                   />
                 </div>
                 </div>

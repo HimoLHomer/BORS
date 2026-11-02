@@ -100,9 +100,19 @@ export function findFinancialIndependenceYearIndex(rows: FireYearRow[]): number 
   return rows.findIndex((r) => r.monthsNotCoveredByDividends <= 0);
 }
 
-export function independenceGoalFromProjection(rows: FireYearRow[]): number {
-  const i = findFinancialIndependenceYearIndex(rows);
-  return i >= 0 ? rows[i]!.portfolioValueEur : 0;
+/**
+ * Capital whose net dividends cover the annual expenses: expenses ÷ (yield × (1 − tax)).
+ * 0 when it can't be reached (no expenses, zero yield or 100% tax).
+ */
+export function independenceCapitalNeeded(
+  monthlyExpenses: number,
+  blendedYieldPercent: number,
+  dividendTaxRatePercent: number
+): number {
+  const annualExpenses = Math.max(0, monthlyExpenses) * 12;
+  const netYield =
+    (Math.max(0, blendedYieldPercent) / 100) * (1 - Math.min(100, Math.max(0, dividendTaxRatePercent)) / 100);
+  return annualExpenses > 0 && netYield > 0 ? annualExpenses / netYield : 0;
 }
 
 export function projectFireYears(

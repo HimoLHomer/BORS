@@ -10,12 +10,15 @@
  * Usage:
  *   npx tsx scripts/repair-fx-flows.mts --db <path/to/portfolio.db>           (dry run)
  *   npx tsx scripts/repair-fx-flows.mts --db <path/to/portfolio.db> --apply   (backup + write)
+ * Only flows dated before --before (default: the day after the fix) are considered.
  */
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { yahooFinance } from '../server/yahooClient.ts';
 
 const REPAIRED_TAG = 'converted from';
+/** First day flows were logged in EUR by the fixed code. */
+const FIXED_ON = '2026-11-03';
 
 type FlowRow = { id: number; date: string; amount_eur: number; kind: string; asset_symbol: string | null; note: string | null };
 
@@ -54,6 +57,8 @@ async function main() {
   const dbPath = argValue('--db');
   if (!dbPath) throw new Error('Pass --db <path to portfolio.db>');
   const apply = process.argv.includes('--apply');
+  // Flows from the fixed code are always EUR and can be exact cents by chance; only older ones qualify.
+  const before = argValue('--before') ?? FIXED_ON;
   const db = new Database(dbPath, { readonly: !apply, fileMustExist: true });
 
   const currencyBySymbol = new Map<string, string>();
@@ -63,8 +68,8 @@ async function main() {
   }
 
   const flows = db
-    .prepare("SELECT * FROM portfolio_flows WHERE asset_symbol IS NOT NULL AND kind IN ('buy','sell') ORDER BY date, id")
-    .all() as FlowRow[];
+    .prepare("SELECT * FROM portfolio_flows WHERE asset_symbol IS NOT NULL AND kind IN ('buy','sell') AND date < ? ORDER BY date, id")
+    .all(before) as FlowRow[];
 
   const fixes: { id: number; amountEur: number; note: string }[] = [];
   for (const f of flows) {
@@ -92,9 +97,9 @@ async function main() {
     fixes.push({ id: f.id, amountEur, note });
   }
 
-  const before = fixes.reduce((s, f) => s + (flows.find((x) => x.id === f.id)!.amount_eur), 0);
+  const storedSum = fixes.reduce((s, f) => s + (flows.find((x) => x.id === f.id)!.amount_eur), 0);
   const after = fixes.reduce((s, f) => s + f.amountEur, 0);
-  console.log(`\n${fixes.length} flow(s) to repair: ${before.toFixed(2)} → EUR ${after.toFixed(2)} (difference ${(after - before).toFixed(2)})`);
+  console.log(`\n${fixes.length} flow(s) to repair: ${storedSum.toFixed(2)} → EUR ${after.toFixed(2)} (difference ${(after - storedSum).toFixed(2)})`);
 
   if (!apply) {
     console.log('Dry run: nothing written. Re-run with --apply to back up and repair.');

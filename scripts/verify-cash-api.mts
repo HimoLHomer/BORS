@@ -3,7 +3,14 @@
  * Run: npx tsx scripts/verify-cash-api.mts
  */
 import express from "express";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { registerPortfolioRoutes } from "../server/portfolio.ts";
+
+// Use a throwaway database: each cash change logs a deposit/withdrawal entry, which must not
+// end up in the developer's portfolio.
+process.env.BORS_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bors-verify-cash-")), "portfolio.db");
 
 const app = express();
 app.use(express.json());

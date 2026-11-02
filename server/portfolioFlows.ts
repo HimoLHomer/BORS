@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { Asset, PortfolioFlow, PortfolioFlowKind } from "../src/types";
 import { fxToEur } from "../src/formatCurrency";
 import { todayIsoDateHelsinki } from "../src/formatDate";
+import { NEW_HOLDING_NOTE, TRANSFER_IN_NOTE } from "../src/flowNotes";
 
 export function ensurePortfolioFlowsTable(db: Database.Database): void {
   db.exec(`
@@ -123,8 +124,17 @@ export function recordAssetCreateFlow(
   db: Database.Database,
   asset: Asset,
   body: unknown,
-  exchangeRates?: Record<string, number>
+  exchangeRates?: Record<string, number>,
+  /** Set when the holding was already owned: logged at this market value, not as a purchase. */
+  transferInValueEur?: number | null
 ): void {
+  if (transferInValueEur != null) {
+    const value = transferInValueEur > 0 ? transferInValueEur : assetCostBasisEur(asset, exchangeRates);
+    if (Number.isFinite(value) && value >= 0.01) {
+      insertPortfolioFlow(db, { amountEur: value, kind: "buy", assetSymbol: asset.symbol, note: TRANSFER_IN_NOTE });
+    }
+    return;
+  }
   const hinted = parseOptionalFlowAmountEur(body);
   const amount =
     hinted != null && hinted > 0
@@ -139,7 +149,7 @@ export function recordAssetCreateFlow(
     amountEur: amount,
     kind: "buy",
     assetSymbol: asset.symbol,
-    note: "New holding",
+    note: NEW_HOLDING_NOTE,
   });
 }
 
@@ -148,8 +158,16 @@ export function recordAssetUpdateFlows(
   prev: Asset,
   next: Asset,
   body: unknown,
-  exchangeRates?: Record<string, number>
+  exchangeRates?: Record<string, number>,
+  /** Market value in EUR of the shares removed, when the share count went down. */
+  soldValueEur?: number | null
 ): void {
+  // Fewer shares = a sale: log the shares removed at market value, not at cost.
+  if (Number(next.quantity) < Number(prev.quantity) && soldValueEur != null && soldValueEur >= 0.01) {
+    insertPortfolioFlow(db, { amountEur: -soldValueEur, kind: "sell", assetSymbol: next.symbol, note: "Sale" });
+    return;
+  }
+
   const hinted = parseOptionalFlowAmountEur(body);
   const prevCost = assetCostBasisEur(prev, exchangeRates);
   const nextCost = assetCostBasisEur(next, exchangeRates);
@@ -178,24 +196,41 @@ export function recordAssetUpdateFlows(
   });
 }
 
+/** Share of a deleted holding's value bought today above which deletion is treated as an undo. */
+const SAME_DAY_UNDO_SHARE = 0.95;
+
+/**
+ * Deleting a holding is a sale: its value leaves the holdings, so log it as an outflow at
+ * market value (else range returns count the whole value as a loss). Exception: a holding
+ * (almost) entirely bought today is treated as an undo, and today's buy entries are removed.
+ */
 export function recordAssetDeleteFlow(
   db: Database.Database,
   asset: Asset,
-  _exchangeRates?: Record<string, number>
+  saleValueEur: number | null,
+  exchangeRates?: Record<string, number>
 ): void {
   const today = todayIsoDateHelsinki();
   const symbol = asset.symbol?.trim();
   if (!symbol) return;
 
-  // Same-day round-trip: remove the buy from create instead of recording a sell.
-  const removed = db
-    .prepare(
-      `DELETE FROM portfolio_flows WHERE date = ? AND asset_symbol = ? AND kind = 'buy'`
-    )
-    .run(today, symbol);
-  if (removed.changes > 0) return;
+  const value = saleValueEur != null && saleValueEur > 0 ? saleValueEur : assetCostBasisEur(asset, exchangeRates);
+  const boughtToday =
+    (db
+      .prepare(
+        `SELECT COALESCE(SUM(amount_eur), 0) AS s FROM portfolio_flows WHERE date = ? AND asset_symbol = ? AND kind = 'buy'`
+      )
+      .get(today, symbol) as { s: number }).s ?? 0;
 
-  // Holding removal is reflected in portfolio value; no external cash flow.
+  if (boughtToday > 0 && (!Number.isFinite(value) || boughtToday >= value * SAME_DAY_UNDO_SHARE)) {
+    db.prepare(`DELETE FROM portfolio_flows WHERE date = ? AND asset_symbol = ? AND kind = 'buy'`).run(today, symbol);
+    return;
+  }
+  if (!Number.isFinite(value) || value < 0.01) {
+    console.warn(`No value for deleted ${symbol}; sale not logged`);
+    return;
+  }
+  insertPortfolioFlow(db, { amountEur: -value, kind: "sell", assetSymbol: symbol, note: "Sold (holding removed)" });
 }
 
 export function recordCashChangeFlow(

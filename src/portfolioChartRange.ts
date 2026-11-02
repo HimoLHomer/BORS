@@ -15,6 +15,8 @@ export type PortfolioChartPoint = {
   name: string;
   value: number;
   chartTime: number;
+  /** Tooltip heading override (intraday points show a time). */
+  tooltipLabel?: string;
 };
 
 const MS_PER_DAY = 86_400_000;
@@ -243,31 +245,12 @@ export type PortfolioFlowLike = {
   kind?: 'cash' | 'buy' | 'sell';
 };
 
-/** Net external flows; buy+sell on same day for same symbol cancel (round-trip). */
+/**
+ * Net money into the portfolio over the flows: cash deposits/withdrawals, buys (+) and sales (−,
+ * logged at market value). A same-day buy and sale of one symbol cancel out naturally.
+ */
 export function netPerformanceFlows(flows: PortfolioFlowLike[]): number {
-  const byAssetDay = new Map<string, { buy: number; sell: number }>();
-  let cashNet = 0;
-
-  for (const flow of flows) {
-    if (!flow.assetSymbol || flow.kind === 'cash') {
-      cashNet += flow.amountEur;
-      continue;
-    }
-    const key = `${flow.date}|${flow.assetSymbol.toUpperCase()}`;
-    const bucket = byAssetDay.get(key) ?? { buy: 0, sell: 0 };
-    if (flow.amountEur > 0) bucket.buy += flow.amountEur;
-    else bucket.sell += flow.amountEur;
-    byAssetDay.set(key, bucket);
-  }
-
-  let assetNet = 0;
-  for (const { buy, sell } of byAssetDay.values()) {
-    const net = buy + sell;
-    // Holding removal without a matching buy records a sell only; value is already in EMV.
-    if (buy === 0 && sell < 0) continue;
-    assetNet += net;
-  }
-  return cashNet + assetNet;
+  return flows.reduce((sum, flow) => sum + (Number.isFinite(flow.amountEur) ? flow.amountEur : 0), 0);
 }
 
 export function netPositiveContributions(flows: PortfolioFlowLike[]): number {
@@ -614,11 +597,107 @@ export function computePortfolioChartXAxis(
 
 /** Tooltip heading from a chart row (never show raw chartTime). */
 export function portfolioChartTooltipLabel(
-  point: Pick<PortfolioChartPoint, 'date' | 'chartTime'>
+  point: Pick<PortfolioChartPoint, 'date' | 'chartTime' | 'tooltipLabel'>
 ): string {
+  if (point.tooltipLabel) return point.tooltipLabel;
   if (point.date?.trim()) return formatDateEn(point.date);
   const iso = isoDateFromTimestampHelsinki(point.chartTime);
   return iso ? formatDateEn(iso) : '—';
+}
+
+/* ------------------------------------------------------------------ */
+/* Intraday (1D): 5-minute portfolio values from /api/portfolio/intraday */
+/* ------------------------------------------------------------------ */
+
+export type PortfolioIntradayPayload = {
+  date: string;
+  days?: string[];
+  points: { t: number; value: number }[];
+  baselineEur: number;
+};
+
+const HELSINKI_TZ = 'Europe/Helsinki';
+
+function formatHelsinkiTime(ms: number): string {
+  return new Intl.DateTimeFormat(APP_LOCALE, {
+    timeZone: HELSINKI_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(ms);
+}
+
+/**
+ * Chart rows for the 1D/5D views. When the latest session is today, the live total is appended
+ * as the last point so the line ends at the value shown above the chart.
+ *
+ * With `compressTime` (5D), chartTime is the bar index instead of a timestamp, so trading days
+ * sit side by side without nights and weekends stretching the axis.
+ */
+export function buildPortfolioIntradaySeries(
+  intraday: PortfolioIntradayPayload | null,
+  liveTotal: number,
+  nowMs: number = Date.now(),
+  referenceIso: string = todayIsoDateHelsinki(),
+  { compressTime = false }: { compressTime?: boolean } = {}
+): PortfolioChartPoint[] | null {
+  if (!intraday || intraday.points.length < 2) return null;
+  const rows: PortfolioChartPoint[] = intraday.points.map((p, i) => {
+    const date = isoDateFromTimestampHelsinki(p.t) ?? intraday.date;
+    return {
+      date,
+      name: formatHelsinkiTime(p.t),
+      value: p.value,
+      chartTime: compressTime ? i : p.t,
+      tooltipLabel: `${formatDateEn(date)}, ${formatHelsinkiTime(p.t)}`,
+    };
+  });
+  const lastT = intraday.points[intraday.points.length - 1]!.t;
+  if (intraday.date === referenceIso && liveTotal > 0 && nowMs > lastT) {
+    rows.push({
+      date: intraday.date,
+      name: 'Now',
+      value: liveTotal,
+      chartTime: compressTime ? rows.length : nowMs,
+      tooltipLabel: `${formatDateEn(intraday.date)}, ${formatHelsinkiTime(nowMs)} (live)`,
+    });
+  }
+  return rows;
+}
+
+/** 5D axis on bar-index chart times: one tick at the first bar of each day, labelled by weekday. */
+export function computePortfolioMultiDayXAxis(points: PortfolioChartPoint[]): PortfolioChartXAxisConfig {
+  const labelByTick = new Map<number, string>();
+  let prevDate = '';
+  for (const p of points) {
+    if (p.date === prevDate) continue;
+    prevDate = p.date;
+    const d = parseIsoDateOnly(p.date);
+    const weekday = d
+      ? new Intl.DateTimeFormat(APP_LOCALE, { weekday: 'short', timeZone: 'UTC' }).format(d)
+      : '';
+    labelByTick.set(p.chartTime, d ? `${weekday} ${d.getUTCDate()}` : p.date);
+  }
+  return { ticks: [...labelByTick.keys()], formatTick: (t) => labelByTick.get(t) ?? '' };
+}
+
+/** Hour ticks (Helsinki time) for the intraday chart, about 5–7 labels across the session. */
+export function computePortfolioIntradayXAxis(points: PortfolioChartPoint[]): PortfolioChartXAxisConfig {
+  if (points.length === 0) return { ticks: [], formatTick: () => '' };
+  const min = points[0]!.chartTime;
+  const max = points[points.length - 1]!.chartTime;
+  const spanHours = Math.max((max - min) / 3_600_000, 1);
+  const stepHours = spanHours <= 6 ? 1 : spanHours <= 12 ? 2 : 3;
+  const ticks: number[] = [];
+  // Helsinki is a whole-hour offset from UTC, so UTC hour boundaries are Helsinki hour boundaries.
+  const firstHour = Math.ceil(min / 3_600_000) * 3_600_000;
+  for (let t = firstHour; t <= max; t += 3_600_000) {
+    const hour = Number(
+      new Intl.DateTimeFormat('en-GB', { timeZone: HELSINKI_TZ, hour: '2-digit', hour12: false }).format(t)
+    );
+    if (hour % stepHours === 0) ticks.push(t);
+  }
+  return { ticks, formatTick: (t) => formatHelsinkiTime(t) };
 }
 
 /** @deprecated Use formatPortfolioChartXTickMs via computePortfolioChartXAxis */

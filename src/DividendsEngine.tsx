@@ -31,6 +31,8 @@ import {
 } from './manualDividends';
 import { DividendPayoutCalendar } from './DividendPayoutCalendar';
 import { SummaryStatCard } from './SummaryStatCard';
+import { InfoHint } from './InfoHint';
+import { loadFireInputs, FIRE_INPUTS_CHANGED_EVENT } from './fireStorage';
 import { SkeletonBarChart, SkeletonBlock, SkeletonCurrency, buildTableSkeletonRows } from './SkeletonPulse';
 import {
   dividendsHoldingsKey,
@@ -286,6 +288,16 @@ export function DividendsEngine({
   const [draftPayoutDate, setDraftPayoutDate] = useState('');
   const [manualSaveError, setManualSaveError] = useState<string | null>(null);
   const [infoLinks, setInfoLinks] = useState<Record<string, string>>(() => loadDividendInfoLinks());
+  const [dividendTaxRatePercent, setDividendTaxRatePercent] = useState(
+    () => loadFireInputs().capital.dividendTaxRatePercent
+  );
+
+  useEffect(() => {
+    const syncTax = () => setDividendTaxRatePercent(loadFireInputs().capital.dividendTaxRatePercent);
+    window.addEventListener(FIRE_INPUTS_CHANGED_EVENT, syncTax);
+    return () => window.removeEventListener(FIRE_INPUTS_CHANGED_EVENT, syncTax);
+  }, []);
+  const taxRateLabel = formatPercentFi(dividendTaxRatePercent, dividendTaxRatePercent % 1 === 0 ? 0 : 2);
   const marketPricesRef = useRef(marketPrices);
   marketPricesRef.current = marketPrices;
 
@@ -789,6 +801,20 @@ export function DividendsEngine({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SummaryStatCard
           title="Total annual dividend income"
+          info={
+            <>
+              <p>
+                <strong>Gross, before tax.</strong> For each holding: shares × its annual dividend per
+                share (from Yahoo, or your manual entry), converted to EUR at today&rsquo;s rates. The
+                monthly figure is this ÷ 12.
+              </p>
+              <p>
+                Dividend tax is <strong>not</strong> deducted here. Your tax rate ({taxRateLabel}) is set
+                under <strong>Dividend tax / withholding</strong> on the FIRE screen and is deducted in
+                the Dividend calendar and the FIRE projection.
+              </p>
+            </>
+          }
           hero={
             dividendsFetchPending ? (
               <SkeletonCurrency className="h-14 w-40" />
@@ -816,7 +842,19 @@ export function DividendsEngine({
           }
         />
         <SummaryStatCard
-          title="Average yield (blended)"
+          title="Average dividend yield"
+          info={
+            <>
+              <p>
+                Total annual dividend income ÷ today&rsquo;s value of the holdings that pay dividends.
+                Holdings without dividends (e.g. accumulating ETFs) are left out.
+              </p>
+              <p>
+                It&rsquo;s weighted by how much you hold of each payer, so larger positions count more.
+                Gross, before tax.
+              </p>
+            </>
+          }
           hero={
             dividendsFetchPending ? (
               <SkeletonCurrency className="h-14 w-28" />
@@ -913,7 +951,20 @@ export function DividendsEngine({
 
         <div className="panel min-h-[400px] h-[400px] max-h-[400px] flex flex-col overflow-hidden">
           <div className={`${SECTION_HEAD} shrink-0`}>
-            <h3 className="card-title mb-0">Dividend calendar</h3>
+            <div className="flex items-center gap-1.5 mb-2">
+              <h3 className="card-title !mb-0">Dividend calendar</h3>
+              <InfoHint label="About the dividend calendar">
+                <p>
+                  Each payment is the holding&rsquo;s annual dividend ÷ its payments per year (monthly,
+                  quarterly or annual), <strong>after {taxRateLabel} dividend tax</strong>. The rate is set
+                  under <strong>Dividend tax / withholding</strong> on the FIRE screen.
+                </p>
+                <p>
+                  Dates come from Yahoo where available; <strong>~</strong> marks an estimated date.
+                  Click a payment once it has arrived to move it to Received.
+                </p>
+              </InfoHint>
+            </div>
           </div>
           <div className="flex-1 min-h-0 flex flex-col">
             <DividendPayoutCalendar

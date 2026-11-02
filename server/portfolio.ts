@@ -3,6 +3,10 @@ import { registerDividendRoutes } from "./dividends";
 import { backfillPortfolioHistory } from "./portfolioHistoryBackfill";
 import { appRoot } from "./appRoot";
 import { getEurRates } from "./fxRates";
+import { buildPortfolioIntraday } from "./portfolioIntraday";
+import { holdingMarketValueEur } from "./holdingMarketValue";
+import { historyEntryError } from "../src/historyValidation";
+import { todayIsoDateHelsinki } from "../src/formatDate";
 import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
@@ -59,6 +63,10 @@ export function getPortfolioDb(): Database.Database {
     console.log(`[portfolio] SQLite database: ${file}`);
   }
   return db;
+}
+
+function positiveNumberOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
 }
 
 function rowToAsset(row: { id: string; payload: string }): Asset {
@@ -142,6 +150,24 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
     }
   });
 
+  app.get("/api/portfolio/intraday", async (req: Request, res: Response) => {
+    try {
+      if (!yahooFinance) return res.status(503).json({ error: "Market data unavailable" });
+      const range = req.query.range === "5D" ? "5D" : "1D";
+      const assets = (getPortfolioDb().prepare("SELECT id, payload FROM assets").all() as {
+        id: string;
+        payload: string;
+      }[]).map(rowToAsset);
+      const flows = listPortfolioFlows(getPortfolioDb());
+      const result = await buildPortfolioIntraday(yahooFinance, assets, getCashAmountEur(), new Date(), range, flows);
+      res.set("Cache-Control", "no-store");
+      res.json(result);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to build intraday series" });
+    }
+  });
+
   app.get("/api/portfolio/cash", (_req: Request, res: Response) => {
     try {
       res.set("Cache-Control", "no-store");
@@ -155,7 +181,9 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
   app.put("/api/portfolio/cash", (req: Request, res: Response) => {
     try {
       const raw = (req.body as { amountEur?: unknown }).amountEur;
-      const amount = typeof raw === "number" ? raw : parseFloat(String(raw));
+      // Strict: "12,5" is 12.5 (decimal comma), "12abc" is rejected (parseFloat would give 12).
+      const amount =
+        typeof raw === "number" ? raw : raw == null || raw === "" ? NaN : Number(String(raw).trim().replace(",", "."));
       if (!Number.isFinite(amount) || amount < 0) {
         return res.status(400).json({ error: "amountEur must be a non-negative number" });
       }
@@ -211,15 +239,19 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
 
   app.post("/api/portfolio/assets", async (req: Request, res: Response) => {
     try {
-      const body = req.body as Asset & { flowAmountEur?: number };
+      const body = req.body as Asset & { flowAmountEur?: number; transferIn?: boolean };
       const id = body.id || crypto.randomUUID();
-      const { id: _omit, flowAmountEur: _flow, ...rest } = body;
+      const { id: _omit, flowAmountEur: _flow, transferIn, ...rest } = body;
       const asset: Asset = { ...rest, id, updatedAt: rest.updatedAt || new Date().toISOString() };
       const payload = JSON.stringify(asset);
       const rates = await getEurRates(yahooFinance, [asset.currency]);
+      // Already owned: enters at today's market value (0 = unknown, falls back to cost basis).
+      const transferInValueEur = transferIn
+        ? (await holdingMarketValueEur(yahooFinance, asset, Number(asset.quantity))) ?? 0
+        : null;
       const d = getPortfolioDb();
       d.prepare("INSERT INTO assets (id, payload) VALUES (?, ?)").run(id, payload);
-      recordAssetCreateFlow(d, asset, body, rates);
+      recordAssetCreateFlow(d, asset, body, rates, transferInValueEur);
       res.status(201).json(asset);
     } catch (e) {
       console.error(e);
@@ -236,8 +268,8 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         .get(id) as { id: string; payload: string } | undefined;
       if (!row) return res.status(404).json({ error: "Asset not found" });
       const prev = JSON.parse(row.payload) as Asset;
-      const patch = req.body as Partial<Asset> & { flowAmountEur?: number };
-      const { flowAmountEur: _flow, ...assetPatch } = patch;
+      const patch = req.body as Partial<Asset> & { flowAmountEur?: number; saleValueEur?: number };
+      const { flowAmountEur: _flow, saleValueEur: _sale, ...assetPatch } = patch;
       const next: Asset = {
         ...prev,
         ...assetPatch,
@@ -245,8 +277,13 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         updatedAt: new Date().toISOString(),
       };
       const rates = await getEurRates(yahooFinance, [prev.currency, next.currency]);
+      const soldQty = Number(prev.quantity) - Number(next.quantity);
+      const soldValueEur =
+        soldQty > 0
+          ? positiveNumberOrNull(patch.saleValueEur) ?? (await holdingMarketValueEur(yahooFinance, prev, soldQty))
+          : null;
       d.prepare("UPDATE assets SET payload = ? WHERE id = ?").run(JSON.stringify(next), id);
-      recordAssetUpdateFlows(d, prev, next, patch, rates);
+      recordAssetUpdateFlows(d, prev, next, patch, rates, soldValueEur);
       res.json(next);
     } catch (e) {
       console.error(e);
@@ -254,7 +291,7 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
     }
   });
 
-  app.delete("/api/portfolio/assets/:id", (req: Request, res: Response) => {
+  app.delete("/api/portfolio/assets/:id", async (req: Request, res: Response) => {
     try {
       const d = getPortfolioDb();
       const row = d
@@ -262,9 +299,13 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
         .get(req.params.id) as { id: string; payload: string } | undefined;
       if (!row) return res.status(404).json({ error: "Asset not found" });
       const prev = JSON.parse(row.payload) as Asset;
+      const saleValueEur =
+        positiveNumberOrNull((req.body as { saleValueEur?: unknown } | undefined)?.saleValueEur) ??
+        (await holdingMarketValueEur(yahooFinance, prev, Number(prev.quantity)));
+      const rates = await getEurRates(yahooFinance, [prev.currency]);
       const r = d.prepare("DELETE FROM assets WHERE id = ?").run(req.params.id);
       if (r.changes === 0) return res.status(404).json({ error: "Asset not found" });
-      recordAssetDeleteFlow(d, prev);
+      recordAssetDeleteFlow(d, prev, saleValueEur, rates);
       res.status(204).send();
     } catch (e) {
       console.error(e);
@@ -333,9 +374,8 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
   app.post("/api/portfolio/history", (req: Request, res: Response) => {
     try {
       const { date, value } = req.body as { date: string; value: number };
-      if (!date || typeof value !== "number") {
-        return res.status(400).json({ error: "date and value required" });
-      }
+      const invalid = historyEntryError(date, value, todayIsoDateHelsinki());
+      if (invalid) return res.status(400).json({ error: invalid });
       getPortfolioDb()
         .prepare(
           `INSERT INTO history (date, value) VALUES (?, ?)

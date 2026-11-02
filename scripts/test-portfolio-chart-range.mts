@@ -4,6 +4,9 @@
  */
 import assert from "node:assert/strict";
 import {
+  buildPortfolioIntradaySeries,
+  computePortfolioIntradayXAxis,
+  computePortfolioMultiDayXAxis,
   computePortfolioChartYDomain,
   computePortfolioChartXAxis,
   filterPortfolioChartByRange,
@@ -112,5 +115,66 @@ assert.equal(
   portfolioChartTooltipLabel(portfolioChartPoint("2026-07-08", 100_000)),
   "Jul 8, 2026"
 );
+
+{
+  // 2 Nov 2026 is EET (UTC+2): 07:00Z = 09:00 Helsinki.
+  const t0 = Date.UTC(2026, 10, 2, 7, 0);
+  const intraday = {
+    date: "2026-11-02",
+    baselineEur: 1000,
+    points: [0, 1, 2, 3].map((h) => ({ t: t0 + h * 3_600_000, value: 1000 + h * 10 })),
+  };
+  const now = t0 + 3.5 * 3_600_000;
+  const rows = buildPortfolioIntradaySeries(intraday, 1050, now, "2026-11-02")!;
+  assert.equal(rows.length, 5, "intraday: live total appended when the session is today");
+  assert.equal(rows[4]!.value, 1050);
+  assert.equal(rows[4]!.chartTime, now);
+  assert.equal(
+    buildPortfolioIntradaySeries(intraday, 1050, now, "2026-11-03")!.length,
+    4,
+    "intraday: no live point when showing a previous session"
+  );
+  assert.equal(buildPortfolioIntradaySeries(null, 1050, now), null);
+
+  const axis = computePortfolioIntradayXAxis(rows);
+  // Separator is locale-dependent ("09.00" in fi-FI browsers, "09:00" in some Node builds).
+  assert.deepEqual(
+    axis.ticks.map((t) => axis.formatTick(t).replace(":", ".")),
+    ["09.00", "10.00", "11.00", "12.00"],
+    "intraday ticks: hourly Helsinki time for a short session"
+  );
+  assert.match(portfolioChartTooltipLabel(rows[1]!), /10[.:]00$/);
+}
+
+{
+  // 5D: Fri 30 Oct (EET from 25 Oct) and Mon 2 Nov, two bars each; weekend skipped.
+  const fri = Date.UTC(2026, 9, 30, 7, 0);
+  const mon = Date.UTC(2026, 10, 2, 7, 0);
+  const intraday = {
+    date: "2026-11-02",
+    days: ["2026-10-30", "2026-11-02"],
+    baselineEur: 1000,
+    points: [
+      { t: fri, value: 1000 },
+      { t: fri + 1_800_000, value: 1010 },
+      { t: mon, value: 1020 },
+      { t: mon + 1_800_000, value: 1030 },
+    ],
+  };
+  const rows = buildPortfolioIntradaySeries(intraday, 1040, mon + 7_200_000, "2026-11-02", {
+    compressTime: true,
+  })!;
+  assert.deepEqual(
+    rows.map((r) => r.chartTime),
+    [0, 1, 2, 3, 4],
+    "5D: bar index as chart time, so nights and weekends take no space"
+  );
+  assert.deepEqual(rows.map((r) => r.date), ["2026-10-30", "2026-10-30", "2026-11-02", "2026-11-02", "2026-11-02"]);
+
+  const axis = computePortfolioMultiDayXAxis(rows);
+  assert.deepEqual(axis.ticks, [0, 2], "5D ticks: first bar of each day");
+  assert.match(axis.formatTick(0), /Fri/);
+  assert.match(axis.formatTick(2), /Mon/);
+}
 
 console.log("OK: portfolio chart range tests passed.");

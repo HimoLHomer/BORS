@@ -6,6 +6,7 @@ import { formatDecimalEn, formatDecimalInputEn, parseDecimalInput } from './form
 import { todayIsoDateHelsinki } from './formatDate';
 import { EurAmountInput } from './EurAmountField';
 import { ThemeDatePicker } from './ThemeDatePicker';
+import { historyEntryError } from './historyValidation';
 
 export const HistoryPointModal = ({
   modal,
@@ -27,12 +28,9 @@ export const HistoryPointModal = ({
 
   const save = async () => {
     const val = parseDecimalInput(valueStr, NaN);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      setErr('Use date format YYYY-MM-DD');
-      return;
-    }
-    if (!Number.isFinite(val)) {
-      setErr('Enter a valid number');
+    const invalid = historyEntryError(dateStr, val, todayIsoDateHelsinki());
+    if (invalid) {
+      setErr(invalid);
       return;
     }
     setBusy(true);

@@ -101,7 +101,7 @@ function effectiveManualDenominatorEur(
   return null;
 }
 
-/** Same formula as Dividends Engine “Average yield (blended)” card — only dividend-paying lines in the API denominator. */
+/** Same formula as Dividends Engine “Average dividend yield” card — only dividend-paying lines in the API denominator. */
 export function computeBlendedYieldSummary(
   assets: Asset[],
   rows: DividendRowForYield[],

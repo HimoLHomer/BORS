@@ -7,7 +7,7 @@ import { useFiDecimalDraft } from './useFiDecimalDraft';
 import {
   FIRE_HORIZON_YEARS,
   findFinancialIndependenceYearIndex,
-  independenceGoalFromProjection,
+  independenceCapitalNeeded,
   monthlyExpensesTotal,
   projectFireYears,
   type FireCapitalInputs,
@@ -22,6 +22,7 @@ import {
   type FireMonthlySaving,
 } from './fireStorage';
 import { EurAmountField, EUR_AMOUNT_INPUT_PAD } from './EurAmountField';
+import { InfoHint } from './InfoHint';
 import { DataListTable } from './DataListTable';
 import {
   isFireGoalCelebratedThisSession,
@@ -47,7 +48,10 @@ function FireNumInput({
   readOnly,
   groupThousands = true,
   emptyWhenZero = false,
+  info,
 }: {
+  /** Optional explanation shown from an "i" icon next to the label. */
+  info?: React.ReactNode;
   label: string;
   value: number;
   onChange?: (n: number) => void;
@@ -68,7 +72,14 @@ function FireNumInput({
 
   return (
     <label className="block">
-      <span className={LABEL}>{label}</span>
+      {info ? (
+        <span className="mb-1 flex items-center gap-1.5">
+          <span className="micro-label">{label}</span>
+          <InfoHint label={`About ${label}`}>{info}</InfoHint>
+        </span>
+      ) : (
+        <span className={LABEL}>{label}</span>
+      )}
       <div className="relative">
         {suffix === '€' ? (
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-s/55 text-xs font-mono font-bold pointer-events-none select-none">
@@ -209,7 +220,11 @@ export function FireProjection({
   );
 
   const fiYearIndex = findFinancialIndependenceYearIndex(projection);
-  const independenceCapital = independenceGoalFromProjection(projection);
+  const independenceCapital = independenceCapitalNeeded(
+    monthlyTotal,
+    effectiveYield,
+    stored.capital.dividendTaxRatePercent
+  );
   const fiRow = fiYearIndex >= 0 ? projection[fiYearIndex] : null;
 
   const startAgeUnset = stored.capital.startAge === 0;
@@ -342,7 +357,19 @@ export function FireProjection({
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="panel lg:col-span-1 flex flex-col gap-3">
-          <h3 className="card-title mb-0">Independence goal</h3>
+          <div className="flex items-center gap-1.5 mb-2">
+            <h3 className="card-title !mb-0">Independence goal</h3>
+            <InfoHint label="About the independence goal">
+              <p>
+                <strong>Capital needed for net dividends to cover your expenses:</strong> annual expenses ÷
+                (target dividend yield × (1 − dividend tax)).
+              </p>
+              <p>
+                The bar shows your portfolio against it; the projection below finds the year your portfolio
+                reaches it.
+              </p>
+            </InfoHint>
+          </div>
 
           <p
             className="font-mono text-2xl font-black tabular-nums tracking-tighter leading-snug"
@@ -353,7 +380,7 @@ export function FireProjection({
             ) : (
               <span className="text-text-p">{formatCurrency(currentPortfolioEur, 'EUR')}</span>
             )}
-            {!portfolioMetricsLoading && fiRow && independenceCapital > 0 ? (
+            {!portfolioMetricsLoading && independenceCapital > 0 ? (
               <>
                 <span className="text-text-s/25 font-bold"> / </span>
                 <span className="text-text-s/55">{formatCurrency(independenceCapital, 'EUR')}</span>
@@ -366,7 +393,7 @@ export function FireProjection({
               <SkeletonBlock className="flex-1 h-1.5 rounded-full" />
               <SkeletonBlock className="h-3 w-10 shrink-0" />
             </div>
-          ) : fiRow && independenceCapital > 0 ? (
+          ) : independenceCapital > 0 ? (
             <div className="flex items-center gap-2.5">
               <div className="flex-1 h-1.5 bg-border/60 rounded-full overflow-hidden">
                 <div
@@ -414,7 +441,21 @@ export function FireProjection({
               suffix="%"
             />
             <FireNumInput
-              label="Average yield (blended)"
+              label="Target dividend yield"
+              info={
+                <>
+                  <p>
+                    The dividend yield you aim for the portfolio to pay <strong>once you live off
+                    dividends</strong>, i.e. after reaching the capital needed for FIRE. It&rsquo;s a target,
+                    not your current yield (see Average dividend yield on the Dividend engine).
+                  </p>
+                  <p>
+                    It sets the <strong>Independence goal</strong>: the capital whose dividends, after the
+                    tax set here, cover your annual expenses. The projection applies it to each year&rsquo;s
+                    portfolio value to find when you get there.
+                  </p>
+                </>
+              }
               value={stored.capital.blendedYieldPercent}
               onChange={(n) => setCapital({ blendedYieldPercent: n })}
               suffix="%"

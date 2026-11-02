@@ -91,7 +91,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
   onPersist: (
     asset: Asset,
     isEdit: boolean,
-    opts?: { flowAmountEur?: number }
+    opts?: { flowAmountEur?: number; transferIn?: boolean }
   ) => Promise<void>,
   editAsset?: Asset,
   exchangeRates: Record<string, number>,
@@ -113,6 +113,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
   const [purchaseAddCurrency, setPurchaseAddCurrency] = useState(
     editAsset?.currency || 'EUR'
   );
+  const [alreadyOwned, setAlreadyOwned] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
@@ -196,9 +197,11 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
     setIsSubmitting(true);
     setError(null);
     try {
-      const opts: { flowAmountEur?: number } = {};
+      const opts: { flowAmountEur?: number; transferIn?: boolean } = {};
       // Flow amounts must be EUR. Without a rate, send no hint and let the server convert.
-      if (!editAsset) {
+      if (!editAsset && alreadyOwned) {
+        opts.transferIn = true;
+      } else if (!editAsset) {
         const cost = newAsset.quantity * newAsset.averagePrice;
         const fx = fxToEur(newAsset.currency, exchangeRates);
         const flowAmountEur = cost * fx;
@@ -597,7 +600,23 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           </div>
           </div>
 
-          <button 
+          {!editAsset ? (
+            <label className="flex items-start gap-3 rounded-xl border border-border/50 bg-bg/30 px-4 py-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+                checked={alreadyOwned}
+                onChange={(e) => setAlreadyOwned(e.target.checked)}
+              />
+              <span className="text-[11px] leading-relaxed text-text-s">
+                <span className="block font-bold text-text-p">I already owned this before today</span>
+                Counts it at today&rsquo;s market value instead of as a new purchase, so its past gain or
+                loss isn&rsquo;t shown as today&rsquo;s or this period&rsquo;s return.
+              </span>
+            </label>
+          ) : null}
+
+          <button
             type="submit"
             disabled={isSubmitting}
             className="w-full shrink-0 py-5 bg-accent hover:bg-accent/90 disabled:opacity-50 text-white font-black uppercase tracking-[0.2em] text-[11px] rounded-xl transition-all shadow-xl shadow-accent/20 active:scale-[0.98] mt-4 flex items-center justify-center gap-3"
