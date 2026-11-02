@@ -83,6 +83,10 @@ import { NavButton } from './AppNav';
 import { apiHoldingKey, forgetTrackedHoldings } from './dividendRedemptions';
 import { AddAssetModal } from './AddAssetModal';
 
+/** Delay before saving today's total after a holding or cash change. */
+const HISTORY_SAVE_DEBOUNCE_MS = 2000;
+/** Minimum spacing between saves when only quotes/FX moved the total. */
+const HISTORY_PRICE_SAVE_INTERVAL_MS = 60_000;
 
 // --- Main App Logic ---
 
@@ -741,34 +745,91 @@ export default function App() {
     return !portfolioValuationReady;
   }, [assets.length, apiStatus, portfolioValuationReady]);
 
-  /** Persist today's total once FX/quotes are ready; upsert if an early save was wrong. */
+  /**
+   * Changes that alter the total by themselves (holdings added/edited/removed, cash) — saved
+   * promptly. Anything else that moves the total (quotes, FX) is saved on a throttle.
+   */
+  const historySaveStructureKey = useMemo(
+    () => `${assets.map((a) => `${a.id ?? a.symbol}:${a.quantity}:${a.averagePrice}`).join('|')}#${cashLineEur}`,
+    [assets, cashLineEur]
+  );
+
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const portfolioValuationReadyRef = useRef(portfolioValuationReady);
+  portfolioValuationReadyRef.current = portfolioValuationReady;
+  const historySaveStructureKeyRef = useRef(historySaveStructureKey);
+  historySaveStructureKeyRef.current = historySaveStructureKey;
+  const lastHistorySaveRef = useRef<{ at: number; structureKey: string | null }>({ at: 0, structureKey: null });
+
+  /** Today's total if it differs from what is stored, else null. */
+  const pendingTodayHistoryValue = useCallback((): { date: string; value: number } | null => {
+    if (!portfolioValuationReadyRef.current) return null;
+    const value = statsTotalValueRef.current;
+    if (!(value > 0)) return null;
+    const date = todayIsoDateHelsinki();
+    const stored = historyRef.current.find((p) => p.date === date);
+    if (stored && Math.abs(stored.value - value) <= 0.01) return null;
+    return { date, value };
+  }, []);
+
+  const saveTodayHistory = useCallback(async () => {
+    const pending = pendingTodayHistoryValue();
+    lastHistorySaveRef.current = { at: Date.now(), structureKey: historySaveStructureKeyRef.current };
+    if (!pending) return;
+    try {
+      const res = await fetch('/api/portfolio/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pending),
+      });
+      if (!res.ok) throw new Error('History write failed');
+      const list: HistoryPoint[] = await fetch('/api/portfolio/history').then((r) => r.json());
+      setHistory(dedupeHistoryByDate(list));
+      portfolioMutationEpochRef.current += 1;
+    } catch (e) {
+      console.error('History sync failed', e);
+    }
+  }, [pendingTodayHistoryValue]);
+
+  /**
+   * Keep today's stored total current so it is the real close when the day rolls over:
+   * holding/cash edits save after 2 s, price/FX drift at most once per minute.
+   */
   useEffect(() => {
     if (!portfolioValuationReady) return;
-    const today = todayIsoDateHelsinki();
     if (statsTotalValueRef.current <= 0) return;
-
-    const t = window.setTimeout(async () => {
-      const val = statsTotalValueRef.current;
-      if (val <= 0) return;
-      const storedToday = history.find((p) => p.date === today);
-      if (storedToday && Math.abs(storedToday.value - val) <= 0.01) return;
-
-      try {
-        const res = await fetch('/api/portfolio/history', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date: today, value: val }),
-        });
-        if (!res.ok) throw new Error('History write failed');
-        const list: HistoryPoint[] = await fetch('/api/portfolio/history').then((r) => r.json());
-        setHistory(dedupeHistoryByDate(list));
-        portfolioMutationEpochRef.current += 1;
-      } catch (e) {
-        console.error('History sync failed', e);
-      }
-    }, 2000);
+    const structural = lastHistorySaveRef.current.structureKey !== historySaveStructureKey;
+    const sinceLast = Date.now() - lastHistorySaveRef.current.at;
+    const delay = structural
+      ? HISTORY_SAVE_DEBOUNCE_MS
+      : Math.max(HISTORY_SAVE_DEBOUNCE_MS, HISTORY_PRICE_SAVE_INTERVAL_MS - sinceLast);
+    const t = window.setTimeout(() => void saveTodayHistory(), delay);
     return () => window.clearTimeout(t);
-  }, [history, portfolioValuationReady, assets.length, cashLineEur]);
+  }, [history, portfolioValuationReady, historySaveStructureKey, stats.totalValue, saveTodayHistory]);
+
+  /** Final save when the tab is hidden or closed, so a throttled update is not lost. */
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingTodayHistoryValue();
+      if (!pending) return;
+      void fetch('/api/portfolio/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pending),
+        keepalive: true,
+      }).catch(() => {});
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [pendingTodayHistoryValue]);
 
   const runHistoryBackfill = useCallback(async () => {
     setHistoryBackfillBusy(true);
