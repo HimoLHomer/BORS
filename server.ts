@@ -12,7 +12,8 @@ if (userDataDir) {
   dotenv.config({ path: path.join(userDataDir, ".env.local"), override: true });
 }
 import { registerPortfolioRoutes } from "./server/portfolio";
-import { yahooFinance } from "./server/yahooClient";
+import { rememberEurRates } from "./server/fxRates";
+import { resetYahooSession, yahooFinance } from "./server/yahooClient";
 import {
   onMarketConstituentsSynced,
   startDailyConstituentSyncIfNeeded,
@@ -108,6 +109,8 @@ async function startServer() {
         console.error(`Yahoo Finance health probe failed (${symbol}):`, error);
       }
     }
+    // Drop any cached failed crumb/cookie session so the next check starts fresh.
+    await resetYahooSession().catch(() => {});
     res.status(503).json({ status: "disconnected", error: lastErr });
   });
 
@@ -202,6 +205,7 @@ async function startServer() {
           })
       );
 
+      rememberEurRates(rates);
       res.json({ quotes: results, rates });
     } catch (error) {
       res.status(500).json({ error: "Batch fetch failed" });
