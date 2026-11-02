@@ -131,15 +131,6 @@ export default function App() {
   const [holdingsStaggerKey, setHoldingsStaggerKey] = useState(0);
   const importBackupRef = useRef<HTMLInputElement>(null);
   const [backupNote, setBackupNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
-  /** True when the server requires a password (hosted); shows Sign out in Options. */
-  const [authEnabled, setAuthEnabled] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/auth/status', { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((s: { enabled?: boolean } | null) => setAuthEnabled(Boolean(s?.enabled)))
-      .catch(() => {});
-  }, []);
   /** Bumped after server-backed portfolio writes so a slow initial bootstrap refetch cannot clobber newer state. */
   const portfolioMutationEpochRef = useRef(0);
   /** After first SQLite UI-prefs hydrate (or failed fetch); enables debounced PUT without clobbering server before read. */
@@ -1874,18 +1865,6 @@ export default function App() {
                           </button>
                         </div>
                       )}
-                      {authEnabled ? (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await fetch('/api/auth/logout', { method: 'POST' });
-                            window.location.href = '/login';
-                          }}
-                          className="btn-secondary w-full justify-center py-2.5 mt-4"
-                        >
-                          Sign out
-                        </button>
-                      ) : null}
                     </div>
 
                     <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">

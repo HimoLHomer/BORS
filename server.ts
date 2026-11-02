@@ -12,7 +12,6 @@ if (userDataDir) {
   dotenv.config({ path: path.join(userDataDir, ".env.local"), override: true });
 }
 import { registerPortfolioRoutes } from "./server/portfolio";
-import { registerAuth } from "./server/auth";
 import { rememberEurRates } from "./server/fxRates";
 import { resetYahooSession, yahooFinance } from "./server/yahooClient";
 import {
@@ -59,9 +58,6 @@ async function startServer() {
       next();
     });
   }
-
-  // Password login when BORS_PASSWORD_HASH is set (hosted); must run before every other route.
-  registerAuth(app);
 
   // Add middleware to parse JSON
   app.use(express.json());
