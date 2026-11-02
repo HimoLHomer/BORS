@@ -7,7 +7,12 @@ export const ALLOCATION_PIE_CHART_MARGIN = {
   bottom: 12,
   left: 12,
 } as const;
-export const ALLOCATION_PIE_PADDING_ANGLE = 1.2;
+/**
+ * No gaps between slices: padding is subtracted from the circle before slices are sized,
+ * which shrinks large slices (12 × 1.2° made a 76% slice look like 73%). Slice strokes
+ * provide the separation instead.
+ */
+export const ALLOCATION_PIE_PADDING_ANGLE = 0;
 export const ALLOCATION_PIE_OUTER_RADIUS_FRAC = 0.84 * PIE_SIZE_SCALE;
 export const ALLOCATION_PIE_BASE_START_ANGLE = 90;
 export const ALLOCATION_PIE_BASE_END_ANGLE = -270;
