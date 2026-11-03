@@ -4,10 +4,10 @@ const EUR_ICON_CLASS =
   'absolute left-3 top-1/2 -translate-y-1/2 text-text-s/55 text-xs font-mono font-bold pointer-events-none select-none';
 
 const EUR_ICON_COMPACT =
-  'absolute left-2 top-1/2 -translate-y-1/2 text-text-s/55 text-[10px] font-mono font-bold pointer-events-none select-none';
+  'absolute left-2 top-1/2 -translate-y-1/2 text-text-s/55 text-[11px] font-mono font-bold pointer-events-none select-none';
 
 const EUR_INPUT_BASE =
-  'w-full bg-bg/50 border border-border rounded-xl text-text-p font-mono focus:outline-none focus:border-accent/50 tabular-nums';
+  'w-full bg-bg/50 border border-border rounded-lg text-text-p font-mono focus:outline-none focus:border-accent/50 tabular-nums';
 
 const EUR_INPUT_COMPACT_BASE =
   'w-full bg-bg/50 border border-border rounded-lg text-text-p font-mono focus:outline-none focus:border-accent/50 tabular-nums box-border leading-none';

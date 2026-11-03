@@ -209,3 +209,57 @@ export async function buildPortfolioIntraday(
 
   return remember({ date, days, points, baselineEur: Math.round(baselineEur * 100) / 100 });
 }
+
+/* ------------------------------------------------------------------ */
+/* Per-holding sparklines (Holdings table)                             */
+/* ------------------------------------------------------------------ */
+
+export type HoldingSparkline = {
+  /** Prices through the holding's latest trading day (downsampled), in its quote currency. */
+  points: number[];
+  /** Close before that day, for the up/down colour and a baseline. */
+  previousClose: number | null;
+};
+
+const SPARKLINE_POINTS = 48;
+let sparklineCache: { key: string; at: number; result: Record<string, HoldingSparkline> } | null = null;
+
+function downsample(values: number[], max: number): number[] {
+  if (values.length <= max) return values;
+  const out: number[] = [];
+  for (let i = 0; i < max; i++) out.push(values[Math.round((i * (values.length - 1)) / (max - 1))]!);
+  return out;
+}
+
+/** Each holding's 5-minute prices for its own latest trading day. */
+export async function buildHoldingSparklines(
+  yahooFinance: YahooClient,
+  symbols: string[],
+  now: Date = new Date()
+): Promise<Record<string, HoldingSparkline>> {
+  const unique = [...new Set(symbols.map((s) => s.trim()).filter(Boolean))].sort();
+  const key = unique.join("|");
+  if (sparklineCache && sparklineCache.key === key && now.getTime() - sparklineCache.at < CACHE_TTL_MS) {
+    return sparklineCache.result;
+  }
+  const series = await Promise.all(unique.map((s) => fetchBars(yahooFinance, s, now, "1D")));
+  const result: Record<string, HoldingSparkline> = {};
+  unique.forEach((symbol, i) => {
+    const { bars, previousClose } = series[i]!;
+    const last = bars[bars.length - 1];
+    if (!last) return;
+    const day = isoDateFromTimestampHelsinki(last.t);
+    const dayBars = bars.filter((b) => isoDateFromTimestampHelsinki(b.t) === day);
+    const before = bars.filter((b) => isoDateFromTimestampHelsinki(b.t)! < day!);
+    if (dayBars.length < 2) return;
+    result[symbol] = {
+      points: downsample(
+        dayBars.map((b) => b.close),
+        SPARKLINE_POINTS
+      ),
+      previousClose: before[before.length - 1]?.close ?? previousClose,
+    };
+  });
+  sparklineCache = { key, at: now.getTime(), result };
+  return result;
+}

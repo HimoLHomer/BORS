@@ -83,7 +83,7 @@ export const HistoryPointModal = ({
         className="glass-panel p-8 w-full max-w-md border-border bg-card/80 shadow-2xl"
       >
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-black uppercase tracking-tight text-text-p">
+          <h3 className="text-lg font-semibold tracking-tight text-text-p">
             {modal.type === 'edit' ? 'Edit history row' : 'Add history row'}
           </h3>
           <button
@@ -97,18 +97,18 @@ export const HistoryPointModal = ({
 
         <div className="space-y-4">
           <div>
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">Date</label>
+            <label className="text-xs font-medium text-text-s block mb-2">Date</label>
             <ThemeDatePicker
               value={dateStr}
               onChange={setDateStr}
               disabled={modal.type === 'edit'}
             />
             {modal.type === 'edit' && (
-              <p className="text-[9px] text-text-s mt-1.5 opacity-70">Date cannot be changed; delete and re-add if needed.</p>
+              <p className="text-[11px] text-text-s mt-1.5 opacity-70">Date cannot be changed; delete and re-add if needed.</p>
             )}
           </div>
           <div>
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest block mb-2">
+            <label className="text-xs font-medium text-text-s block mb-2">
               Total portfolio value (EUR)
             </label>
             <EurAmountInput
@@ -119,7 +119,7 @@ export const HistoryPointModal = ({
             />
           </div>
           {err && (
-            <p className="text-[10px] text-red font-bold uppercase tracking-widest">{err}</p>
+            <p className="text-xs text-red font-medium">{err}</p>
           )}
         </div>
 
@@ -128,7 +128,7 @@ export const HistoryPointModal = ({
             type="button"
             disabled={busy}
             onClick={save}
-            className="flex-1 min-w-[120px] py-3 bg-accent text-white rounded-xl font-black uppercase tracking-widest text-[10px] disabled:opacity-50"
+            className="flex-1 min-w-[120px] py-3 bg-accent text-white rounded-lg font-semibold text-xs disabled:opacity-50"
           >
             {busy ? 'Saving…' : 'Save'}
           </button>
@@ -137,7 +137,7 @@ export const HistoryPointModal = ({
               type="button"
               disabled={busy}
               onClick={remove}
-              className="px-4 py-3 rounded-xl border border-red/40 text-red font-black uppercase tracking-widest text-[10px] hover:bg-red/10 disabled:opacity-50"
+              className="px-4 py-3 rounded-lg border border-red/40 text-red font-semibold text-xs hover:bg-red/10 disabled:opacity-50"
             >
               Delete
             </button>

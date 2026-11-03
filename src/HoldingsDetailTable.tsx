@@ -20,7 +20,7 @@ export function HoldingsDetailTable({
 }) {
   return (
     <div className="-mx-2 px-2 text-xs font-mono">
-      <div className="holdings-detail-grid px-2 py-2 text-[9px] font-bold text-text-s uppercase tracking-wide opacity-50">
+      <div className="holdings-detail-grid px-2 py-2 text-xs font-medium text-text-s">
         <div>Asset</div>
         <div className="text-right">Est. income</div>
         <div className="text-right">Yield</div>

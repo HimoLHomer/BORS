@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { formatCurrency } from './formatCurrency';
 import { SkeletonBlock, SkeletonCurrency } from './SkeletonPulse';
 import { formatNumberFi, formatPercentFi } from './formatNumber';
@@ -32,11 +32,11 @@ import {
 import { playFireGoalChime } from './uiFeedback';
 
 const INPUT =
-  'w-full bg-bg/50 border border-border rounded-xl px-3 py-2 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums';
+  'w-full bg-bg/50 border border-border rounded-lg px-3 py-2 text-text-p font-mono text-sm focus:outline-none focus:border-accent/50 tabular-nums';
 const LABEL = 'micro-label block mb-1';
 const INLINE_INPUT =
-  'bg-bg/50 border border-border rounded-md px-2 py-1.5 text-xs font-sans focus:outline-none focus:border-accent/40';
-const ENTRY_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_5.5rem_1.75rem] gap-2 items-center';
+  'bg-bg/50 border border-border rounded-lg px-2.5 py-1.5 text-sm font-sans focus:outline-none focus:border-accent/40';
+const ENTRY_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_7rem_1.75rem] gap-2 items-center';
 const ENTRY_GROUP = 'rounded-lg border border-border/40 bg-bg/25 px-3 py-2.5';
 
 /**
@@ -179,8 +179,8 @@ function ExpenseAmountInput({
 
   return (
     <EurAmountField
-      className={className || 'w-[5.5rem] shrink-0'}
-      iconClassName="absolute left-2 top-1/2 -translate-y-1/2 text-text-s/55 text-[10px] font-sans font-bold pointer-events-none select-none"
+      className={className || 'w-[7rem] shrink-0'}
+      iconClassName="absolute left-2 top-1/2 -translate-y-1/2 text-text-s/55 text-[11px] font-sans font-bold pointer-events-none select-none"
       inputPadClassName="pl-7"
     >
       <input
@@ -316,6 +316,18 @@ export function FireProjection({
   }, [stored.monthlySavings, annualSavingsGoalEur]);
 
   const [celebratingYear, setCelebratingYear] = useState<string | null>(null);
+
+  /** Savings years the user toggled; by default only the newest year is open. */
+  const [toggledYears, setToggledYears] = useState<Set<string>>(() => new Set());
+  const newestYear = savingsByYear[0]?.year;
+  const isYearOpen = (year: string) => (year === newestYear) !== toggledYears.has(year);
+  const toggleYear = (year: string) =>
+    setToggledYears((prev) => {
+      const next = new Set(prev);
+      if (next.has(year)) next.delete(year);
+      else next.add(year);
+      return next;
+    });
   const savingsGoalMetInitRef = useRef(false);
   const prevGoalMetYearsRef = useRef<Set<string>>(new Set());
 
@@ -377,7 +389,7 @@ export function FireProjection({
         <h2 className="page-title">FIRE projection</h2>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="panel lg:col-span-1 flex flex-col gap-3">
+        <div className="panel panel-glow lg:col-span-1 flex flex-col gap-3">
           <div className="flex items-center gap-1.5 mb-2">
             <h3 className="card-title !mb-0">Independence goal</h3>
             <InfoHint label="About the independence goal">
@@ -393,7 +405,7 @@ export function FireProjection({
           </div>
 
           <p
-            className="font-mono text-2xl font-black tabular-nums tracking-tighter leading-snug"
+            className="stat-value text-[30px] leading-snug"
             aria-busy={portfolioMetricsLoading}
           >
             {portfolioMetricsLoading ? (
@@ -401,13 +413,12 @@ export function FireProjection({
             ) : (
               <span className="text-text-p">{formatCurrency(currentPortfolioEur, 'EUR')}</span>
             )}
-            {!portfolioMetricsLoading && independenceCapital > 0 ? (
-              <>
-                <span className="text-text-s/25 font-bold"> / </span>
-                <span className="text-text-s/55">{formatCurrency(independenceCapital, 'EUR')}</span>
-              </>
-            ) : null}
           </p>
+          {!portfolioMetricsLoading && independenceCapital > 0 ? (
+            <p className="-mt-1 text-[13px] text-text-s tabular-nums">
+              of <span className="font-semibold text-text-p">{formatCurrency(independenceCapital, 'EUR')}</span> needed
+            </p>
+          ) : null}
 
           {portfolioMetricsLoading ? (
             <div className="flex items-center gap-2.5" aria-hidden>
@@ -428,7 +439,7 @@ export function FireProjection({
               </div>
               <span
                 className={`text-xs font-mono font-bold tabular-nums shrink-0 ${
-                  independenceReached ? 'text-green' : 'text-accent'
+                  independenceReached ? 'text-green' : 'text-text-p'
                 }`}
               >
                 {formatPercentFi(progressPct, 1)}
@@ -438,18 +449,18 @@ export function FireProjection({
 
           <div className="pt-3 border-t border-border/40">
             {monthlyTotal <= 0 ? (
-              <p className="text-[11px] text-text-s/60 uppercase tracking-widest leading-relaxed">
+              <p className="text-xs text-text-s/60 leading-relaxed">
                 Add your monthly expenses to estimate time to FIRE
               </p>
             ) : fiRow ? (
-              <p className="text-[11px] text-green font-bold uppercase tracking-widest">
+              <p className="text-xs text-green font-medium">
                 Estimated time to FIRE:{' '}
                 {fiYearIndex === 0
                   ? 'now'
                   : `${fiYearIndex} ${fiYearIndex === 1 ? 'year' : 'years'}`}
               </p>
             ) : (
-              <p className="text-[11px] text-text-s/50 uppercase tracking-widest leading-relaxed">
+              <p className="text-xs text-text-s/50 leading-relaxed">
                 Not reached within {FIRE_HORIZON_YEARS} years at current inputs
               </p>
             )}
@@ -529,7 +540,7 @@ export function FireProjection({
               <Plus className="w-3 h-3" /> Add
             </button>
           </div>
-          <div className="space-y-3 max-h-[320px] overflow-y-auto">
+          <div className="space-y-3">
             {stored.expenses.length === 0 ? (
               <p className="text-text-s/50 text-xs font-sans py-4 text-center">No entries yet</p>
             ) : (
@@ -567,13 +578,13 @@ export function FireProjection({
           <div className="mt-4 pt-3 border-t border-border/50 space-y-1">
             <div className="flex justify-between gap-4">
               <span className="micro-label mb-0">Total monthly</span>
-              <span className="text-[10px] font-sans font-bold tabular-nums text-text-p">
+              <span className="text-[11px] font-sans font-bold tabular-nums text-text-p">
                 {formatCurrency(monthlyTotal, 'EUR')}
               </span>
             </div>
             <div className="flex justify-between gap-4">
               <span className="micro-label mb-0">Annual expenses</span>
-              <span className="text-[10px] font-sans font-bold tabular-nums text-text-p">
+              <span className="text-[11px] font-sans font-bold tabular-nums text-text-p">
                 {formatCurrency(annualExpenses, 'EUR')}
               </span>
             </div>
@@ -591,7 +602,7 @@ export function FireProjection({
               <Plus className="w-3 h-3" /> Add
             </button>
           </div>
-          <div className="space-y-3 max-h-[320px] overflow-y-auto">
+          <div className="space-y-3">
             {savingsByYear.length === 0 && draftSavings.length === 0 ? (
               <p className="text-text-s/50 text-xs font-mono py-4 text-center">No entries yet</p>
             ) : (
@@ -602,7 +613,7 @@ export function FireProjection({
                     {draftSavings.map((row) => (
                       <div
                         key={row.id}
-                        className="grid grid-cols-[7.25rem_5.5rem_1.75rem] gap-2 items-center w-full"
+                        className="grid grid-cols-[7.25rem_7rem_1.75rem] gap-2 items-center w-full"
                       >
                         <MonthYearInput
                           value={row.month}
@@ -633,8 +644,17 @@ export function FireProjection({
                   key={year}
                   className={`${ENTRY_GROUP}${celebratingYear === year ? ' fire-goal-celebrate' : ''}`}
                 >
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <span className="text-[10px] font-black text-text-p uppercase tracking-widest">
+                  <button
+                    type="button"
+                    onClick={() => toggleYear(year)}
+                    aria-expanded={isYearOpen(year)}
+                    className="flex w-full items-center justify-between gap-3 mb-2 text-left"
+                  >
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-text-p">
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 text-text-s transition-transform ${isYearOpen(year) ? '' : '-rotate-90'}`}
+                        aria-hidden
+                      />
                       {year}
                     </span>
                     {annualSavingsGoalEur > 0 ? (
@@ -650,7 +670,7 @@ export function FireProjection({
                         {formatCurrency(total, 'EUR')}
                       </span>
                     )}
-                  </div>
+                  </button>
                   {annualSavingsGoalEur > 0 ? (
                     <div className="h-1 bg-border/60 rounded-full overflow-hidden mb-2.5">
                       <div
@@ -661,11 +681,12 @@ export function FireProjection({
                       />
                     </div>
                   ) : null}
+                  {isYearOpen(year) ? (
                   <div className="space-y-1.5">
                     {rows.map((row) => (
                       <div
                         key={row.id}
-                        className="grid grid-cols-[7.25rem_5.5rem_1.75rem] gap-2 items-center w-full"
+                        className="grid grid-cols-[7.25rem_7rem_1.75rem] gap-2 items-center w-full"
                       >
                         <MonthYearInput
                           value={row.month}
@@ -689,6 +710,7 @@ export function FireProjection({
                       </div>
                     ))}
                   </div>
+                  ) : null}
                 </section>
               ))}
               </>

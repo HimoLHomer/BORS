@@ -82,7 +82,7 @@ export function DataListTable({
             <tr
               className={
                 headerRowClassName ??
-                'text-[9px] font-bold text-text-s uppercase tracking-[0.2em] opacity-50'
+                'text-xs font-medium text-text-s'
               }
             >
               {columns.map((c) => (

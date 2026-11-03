@@ -78,7 +78,6 @@ type DividendsPayload = {
   averagePortfolioYieldPercent: number;
 };
 
-const BAR_COLOR = 'var(--color-accent)';
 
 const SECTION_HEAD = 'flex items-center justify-between mb-2 gap-2';
 
@@ -123,11 +122,11 @@ function sourceBadge(kind: 'api' | 'manual') {
   const label = kind === 'api' ? 'Feed' : 'Manual';
   const cls =
     kind === 'api'
-      ? 'text-accent/90 bg-accent/10 border-accent/25'
-      : 'text-text-s/80 bg-white/5 border-border/60';
+      ? 'text-text-p bg-white/10 border-border'
+      : 'text-text-s bg-white/5 border-border/60';
   return (
     <span
-      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[8px] font-bold uppercase tracking-widest ${cls}`}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-medium ${cls}`}
     >
       {label}
     </span>
@@ -648,12 +647,12 @@ export function DividendsEngine({
     }
     if (!data && assets.length > 0) {
       return (
-        <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">No data.</p>
+        <p className="text-text-s opacity-50 text-xs font-medium">No data.</p>
       );
     }
     if (!hasAnyDividendDisplay && !loading) {
       return (
-        <p className="text-text-s opacity-50 text-[10px] uppercase tracking-widest font-bold">
+        <p className="text-text-s opacity-50 text-xs font-medium">
           {assets.length === 0 && manualRows.length === 0
             ? 'No holdings or manual rows.'
             : 'No Yahoo dividend feed for these holdings — add a manual estimate or link a listing with feed data (e.g. .MI for UCITS ETFs).'}
@@ -696,7 +695,7 @@ export function DividendsEngine({
             ),
           income: formatCurrency(row.estimatedAnnualIncomeEur, 'EUR'),
           freq: (
-            <span className="text-text-s/50 text-[11px] uppercase tracking-wider">
+            <span className="text-text-s/50 text-xs">
               {row.payoutFrequency ? frequencyLabel(row.payoutFrequency) : '—'}
             </span>
           ),
@@ -744,7 +743,7 @@ export function DividendsEngine({
           ),
         income: formatCurrency(m.annualIncomeEur, 'EUR'),
         freq: (
-          <span className="text-text-s/50 text-[11px] uppercase tracking-wider">
+          <span className="text-text-s/50 text-xs">
             {frequencyLabel(effectivePayoutFrequency(m, apiMatch))}
           </span>
         ),
@@ -801,6 +800,7 @@ export function DividendsEngine({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SummaryStatCard
+          glow
           title="Total annual dividend income"
           info={
             <>
@@ -827,7 +827,7 @@ export function DividendsEngine({
             displaySummary.totalAnnualEur > 0 ? (
               <p className="stat-subline">
                 ≈{' '}
-                <span className="text-accent font-bold">
+                <span className="text-text-p font-bold">
                   {formatCurrency(displaySummary.totalAnnualEur / 12, 'EUR')}
                 </span>{' '}
                 / month
@@ -867,7 +867,7 @@ export function DividendsEngine({
             displaySummary.capitalBaseEur > 0 ? (
               <p className="stat-subline">
                 On{' '}
-                <span className="text-accent font-bold">
+                <span className="text-text-p font-bold">
                   {formatCurrency(displaySummary.capitalBaseEur, 'EUR')}
                 </span>{' '}
                 in dividend-paying holdings
@@ -890,7 +890,7 @@ export function DividendsEngine({
             <h3 className="card-title mb-0">Annual dividend income (by holding)</h3>
           </div>
           {assets.length === 0 && manualRows.length === 0 ? (
-            <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
+            <p className="text-text-s py-12 text-center opacity-50 font-mono text-xs font-medium">
               Add holdings on the Dashboard, then add a per-holding dividend estimate here if needed.
             </p>
           ) : dividendsFetchPending ? (
@@ -900,7 +900,7 @@ export function DividendsEngine({
               </div>
             </div>
           ) : barData.length === 0 ? (
-            <p className="text-text-s py-12 text-center opacity-50 font-mono uppercase tracking-widest text-[10px] font-bold">
+            <p className="text-text-s py-12 text-center opacity-50 font-mono text-xs font-medium">
               No dividend-paying holdings (or estimates are all zero).
             </p>
           ) : (
@@ -908,7 +908,13 @@ export function DividendsEngine({
               <div className="h-[238px] w-full shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }} barCategoryGap="18%">
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                  <defs>
+                    <linearGradient id="dividendBarFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--color-accent-400)" />
+                      <stop offset="100%" stopColor="var(--color-accent-700)" stopOpacity={0.55} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 6" stroke="rgba(255,255,255,0.07)" vertical={false} />
                   <XAxis
                     dataKey="label"
                     tick={{ fill: 'var(--color-text-s)', fontSize: 11, fontWeight: 600 }}
@@ -919,20 +925,21 @@ export function DividendsEngine({
                     tickMargin={7}
                   />
                   <YAxis
-                    tick={{ fill: 'var(--color-text-s)', fontSize: 10, opacity: 0.7 }}
+                    tick={{ fill: 'var(--color-text-s)', fontSize: 11, fontWeight: 600 }}
                     tickFormatter={(v) => formatCurrency(Number(v), 'EUR')}
                     width={72}
                   />
                   <Tooltip
                     cursor={{ fill: 'rgba(255,255,255,0.06)' }}
                     contentStyle={{
-                      backgroundColor: 'var(--color-card)',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: 12,
-                      padding: 12,
+                      backgroundColor: 'rgb(16 19 26 / 0.92)',
+                      border: '1px solid rgb(255 255 255 / 0.08)',
+                      borderRadius: 14,
+                      padding: '10px 14px',
+                      boxShadow: '0 12px 30px -12px rgb(0 0 0 / 0.7)',
                     }}
-                    labelStyle={{ color: 'var(--color-text-p)', fontWeight: 700, fontSize: 12, marginBottom: 4 }}
-                    itemStyle={{ color: 'var(--color-accent)', fontWeight: 900, fontSize: 14 }}
+                    labelStyle={{ color: 'var(--color-text-s)', fontWeight: 500, fontSize: 12, marginBottom: 2 }}
+                    itemStyle={{ color: 'var(--color-text-p)', fontWeight: 600, fontSize: 15, padding: 0 }}
                     formatter={(value: number | undefined) => [
                       formatCurrency(Number(value), 'EUR'),
                       'Annual income',
@@ -942,7 +949,7 @@ export function DividendsEngine({
                       return row?.fullName ?? row?.label ?? '';
                     }}
                   />
-                  <Bar dataKey="annualEur" radius={[6, 6, 0, 0]} fill={BAR_COLOR} fillOpacity={0.9} />
+                  <Bar dataKey="annualEur" radius={[8, 8, 2, 2]} fill="url(#dividendBarFill)" />
                 </BarChart>
               </ResponsiveContainer>
               </div>
@@ -985,7 +992,7 @@ export function DividendsEngine({
             type="button"
             onClick={openManualModal}
             disabled={assets.length === 0}
-            className="btn-primary text-[10px] py-1.5 px-3 disabled:opacity-40 disabled:pointer-events-none"
+            className="btn-primary text-[11px] py-1.5 px-3 disabled:opacity-40 disabled:pointer-events-none"
           >
             <Plus className="w-3.5 h-3.5" /> Add dividend estimate
           </button>

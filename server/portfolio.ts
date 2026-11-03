@@ -3,7 +3,7 @@ import { registerDividendRoutes } from "./dividends";
 import { backfillPortfolioHistory } from "./portfolioHistoryBackfill";
 import { appRoot } from "./appRoot";
 import { getEurRates } from "./fxRates";
-import { buildPortfolioIntraday } from "./portfolioIntraday";
+import { buildHoldingSparklines, buildPortfolioIntraday } from "./portfolioIntraday";
 import { holdingMarketValueEur } from "./holdingMarketValue";
 import { historyEntryError } from "../src/historyValidation";
 import { todayIsoDateHelsinki } from "../src/formatDate";
@@ -147,6 +147,25 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to save client settings" });
+    }
+  });
+
+  app.get("/api/portfolio/sparklines", async (_req: Request, res: Response) => {
+    try {
+      if (!yahooFinance) return res.status(503).json({ error: "Market data unavailable" });
+      const assets = (getPortfolioDb().prepare("SELECT id, payload FROM assets").all() as {
+        id: string;
+        payload: string;
+      }[]).map(rowToAsset);
+      const result = await buildHoldingSparklines(
+        yahooFinance,
+        assets.map((a) => a.symbol)
+      );
+      res.set("Cache-Control", "no-store");
+      res.json(result);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to build sparklines" });
     }
   });
 

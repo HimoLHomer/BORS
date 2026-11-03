@@ -74,7 +74,7 @@ export function DividendInfoLinkCell({
     <button
       type="button"
       onClick={() => setEditing(true)}
-      className="text-[10px] font-bold uppercase tracking-wider text-text-s/40 hover:text-text-s ml-auto block"
+      className="text-xs font-medium text-text-s/40 hover:text-text-s ml-auto block"
     >
       Add link
     </button>

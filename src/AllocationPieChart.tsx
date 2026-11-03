@@ -53,10 +53,10 @@ function AllocationPieLegendList({
                 >
                   {slice.label}
                 </span>
-                <span className="text-right text-[10px] font-sans font-semibold tabular-nums text-accent">
+                <span className="text-right text-xs font-sans font-semibold tabular-nums text-text-p">
                   {formatPercentFi(slice.percent, 1)}
                 </span>
-                <span className="text-right text-[10px] font-sans font-semibold tabular-nums text-text-s/80">
+                <span className="text-right text-xs font-sans font-semibold tabular-nums text-text-s">
                   {formatCurrency(slice.value, 'EUR')}
                 </span>
               </div>

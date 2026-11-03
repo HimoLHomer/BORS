@@ -76,8 +76,8 @@ function AssetSearchResultRow({
             className="shrink-0 inline-flex items-center gap-1 rounded-md border border-green/25 bg-green/10 px-1.5 py-0.5 leading-none"
             title="Trailing / indicated dividend yield (Yahoo)"
           >
-            <span className="text-[8px] font-bold uppercase tracking-widest text-green/70">Div</span>
-            <span className="text-[10px] font-semibold tabular-nums text-green">
+            <span className="text-xs font-medium text-green/70">Div</span>
+            <span className="text-[11px] font-semibold tabular-nums text-green">
               {formatPercentEn(yieldPct, 2)}
             </span>
           </span>
@@ -370,17 +370,17 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           <X className="w-5 h-5" />
         </button>
         
-        <h2 className="text-2xl font-black tracking-tighter mb-1 text-text-p uppercase">{editAsset ? 'Edit Holding' : 'Add New Holding'}</h2>
-        <p className="text-text-s mb-8 text-[10px] uppercase tracking-[0.25em] font-bold opacity-60">{editAsset ? 'Modify existing asset vector' : 'Add a new asset to your portfolio'}</p>
+        <h2 className="text-2xl font-semibold tracking-tighter mb-1 text-text-p">{editAsset ? 'Edit Holding' : 'Add New Holding'}</h2>
+        <p className="text-text-s mb-8 text-xs font-medium">{editAsset ? 'Change shares, price or currency' : 'Add a new asset to your portfolio'}</p>
         
         {!editAsset && (
         <div className="mb-8 space-y-2 relative">
-          <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Find Asset (Name or Ticker)</label>
+          <label className="text-xs font-medium text-text-s px-1 ml-1">Find Asset (Name or Ticker)</label>
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-s opacity-40" />
             <input 
               type="text"
-              className="w-full bg-bg border border-border focus:border-accent rounded-xl pl-12 pr-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20 shadow-inner"
+              className="w-full bg-bg border border-border focus:border-accent rounded-lg pl-12 pr-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20 shadow-inner"
               placeholder="e.g. S&P 500 or AAPL"
               value={searchQuery}
               onChange={e => handleSearch(e.target.value)}
@@ -394,7 +394,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                 initial={{ opacity: 0, y: -5 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -5 }}
-                className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-xl shadow-2xl z-[60] max-h-72 overflow-y-auto p-2 space-y-1.5"
+                className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-lg shadow-2xl z-[60] max-h-72 overflow-y-auto p-2 space-y-1.5"
               >
                 {searchResults.map((result, i) => (
                   <AssetSearchResultRow
@@ -412,21 +412,21 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
           <div className="flex-1 min-h-0 overflow-y-auto space-y-8 pr-1">
           {error && (
-            <div className="p-4 bg-red/10 border border-red/20 rounded-xl text-red text-[10px] uppercase font-bold tracking-widest animate-pulse">
+            <div className="p-4 bg-red/10 border border-red/20 rounded-lg text-red text-xs font-medium animate-pulse">
               System Error: {error}
             </div>
           )}
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
               <div className="flex items-center justify-between px-1">
-                <label className="text-[9px] font-bold text-text-s uppercase tracking-widest ml-1">Symbol (Ticker)</label>
+                <label className="text-xs font-medium text-text-s ml-1">Symbol (Ticker)</label>
                 {isValidating && <RefreshCcw className="w-2.5 h-2.5 animate-spin text-accent" />}
-                {isVerified && <div className="text-[8px] font-black text-green tracking-tighter uppercase flex items-center gap-1"><Zap className="w-2.5 h-2.5" /> Verified</div>}
+                {isVerified && <div className="text-xs font-semibold text-green tracking-tighter flex items-center gap-1"><Zap className="w-2.5 h-2.5" /> Verified</div>}
               </div>
               <input 
                 required
                 autoFocus
-                className={`w-full bg-bg/50 border ${isVerified ? 'border-green/30' : 'border-border'} focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20`}
+                className={`w-full bg-bg/50 border ${isVerified ? 'border-green/30' : 'border-border'} focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20`}
                 placeholder="Ticker symbol"
                 value={formData.symbol}
                 onBlur={() => checkSymbol(formData.symbol)}
@@ -434,18 +434,18 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               />
             </div>
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1 text-accent">Display Symbol (Visual)</label>
+              <label className="text-xs font-medium text-text-s px-1 ml-1">Display Symbol (Visual)</label>
               <input 
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
                 placeholder="Display symbol"
                 value={formData.displaySymbol}
                 onChange={e => setFormData({ ...formData, displaySymbol: e.target.value.toUpperCase() })}
               />
             </div>
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Currency</label>
+              <label className="text-xs font-medium text-text-s px-1 ml-1">Currency</label>
               <select 
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all text-sm appearance-none"
+                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all text-sm appearance-none"
                 value={formData.currency}
                 onChange={e => setFormData({ ...formData, currency: e.target.value })}
               >
@@ -459,10 +459,10 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           </div>
 
           <div className="space-y-2">
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Asset Label</label>
+            <label className="text-xs font-medium text-text-s px-1 ml-1">Asset Label</label>
             <input 
               required
-              className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20"
+              className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20"
               placeholder="Instrument name"
               value={formData.name}
               onChange={e => setFormData({ ...formData, name: e.target.value })}
@@ -470,13 +470,13 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           </div>
 
           {editAsset && (
-            <div className="rounded-xl border border-accent/25 bg-accent/5 overflow-hidden">
+            <div className="rounded-lg border border-accent/25 bg-accent/5 overflow-hidden">
               <button
                 type="button"
                 onClick={() => setPurchaseExpanded((v) => !v)}
                 className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-white/5 transition-colors"
               >
-                <span className="text-[10px] font-black text-accent uppercase tracking-[0.2em]">
+                <span className="text-xs font-semibold text-accent">
                   Add purchase
                 </span>
                 <ChevronDown
@@ -485,7 +485,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               </button>
               {purchaseExpanded && (
                 <div className="px-5 pb-5 space-y-4 border-t border-accent/15">
-                  <p className="text-[10px] text-text-s font-mono pt-4">
+                  <p className="text-[11px] text-text-s font-mono pt-4">
                     Current:{' '}
                     <span className="text-text-p font-bold">
                       {formatShares(parseShareInput(formData.quantity, 0))}
@@ -499,13 +499,13 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                   </p>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                      <label className="text-xs font-medium text-text-s px-1 ml-1">
                         Additional shares
                       </label>
                       <input
                         type="text"
                         inputMode="numeric"
-                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
                         placeholder="0"
                         value={purchaseAddQty}
                         onChange={(e) => setPurchaseAddQty(sanitizeShareDraft(e.target.value))}
@@ -513,13 +513,13 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                      <label className="text-xs font-medium text-text-s px-1 ml-1">
                         Price / unit ({purchaseAddCurrency})
                       </label>
                       <input
                         type="text"
                         inputMode="decimal"
-                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-3 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
                         placeholder="0.00"
                         value={purchaseAddPrice}
                         onChange={(e) => setPurchaseAddPrice(e.target.value)}
@@ -529,11 +529,11 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                       />
                     </div>
                     <div className="space-y-2 col-span-2">
-                      <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+                      <label className="text-xs font-medium text-text-s px-1 ml-1">
                         Purchase currency
                       </label>
                       <select
-                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-3 text-text-p focus:outline-none transition-all text-sm appearance-none"
+                        className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-3 text-text-p focus:outline-none transition-all text-sm appearance-none"
                         value={purchaseAddCurrency}
                         onChange={(e) => setPurchaseAddCurrency(e.target.value)}
                       >
@@ -546,14 +546,14 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                     </div>
                   </div>
                   {purchasePreview && 'error' in purchasePreview && (
-                    <p className="text-[10px] text-red/90 font-bold uppercase tracking-widest">
+                    <p className="text-xs text-red/90 font-medium">
                       {purchasePreview.error}
                     </p>
                   )}
                   {purchasePreview && !('error' in purchasePreview) && (
-                    <div className="text-[10px] text-text-s space-y-1 font-mono leading-relaxed">
+                    <div className="text-[11px] text-text-s space-y-1 font-mono leading-relaxed">
                       <p>
-                        <span className="text-text-s/60 uppercase tracking-widest text-[9px] font-bold">
+                        <span className="text-text-s/60 text-xs font-medium">
                           Preview
                         </span>
                         {' — '}
@@ -582,7 +582,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
                     type="button"
                     disabled={!canApplyPurchase}
                     onClick={handleApplyPurchase}
-                    className="w-full py-3 bg-white/10 hover:bg-white/15 disabled:opacity-40 border border-border rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-text-p transition-all"
+                    className="w-full py-3 bg-white/10 hover:bg-white/15 disabled:opacity-40 border border-border rounded-lg text-xs font-semibold text-text-p transition-all"
                   >
                     Apply to holding
                   </button>
@@ -593,12 +593,12 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">Quantity (Units)</label>
+              <label className="text-xs font-medium text-text-s px-1 ml-1">Quantity (Units)</label>
               <input 
                 required
                 type="text"
                 inputMode="numeric"
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
+                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
                 placeholder="0"
                 value={formData.quantity}
                 onChange={e => setFormData({ ...formData, quantity: sanitizeShareDraft(e.target.value) })}
@@ -611,7 +611,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               />
             </div>
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+              <label className="text-xs font-medium text-text-s px-1 ml-1">
                 Cost Per Unit ({formData.currency || 'EUR'})
               </label>
               <EurAmountInput
@@ -633,7 +633,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           </div>
 
           {!editAsset ? (
-            <label className="flex items-start gap-3 rounded-xl border border-border/50 bg-bg/30 px-4 py-3 cursor-pointer select-none">
+            <label className="flex items-start gap-3 rounded-lg border border-border/50 bg-bg/30 px-4 py-3 cursor-pointer select-none">
               <input
                 type="checkbox"
                 className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
@@ -651,7 +651,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full shrink-0 py-5 bg-accent hover:bg-accent/90 disabled:opacity-50 text-white font-black uppercase tracking-[0.2em] text-[11px] rounded-xl transition-all shadow-xl shadow-accent/20 active:scale-[0.98] mt-4 flex items-center justify-center gap-3"
+            className="w-full shrink-0 py-5 bg-accent hover:bg-accent/90 disabled:opacity-50 text-white font-semibold text-xs rounded-lg transition-all shadow-xl shadow-accent/20 active:scale-[0.98] mt-4 flex items-center justify-center gap-3"
           >
             {isSubmitting ? (
               <RefreshCcw className="w-4 h-4 animate-spin" />

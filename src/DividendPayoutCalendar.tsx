@@ -36,13 +36,13 @@ const DIVIDEND_MONTH_NAV_PILL =
 const DIVIDEND_MONTH_NAV_BTN =
   'h-7 w-7 rounded-md flex items-center justify-center shrink-0 text-text-s hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-30 disabled:pointer-events-none disabled:hover:bg-transparent';
 const DIVIDEND_MONTH_NAV_LABEL =
-  'text-[10px] font-bold uppercase tracking-widest text-text-p px-2 min-w-[5.5rem] text-center truncate';
+  'text-xs font-medium text-text-p px-2 min-w-[5.5rem] text-center truncate';
 
 const TILE_PRESETS = {
   featured: {
     logoPx: 80,
     amountClass: 'text-sm',
-    metaClass: 'text-[10px]',
+    metaClass: 'text-[11px]',
     stackGap: 'gap-2.5',
     textGap: 'gap-0.5',
     pad: 'p-2.5',
@@ -50,7 +50,7 @@ const TILE_PRESETS = {
   cluster: {
     logoPx: 34,
     amountClass: 'text-[11px]',
-    metaClass: 'text-[9px]',
+    metaClass: 'text-[11px]',
     stackGap: 'gap-1.5',
     textGap: 'gap-px',
     pad: 'p-1.5',
@@ -58,7 +58,7 @@ const TILE_PRESETS = {
   compact: {
     logoPx: 22,
     amountClass: 'text-[11px]',
-    metaClass: 'text-[8px]',
+    metaClass: 'text-[11px]',
     stackGap: 'gap-1',
     textGap: 'gap-0',
     pad: 'py-1 px-1.5',
@@ -148,8 +148,8 @@ function DividendPayoutCard({
     >
       {hoverLabel ? (
         <span
-          className={`pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-1 font-sans font-bold uppercase tracking-widest text-green opacity-0 transition-opacity duration-150 group-hover:opacity-100 ${
-            tileSize === 'featured' ? 'text-[10px]' : 'text-[8px]'
+          className={`pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-1 font-sans font-semibold text-green opacity-0 transition-opacity duration-150 group-hover:opacity-100 ${
+            tileSize === 'featured' ? 'text-[11px]' : 'text-[11px]'
           }`}
           aria-hidden
         >
@@ -178,7 +178,7 @@ function DividendPayoutCard({
 function MonthSectionHeader({
   monthKey,
   totalEur,
-  totalClassName = 'text-accent',
+  totalClassName = 'text-text-p',
   received = false,
 }: {
   monthKey: string;
@@ -350,7 +350,7 @@ function UpcomingMonthsPanel({
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
-        <span className="font-sans text-sm font-bold tabular-nums text-accent shrink-0">
+        <span className="font-sans text-sm font-bold tabular-nums text-text-p shrink-0">
           {formatCurrency(activeGroup.totalEur, 'EUR')}
         </span>
       </div>

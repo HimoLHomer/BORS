@@ -25,14 +25,14 @@ export class ErrorBoundary extends React.Component<Props, State> {
       return (
         <div className="min-h-screen bg-bg text-text-p flex items-center justify-center p-8">
           <div className="max-w-md space-y-4 text-center">
-            <h1 className="text-xl font-black uppercase tracking-tight">Something went wrong</h1>
+            <h1 className="text-xl font-semibold tracking-tight">Something went wrong</h1>
             <p className="text-sm text-text-s leading-relaxed">
               The dashboard hit an unexpected error. Reload the page; your portfolio data is still on disk.
             </p>
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-accent text-white rounded-lg text-[10px] font-black uppercase tracking-widest"
+              className="px-4 py-2 bg-accent text-white rounded-lg text-xs font-semibold"
             >
               Reload BÖRS
             </button>

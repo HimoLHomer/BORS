@@ -87,6 +87,7 @@ import { NavButton } from './AppNav';
 import { apiHoldingKey, forgetTrackedHoldings } from './dividendRedemptions';
 import { AddAssetModal } from './AddAssetModal';
 import { InfoHint } from './InfoHint';
+import { Sparkline } from './Sparkline';
 import { gainPercentOf, holdingTodayGainEur, todaysPurchasesBySymbol } from './todayGain';
 
 /** Delay before saving today's total after a holding or cash change. */
@@ -106,6 +107,8 @@ export default function App() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [portfolioFlows, setPortfolioFlows] = useState<PortfolioFlow[]>([]);
+  /** Latest trading day per holding, for the Holdings sparklines. */
+  const [sparklines, setSparklines] = useState<Record<string, { points: number[]; previousClose: number | null }>>({});
   const [portfolioChartRange, setPortfolioChartRange] = useState<PortfolioChartRangeId | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [historyModal, setHistoryModal] = useState<
@@ -443,6 +446,7 @@ export default function App() {
         'price',
         'cost',
         'gain',
+        'trend',
         'today',
         'actions',
       ]),
@@ -556,7 +560,7 @@ export default function App() {
                 className="inline-flex items-center gap-1.5"
                 title="No market price for this symbol; valued at your average purchase price."
               >
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-sans font-medium text-amber-400">
                   No price
                 </span>
                 {formatCurrency(priceInEur, 'EUR')}
@@ -564,6 +568,14 @@ export default function App() {
             ),
           cost: <span className="text-text-s/50">{formatCurrency(costBasisInEur, 'EUR')}</span>,
           gain: <GainDisplay amountEur={totalGainInEur} percent={totalGainPercent} />,
+          trend: sparklines[item.symbol] ? (
+            <div className="flex justify-end">
+              <Sparkline
+                points={sparklines[item.symbol]!.points}
+                previousClose={sparklines[item.symbol]!.previousClose}
+              />
+            </div>
+          ) : null,
           today: <GainDisplay amountEur={todayGainEur} percent={todayGainPercent} />,
           actions: (
             <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -590,7 +602,7 @@ export default function App() {
           ),
         };
       }),
-    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, initialQuotesPending]
+    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, initialQuotesPending, sparklines]
   );
 
   const holdingsStats = assets.reduce((acc, asset) => {
@@ -693,6 +705,27 @@ export default function App() {
     () => `${assets.map((a) => `${a.symbol}:${a.quantity}`).join('|')}#${cashLineEur}`,
     [assets, cashLineEur]
   );
+
+  // Holdings sparklines: refresh with the intraday data cadence and when holdings change.
+  const sparklineSymbolsKey = useMemo(() => assets.map((a) => a.symbol).sort().join('|'), [assets]);
+  useEffect(() => {
+    if (!sparklineSymbolsKey) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/portfolio/sparklines', { cache: 'no-store' });
+        if (res.ok && !cancelled) setSparklines(await res.json());
+      } catch {
+        /* keep the last sparklines */
+      }
+    };
+    void load();
+    const id = window.setInterval(() => void load(), INTRADAY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [sparklineSymbolsKey, quotesRefreshEpoch]);
 
   useEffect(() => {
     if (!intradayRangeActive) return;
@@ -1216,7 +1249,7 @@ export default function App() {
         </span>
         <div className="min-w-0">
           <div className="text-text-p text-sm font-sans truncate">Cash</div>
-          <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest">EUR</div>
+          <div className="mt-0.5 text-xs text-text-s/60 font-mono">EUR</div>
         </div>
       </div>
     ),
@@ -1265,6 +1298,7 @@ export default function App() {
     price: null,
     cost: null,
     gain: null,
+    trend: null,
     today: null,
     actions: (
       <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1298,7 +1332,7 @@ export default function App() {
           className="mx-4 mt-2 px-4 py-3 rounded-xl border text-xs leading-relaxed border-red-500/40 bg-red-500/10 text-red-200"
         >
           <p>
-            <span className="font-bold uppercase tracking-widest text-[10px]">Portfolio not loaded — </span>
+            <span className="font-medium text-xs">Portfolio not loaded — </span>
             {portfolioLoadError}
           </p>
         </div>
@@ -1317,18 +1351,18 @@ export default function App() {
       />
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-20 xl:w-[5.5rem] min-w-[80px] border-r border-border bg-card flex flex-col items-center xl:items-stretch py-8 gap-6 xl:gap-2 xl:px-1.5 z-10 shadow-2xl shrink-0">
+        <aside className="w-20 xl:w-24 min-w-[80px] border-r border-border bg-card flex flex-col items-center xl:items-stretch py-8 gap-6 xl:gap-2 xl:px-1.5 z-10 shadow-2xl shrink-0">
           <NavButton 
             active={activeView === View.DASHBOARD} 
             onClick={() => setActiveView(View.DASHBOARD)} 
             icon={<LayoutDashboard className="w-5 h-5" />} 
-            label="Dashboard" 
+            label="Portfolio" 
           />
           <NavButton 
             active={activeView === View.DIVIDENDS} 
             onClick={() => setActiveView(View.DIVIDENDS)} 
             icon={<Coins className="w-5 h-5" />} 
-            label="Dividend engine" 
+            label="Dividends" 
           />
           <NavButton 
             active={activeView === View.FIRE} 
@@ -1358,14 +1392,14 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1600px] mx-auto w-full dashboard-view space-y-4 pb-8"
+                className="max-w-[1400px] mx-auto w-full dashboard-view space-y-4 pb-8"
               >
                 <h2 className="page-title">Portfolio</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-[auto_auto] gap-4">
                 {/* Main Portfolio Performance */}
-                <div className="lg:col-span-2 lg:row-span-2 glass-panel p-8 flex flex-col group h-full">
+                <div className="lg:col-span-2 lg:row-span-2 glass-panel panel-glow p-7 flex flex-col group h-full">
                   <div className="flex items-center justify-between mb-2 gap-2">
-                    <h3 className="card-title mb-0">Portfolio Capital</h3>
+                    <h3 className="card-title mb-0">Portfolio capital</h3>
                     <button
                       type="button"
                       title="Portfolio history"
@@ -1387,16 +1421,16 @@ export default function App() {
                         <div className="p-4 bg-white/5 rounded-xl border border-border/50 space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                             <div className="space-y-1.5">
-                              <p className="text-[9px] text-text-s font-bold uppercase tracking-widest leading-relaxed">
+                              <p className="text-xs text-text-s font-medium leading-relaxed">
                                 Daily total value (EUR) in SQLite. Edit a row or add a past date you missed.
                               </p>
-                              <p className="text-[8px] text-text-s/70 leading-relaxed max-w-prose">
+                              <p className="text-[11px] text-text-s/70 leading-relaxed max-w-prose">
                                 Missing days are filled automatically when you open BÖRS (historical closes).
                                 Uses current holdings — approximate if you traded while away.
                               </p>
                               {historyBackfillNote ? (
                                 <p
-                                  className={`text-[8px] font-bold uppercase tracking-widest ${
+                                  className={`text-xs font-medium ${
                                     historyBackfillNote.startsWith('Filled')
                                       ? 'text-green/90'
                                       : 'text-red/80'
@@ -1416,7 +1450,7 @@ export default function App() {
                                     ? 'Connect to Yahoo to backfill history'
                                     : 'Fill missing days from historical closes'
                                 }
-                                className="px-3 py-2 bg-white/5 text-text-s rounded-lg font-black uppercase tracking-widest text-[8px] border border-border/50 hover:bg-white/10 hover:text-text-p transition-all flex items-center justify-center gap-1.5 disabled:opacity-40"
+                                className="px-3 py-2 bg-white/5 text-text-s rounded-lg font-semibold text-xs border border-border/50 hover:bg-white/10 hover:text-text-p transition-all flex items-center justify-center gap-1.5 disabled:opacity-40"
                               >
                                 <RefreshCcw
                                   className={`w-3.5 h-3.5 ${historyBackfillBusy ? 'animate-spin' : ''}`}
@@ -1426,7 +1460,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => setHistoryModal({ type: 'add' })}
-                                className="px-3 py-2 bg-accent text-white rounded-lg font-black uppercase tracking-widest text-[8px] shadow-lg shadow-accent/20 flex items-center justify-center gap-1.5"
+                                className="px-3 py-2 bg-accent text-white rounded-lg font-semibold text-xs shadow-lg shadow-accent/20 flex items-center justify-center gap-1.5"
                               >
                                 <Plus className="w-3.5 h-3.5" /> Add entry
                               </button>
@@ -1435,7 +1469,7 @@ export default function App() {
                           <div className="overflow-x-auto overflow-y-auto max-h-[min(40vh,280px)] rounded-lg border border-border/40">
                             <table className="w-full text-left text-xs">
                               <thead className="sticky top-0 z-[1] bg-[#121214]/95 backdrop-blur-sm">
-                                <tr className="text-[8px] font-bold text-text-s uppercase tracking-widest border-b border-border/60">
+                                <tr className="text-xs font-medium text-text-s border-b border-border/60">
                                   <th className="px-3 py-2 text-left">Date</th>
                                   <th className="px-3 py-2 text-left">Total (EUR)</th>
                                   <th className="px-3 py-2 text-right w-16">Edit</th>
@@ -1450,7 +1484,7 @@ export default function App() {
                                       <td className="px-3 py-2 font-mono text-text-p tabular-nums">
                                         {formatDateEn(row.date)}
                                         {row.id === '__bors_live_today__' ? (
-                                          <span className="ml-2 text-[8px] uppercase text-text-s/45 font-bold tracking-widest">
+                                          <span className="ml-2 text-xs text-text-s/45 font-medium">
                                             (live)
                                           </span>
                                         ) : null}
@@ -1478,7 +1512,7 @@ export default function App() {
                                   <tr>
                                     <td
                                       colSpan={3}
-                                      className="px-3 py-8 text-center text-text-s text-[10px] uppercase tracking-widest"
+                                      className="px-3 py-8 text-center text-text-s text-xs"
                                     >
                                       No rows yet. They record automatically with a positive total, or use Add entry.
                                     </td>
@@ -1493,7 +1527,7 @@ export default function App() {
                   </AnimatePresence>
 
                   <div
-                    className="stat-value text-6xl font-black tracking-tighter mb-4 flex items-baseline gap-2 tabular-nums"
+                    className="stat-value text-[44px] mb-5 flex items-baseline gap-2"
                     aria-busy={feedMetricsLoading}
                   >
                     {feedMetricsLoading ? (
@@ -1504,7 +1538,7 @@ export default function App() {
                   </div>
                   <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                     <div>
-                      <div className="mb-1 flex items-center gap-1.5">
+                      <div className="mb-1.5 flex items-center gap-1.5">
                         <p className="micro-label mb-0">
                           {portfolioChartRangeGainLabel(activePortfolioChartRange)}
                         </p>
@@ -1556,10 +1590,11 @@ export default function App() {
                         amountEur={portfolioRangeGain.gainEur}
                         percent={portfolioRangeGain.gainPercent}
                         loading={feedMetricsLoading}
+                        variant="pill"
                       />
                     </div>
                     <div>
-                      <div className="mb-1 flex items-center gap-1.5">
+                      <div className="mb-1.5 flex items-center gap-1.5">
                         <p className="micro-label mb-0">Unrealized gain</p>
                         <InfoHint label="About Unrealized gain">
                           <p>
@@ -1578,6 +1613,7 @@ export default function App() {
                         amountEur={stats.totalGain}
                         percent={stats.totalGainPercent}
                         loading={feedMetricsLoading}
+                        variant="pill"
                       />
                     </div>
                   </div>
@@ -1604,7 +1640,7 @@ export default function App() {
                                 : 'Not enough history for this range'
                             }
                             onClick={() => setPortfolioChartRange(id)}
-                            className={`relative px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                            className={`relative px-2.5 py-1.5 text-[13px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
                               active ? 'text-accent' : 'text-text-s hover:text-text-p'
                             }`}
                           >
@@ -1652,13 +1688,21 @@ export default function App() {
                         >
                           <defs>
                             <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="var(--color-accent)" stopOpacity={0.2} />
-                              <stop offset="95%" stopColor="var(--color-accent)" stopOpacity={0} />
+                              <stop offset="0%" stopColor="var(--color-accent-400)" stopOpacity={0.32} />
+                              <stop offset="60%" stopColor="var(--color-accent)" stopOpacity={0.08} />
+                              <stop offset="100%" stopColor="var(--color-accent)" stopOpacity={0} />
                             </linearGradient>
+                            <filter id="portfolioLineGlow" x="-10%" y="-30%" width="120%" height="160%">
+                              <feGaussianBlur stdDeviation="3" result="blur" />
+                              <feMerge>
+                                <feMergeNode in="blur" />
+                                <feMergeNode in="SourceGraphic" />
+                              </feMerge>
+                            </filter>
                           </defs>
                           <CartesianGrid
-                            strokeDasharray="3 3"
-                            stroke="rgba(255,255,255,0.06)"
+                            strokeDasharray="2 6"
+                            stroke="rgba(255,255,255,0.07)"
                             vertical={false}
                           />
                           <XAxis
@@ -1670,7 +1714,7 @@ export default function App() {
                             tickFormatter={(chartTime) =>
                               portfolioChartXAxis.formatTick(Number(chartTime))
                             }
-                            tick={{ fill: 'var(--color-text-s)', fontSize: 10, fontWeight: 600 }}
+                            tick={{ fill: 'var(--color-text-s)', fontSize: 11, fontWeight: 600 }}
                             tickMargin={8}
                             axisLine={{ stroke: 'var(--color-border)', strokeOpacity: 0.4 }}
                             tickLine={{ stroke: 'var(--color-border)', strokeOpacity: 0.25 }}
@@ -1679,7 +1723,7 @@ export default function App() {
                             domain={portfolioChartYDomain}
                             allowDataOverflow={false}
                             tickCount={5}
-                            tick={{ fill: 'var(--color-text-s)', fontSize: 10, opacity: 0.7 }}
+                            tick={{ fill: 'var(--color-text-s)', fontSize: 11, fontWeight: 600 }}
                             tickFormatter={(v) => formatPortfolioChartYTick(Number(v))}
                             width={80}
                             axisLine={false}
@@ -1700,22 +1744,23 @@ export default function App() {
                             separator=""
                             labelStyle={{
                               color: 'var(--color-text-s)',
-                              fontSize: '11px',
-                              marginBottom: '4px',
-                              textTransform: 'uppercase',
-                              fontWeight: 'bold',
-                              opacity: 0.5,
+                              fontSize: '12px',
+                              marginBottom: '2px',
+                              fontWeight: 500,
                             }}
                             contentStyle={{
-                              backgroundColor: 'var(--color-card)',
-                              border: '1px solid var(--color-border)',
-                              borderRadius: '12px',
-                              padding: '12px',
+                              backgroundColor: 'rgb(16 19 26 / 0.92)',
+                              border: '1px solid rgb(255 255 255 / 0.08)',
+                              borderRadius: '14px',
+                              padding: '10px 14px',
+                              boxShadow: '0 12px 30px -12px rgb(0 0 0 / 0.7)',
+                              backdropFilter: 'blur(6px)',
                             }}
                             itemStyle={{
-                              color: 'var(--color-accent)',
-                              fontWeight: '900',
-                              fontSize: '14px',
+                              color: 'var(--color-text-p)',
+                              fontWeight: 600,
+                              fontSize: '15px',
+                              padding: 0,
                             }}
                           />
                           <Area
@@ -1724,12 +1769,24 @@ export default function App() {
                             stroke="var(--color-accent)"
                             fillOpacity={1}
                             fill="url(#colorValue)"
-                            strokeWidth={3}
+                            strokeWidth={2.5}
+                            filter="url(#portfolioLineGlow)"
                             animationDuration={1000}
-                            dot={false}
+                            dot={(props: { cx?: number; cy?: number; index?: number }) =>
+                              props.index === portfolioChartDisplayData.length - 1 &&
+                              props.cx != null &&
+                              props.cy != null ? (
+                                <g key="last-point">
+                                  <circle cx={props.cx} cy={props.cy} r={9} fill="var(--color-accent)" opacity={0.2} />
+                                  <circle cx={props.cx} cy={props.cy} r={4} fill="var(--color-accent-300)" />
+                                </g>
+                              ) : (
+                                <g key={`p-${props.index}`} />
+                              )
+                            }
                             activeDot={{
-                              r: 4,
-                              fill: 'var(--color-accent)',
+                              r: 5,
+                              fill: 'var(--color-accent-300)',
                               stroke: 'var(--color-card)',
                               strokeWidth: 2,
                             }}
@@ -1759,7 +1816,7 @@ export default function App() {
                         setEditingAsset(null);
                         setIsModalOpen(true);
                       }}
-                      className="btn-primary text-[10px] py-1.5 px-3"
+                      className="btn-primary text-[11px] py-1.5 px-3"
                     >
                       <Plus className="w-3.5 h-3.5" /> Add Asset
                     </button>
@@ -1774,6 +1831,7 @@ export default function App() {
                       { key: 'price', label: 'Share price', align: 'right' },
                       { key: 'cost', label: 'Cost basis', align: 'right' },
                       { key: 'gain', label: 'Unrealized gain', align: 'right' },
+                      { key: 'trend', label: 'Today', align: 'right', headerClassName: 'w-28' },
                       { key: 'today', label: 'Today gain', align: 'right' },
                       {
                         key: 'actions',
@@ -1838,20 +1896,18 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-4xl xl:max-w-5xl mx-auto w-full pb-8"
+                className="max-w-[1400px] mx-auto w-full dashboard-view space-y-4 pb-8"
               >
-                <div className="panel">
-                  <h2 className="page-title mb-1">Options</h2>
-                  <p className="page-subtitle mb-6">Integrations, data & backup</p>
+                <div>
+                  <h2 className="page-title">Options</h2>
+                </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
-                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
-                        Portfolio data (SQLite)
-                      </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="panel">
+                      <h3 className="card-title">Portfolio data (SQLite)</h3>
                       {(dataStorePath ?? dataStoreHint) && (
                         <div className="space-y-2">
-                          <p className="text-[10px] font-mono text-accent/90 break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
+                          <p className="text-[11px] font-mono text-text-p break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
                             {dataStorePath ?? dataStoreHint}
                           </p>
                           <button
@@ -1867,10 +1923,8 @@ export default function App() {
                       )}
                     </div>
 
-                    <div className="p-5 rounded-xl border border-border/60 bg-white/[0.02]">
-                      <h3 className="text-[10px] font-bold text-text-s uppercase tracking-widest mb-2">
-                        Portfolio backup
-                      </h3>
+                    <div className="panel">
+                      <h3 className="card-title">Portfolio backup</h3>
                       <div className="flex flex-col gap-2">
                         <button
                           type="button"
@@ -1905,7 +1959,6 @@ export default function App() {
                       ) : null}
                     </div>
                   </div>
-                </div>
               </motion.div>
             )}
           </AnimatePresence>

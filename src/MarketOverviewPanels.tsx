@@ -93,7 +93,7 @@ type TopMoversPayload = {
 function TopStorySourcePill({ ref: storyRef }: { ref: { title: string; url?: string } }) {
   const label = storyRef.title.trim() || formatStoryReferenceLabel(storyRef);
   const pillClass =
-    'inline-flex max-w-full items-center rounded border border-border/30 bg-white/5 px-1.5 py-px font-sans text-[10px] font-medium leading-tight text-accent transition-colors';
+    'inline-flex max-w-full items-center rounded border border-border/30 bg-white/5 px-1.5 py-px font-sans text-[11px] font-medium leading-tight text-accent transition-colors';
 
   // News comes from outside feeds: only web links are made clickable.
   if (storyRef.url && /^https?:\/\//i.test(storyRef.url)) {
@@ -344,7 +344,7 @@ export function MarketIndexPanel({
           <div className="flex items-center gap-2 min-w-0">
             {summaryDate && !newsLoading ? (
               <p
-                className="font-sans text-[10px] text-text-s/80 tabular-nums truncate"
+                className="font-sans text-[11px] text-text-s/80 tabular-nums truncate"
                 title="News date"
               >
                 {formatDateFi(summaryDate)}

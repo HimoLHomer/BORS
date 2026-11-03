@@ -62,12 +62,12 @@ export function IssuerLogo({
   }, [ticker, name, type, logoUrl, yahooSymbol, overrides]);
 
   const px = `${size}px`;
-  const textSize = size <= 20 ? 'text-[8px]' : 'text-[9px]';
+  const textSize = 'text-[11px]';
 
   if (!src || stageIndex >= chain.length) {
     return (
       <span
-        className={`shrink-0 inline-flex items-center justify-center rounded-full bg-white/10 border border-border/80 text-text-s font-bold uppercase leading-none ${textSize}`}
+        className={`shrink-0 inline-flex items-center justify-center rounded-full bg-white/10 border border-border/80 text-text-s font-medium leading-none ${textSize}`}
         style={{ width: px, height: px }}
         aria-hidden
       >
@@ -84,8 +84,9 @@ export function IssuerLogo({
       decoding="async"
       width={size}
       height={size}
-      className="shrink-0 rounded-full object-contain bg-white/5 border border-border/60"
-      style={{ width: px, height: px }}
+      className="shrink-0 rounded-full object-contain bg-white/5 border border-border/60 box-border"
+      // Inset so wide wordmark logos sit inside the round badge instead of touching its edge.
+      style={{ width: px, height: px, padding: Math.max(1, Math.round(size * 0.06)) }}
       onError={advance}
     />
   );
@@ -133,7 +134,7 @@ export function AssetNameCell({
             {name}
           </div>
           {line ? (
-            <div className="mt-0.5 text-[10px] text-text-s/70 font-sans truncate leading-snug">
+            <div className="mt-0.5 text-[11px] text-text-s/70 font-sans truncate leading-snug">
               {line}
             </div>
           ) : null}
@@ -150,7 +151,7 @@ export function AssetNameCell({
           {name}
         </div>
         {line ? (
-          <div className="mt-0.5 text-[9px] text-text-s/60 font-mono uppercase tracking-widest truncate">
+          <div className="mt-0.5 text-xs text-text-s/60 font-mono truncate">
             {line}
           </div>
         ) : null}

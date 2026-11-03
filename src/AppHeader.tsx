@@ -8,9 +8,9 @@ export const LoadingScreen = () => (
       <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
       <div className="flex items-center gap-2 leading-none">
         <BorsMark className="w-7 h-7 shrink-0 opacity-90" />
-        <span className="font-black text-2xl tracking-tighter text-text-p uppercase">BÖRS</span>
+        <span className="font-semibold text-2xl tracking-tighter text-text-p">BÖRS</span>
       </div>
-      <p className="text-[10px] text-text-s font-mono uppercase tracking-widest animate-pulse">Initializing Market Feed</p>
+      <p className="text-xs text-text-s font-mono animate-pulse">Initializing Market Feed</p>
     </div>
   </div>
 );
@@ -37,11 +37,11 @@ export function AppHeader({
         onClick={() => setLogoDraw((n) => n + 1)}
       >
         <BorsMark drawTrigger={logoDraw} className="w-6 h-6 shrink-0 opacity-90" />
-        <span className="font-black text-xl tracking-tighter text-text-p uppercase">BÖRS</span>
+        <span className="font-semibold text-xl tracking-tighter text-text-p">BÖRS</span>
       </button>
 
       <div className="flex items-center gap-8">
-        <div className="hidden md:flex items-center gap-6 text-[10px] text-text-s font-bold uppercase tracking-widest">
+        <div className="hidden md:flex items-center gap-6 text-xs text-text-s font-medium">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               Feed: {apiStatus === 'connected' ? (
@@ -65,7 +65,7 @@ export function AppHeader({
                 type="button"
                 onClick={onRetryFeed}
                 disabled={feedRetrying}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 text-text-s hover:bg-white/10 hover:text-text-p transition-all text-[9px] font-bold uppercase tracking-widest disabled:opacity-40"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 text-text-s hover:bg-white/10 hover:text-text-p transition-all text-xs font-medium disabled:opacity-40"
                 title={feedDetail ?? 'Retry Yahoo market feed'}
               >
                 <RefreshCcw className={`w-3 h-3 shrink-0 ${feedRetrying ? 'animate-spin' : ''}`} aria-hidden />

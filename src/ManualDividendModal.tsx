@@ -45,7 +45,7 @@ function HoldingPickerRow({
             className="shrink-0 inline-flex items-center rounded-md border border-border/50 bg-white/5 px-2 py-0.5 leading-none"
             title={`${shares} shares`}
           >
-            <span className="text-[10px] font-semibold tabular-nums text-text-p">{shares}</span>
+            <span className="text-[11px] font-semibold tabular-nums text-text-p">{shares}</span>
           </span>
         ) : null}
       </div>
@@ -68,7 +68,7 @@ function HoldingPickerTrigger({ asset }: { asset: Asset }) {
           className="shrink-0 inline-flex items-center rounded-md border border-border/50 bg-white/5 px-2 py-0.5 leading-none"
           title={`${shares} shares`}
         >
-          <span className="text-[10px] font-semibold tabular-nums text-text-p">{shares}</span>
+          <span className="text-[11px] font-semibold tabular-nums text-text-p">{shares}</span>
         </span>
       ) : null}
     </div>
@@ -177,16 +177,16 @@ export function ManualDividendModal({
           <X className="w-5 h-5" />
         </button>
 
-        <h2 className="text-2xl font-black tracking-tighter mb-1 text-text-p uppercase">
+        <h2 className="text-2xl font-semibold tracking-tighter mb-1 text-text-p">
           {editing ? 'Edit dividend estimate' : 'Add dividend estimate'}
         </h2>
-        <p className="text-text-s mb-8 text-[10px] uppercase tracking-[0.25em] font-bold opacity-60">
+        <p className="text-text-s mb-8 text-xs font-medium">
           Manual estimate for holdings without feed data
         </p>
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-8 pr-1">
           <div className="space-y-2">
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+            <label className="text-xs font-medium text-text-s px-1 ml-1">
               Holding
             </label>
 
@@ -217,7 +217,7 @@ export function ManualDividendModal({
                       initial={{ opacity: 0, y: -5 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -5 }}
-                      className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-xl shadow-2xl z-[60] overflow-hidden"
+                      className="absolute top-full left-0 w-full mt-2 bg-card border border-border rounded-lg shadow-2xl z-[60] overflow-hidden"
                     >
                       {showFilter && (
                         <div className="p-2 border-b border-border/40">
@@ -261,7 +261,7 @@ export function ManualDividendModal({
           </div>
 
           <div className="space-y-2">
-            <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+            <label className="text-xs font-medium text-text-s px-1 ml-1">
               Annual dividend income (EUR)
             </label>
             <EurAmountInput
@@ -284,13 +284,13 @@ export function ManualDividendModal({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+              <label className="text-xs font-medium text-text-s px-1 ml-1">
                 Payout frequency
               </label>
               <select
                 value={draftFrequency}
                 onChange={(e) => onDraftFrequencyChange(e.target.value as DividendPayoutFrequency)}
-                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-xl px-5 py-4 text-text-p focus:outline-none transition-all text-sm appearance-none"
+                className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all text-sm appearance-none"
               >
                 <option value="monthly">Monthly</option>
                 <option value="quarterly">Quarterly</option>
@@ -298,7 +298,7 @@ export function ManualDividendModal({
               </select>
             </div>
             <div className="space-y-2">
-              <label className="text-[9px] font-bold text-text-s uppercase tracking-widest px-1 ml-1">
+              <label className="text-xs font-medium text-text-s px-1 ml-1">
                 First pay date (optional)
               </label>
               <ThemeDatePicker
@@ -310,7 +310,7 @@ export function ManualDividendModal({
           </div>
 
           {saveError && (
-            <div className="p-4 bg-amber/10 border border-amber/20 rounded-xl text-amber text-xs leading-relaxed">
+            <div className="p-4 bg-amber/10 border border-amber/20 rounded-lg text-amber text-xs leading-relaxed">
               {saveError}
             </div>
           )}
@@ -320,7 +320,7 @@ export function ManualDividendModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-border/60 text-[10px] font-black uppercase tracking-widest text-text-p"
+            className="px-4 py-2.5 rounded-lg bg-white/10 hover:bg-white/15 border border-border/60 text-xs font-semibold text-text-p"
           >
             Cancel
           </button>
@@ -328,7 +328,7 @@ export function ManualDividendModal({
             type="button"
             onClick={onSave}
             disabled={!canSave || eligibleHoldings.length === 0}
-            className="px-4 py-2.5 rounded-lg bg-accent text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-accent/20 hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+            className="px-4 py-2.5 rounded-lg bg-accent text-white text-xs font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             Save
           </button>

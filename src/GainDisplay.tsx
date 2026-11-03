@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import { formatCurrency } from './formatCurrency';
 import { formatPercentEn } from './formatNumber';
 import { SkeletonGain } from './SkeletonPulse';
@@ -15,10 +16,13 @@ export function GainDisplay({
   amountEur,
   percent,
   loading = false,
+  variant = 'stacked',
 }: {
   amountEur: number;
   percent: number;
   loading?: boolean;
+  /** stacked: amount over percent (tables). pill: one tinted pill with an arrow (headline figures). */
+  variant?: 'stacked' | 'pill';
 }) {
   const positive = amountEur >= 0;
   const prevRef = useRef({ amountEur, percent });
@@ -41,16 +45,27 @@ export function GainDisplay({
 
   if (loading) return <SkeletonGain />;
 
+  const flashClass = flash === 'up' ? 'gain-flash-up' : flash === 'down' ? 'gain-flash-down' : '';
+
+  if (variant === 'pill') {
+    const Arrow = positive ? ArrowUpRight : ArrowDownRight;
+    return (
+      <span className={`change-pill ${positive ? 'bg-green-soft text-green' : 'bg-red-soft text-red'} ${flashClass}`}>
+        <Arrow className="w-3.5 h-3.5" aria-hidden />
+        {formatCurrency(amountEur, 'EUR')}
+        <span className="opacity-75">({formatPercentEn(percent, 2, { showPlus: true })})</span>
+      </span>
+    );
+  }
+
   return (
     <div
-      className={`inline-block text-right rounded-md px-1 -mx-1 ${positive ? 'text-green' : 'text-red'} ${
-        flash === 'up' ? 'gain-flash-up' : flash === 'down' ? 'gain-flash-down' : ''
-      }`}
+      className={`inline-block text-right rounded-md px-1 -mx-1 ${positive ? 'text-green' : 'text-red'} ${flashClass}`}
     >
-      <div className="text-[11px] font-sans font-bold tabular-nums">
+      <div className="text-[13px] font-semibold tabular-nums">
         {formatCurrency(amountEur, 'EUR')}
       </div>
-      <div className="text-xs opacity-60 font-bold">
+      <div className="text-xs opacity-70 font-medium tabular-nums">
         {formatPercentEn(percent, 2, { showPlus: true })}
       </div>
     </div>

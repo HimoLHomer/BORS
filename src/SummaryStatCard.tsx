@@ -8,6 +8,8 @@ type SummaryStatCardProps = {
   emptyFooter?: React.ReactNode;
   /** Optional explanation shown from an "i" icon next to the title. */
   info?: React.ReactNode;
+  /** Light the card with the brand glow (one hero card per page). */
+  glow?: boolean;
 };
 
 export function SummaryStatCard({
@@ -16,17 +18,18 @@ export function SummaryStatCard({
   footer,
   emptyFooter,
   info,
+  glow = false,
 }: SummaryStatCardProps) {
   const subline = footer ?? emptyFooter;
 
   return (
-    <div className="panel flex flex-col h-full">
+    <div className={`panel ${glow ? 'panel-glow ' : ''}flex flex-col h-full`}>
       {/* .card-title's margin is unlayered CSS and beats mb-0; keep it off the flex row. */}
       <div className="flex items-center gap-1.5 mb-2">
         <h3 className="card-title !mb-0">{title}</h3>
         {info ? <InfoHint label={`About ${title}`}>{info}</InfoHint> : null}
       </div>
-      <div className="stat-value text-6xl font-black tracking-tighter tabular-nums mt-2 leading-none">
+      <div className="stat-value mt-3">
         {hero}
       </div>
       {subline}

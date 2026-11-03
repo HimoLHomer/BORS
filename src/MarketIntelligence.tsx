@@ -934,7 +934,7 @@ function TreemapChart({
           className="pointer-events-none absolute z-20 max-w-[220px] rounded-lg border border-white/15 bg-[#0c0c0e]/95 px-3 py-2 shadow-xl backdrop-blur-sm"
           style={{ left: hover.x, top: hover.y }}
         >
-          <p className="text-xs font-black text-white uppercase tracking-tight">{hover.symbol}</p>
+          <p className="text-xs font-semibold text-white tracking-tight">{hover.symbol}</p>
           <p className="text-[11px] text-text-s leading-snug mt-0.5 line-clamp-2">{hover.fullName}</p>
           <p className="text-sm font-semibold text-text-p mt-1.5 tabular-nums">
             {hover.price != null ? (
@@ -1030,7 +1030,7 @@ function HeatmapPanel({
         {loading && data.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 opacity-50">
             <RefreshCcw className="w-7 h-7 animate-spin text-accent" />
-            <p className="text-[10px] font-bold uppercase tracking-widest text-text-s">Loading…</p>
+            <p className="text-xs font-medium text-text-s">Loading…</p>
           </div>
         ) : error && data.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
@@ -1038,7 +1038,7 @@ function HeatmapPanel({
             <button
               type="button"
               onClick={() => void reload()}
-              className="px-4 py-2 rounded-xl bg-white/5 border border-border/40 text-[9px] font-black uppercase tracking-widest hover:bg-white/10 transition-all"
+              className="px-4 py-2 rounded-xl bg-white/5 border border-border/40 text-xs font-semibold hover:bg-white/10 transition-all"
             >
               Retry
             </button>
@@ -1071,7 +1071,7 @@ export function MarketIntelligence() {
 
   return (
     <div className="space-y-4">
-      <h2 className="page-title">Market Intelligence</h2>
+      <h2 className="page-title">Market intelligence</h2>
 
       {overviewError && (
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">

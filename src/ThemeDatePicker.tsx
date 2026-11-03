@@ -193,7 +193,7 @@ export function ThemeDatePicker({
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="text-xs font-bold uppercase tracking-widest text-text-p">{monthLabel(year, month)}</span>
+            <span className="text-xs font-medium text-text-p">{monthLabel(year, month)}</span>
             <button
               type="button"
               onClick={() => shiftMonth(1)}
@@ -208,7 +208,7 @@ export function ThemeDatePicker({
             {WEEKDAY_LABELS.map((d) => (
               <div
                 key={d}
-                className="text-center text-[10px] font-bold uppercase tracking-wider text-text-s/60 py-1"
+                className="text-center text-xs font-medium text-text-s/60 py-1"
               >
                 {d}
               </div>
@@ -250,7 +250,7 @@ export function ThemeDatePicker({
                 onChange('');
                 setOpen(false);
               }}
-              className="text-[10px] font-bold uppercase tracking-widest text-text-s hover:text-text-p transition-colors px-1"
+              className="text-xs font-medium text-text-s hover:text-text-p transition-colors px-1"
             >
               Clear
             </button>
@@ -260,7 +260,7 @@ export function ThemeDatePicker({
                 onChange(today);
                 setOpen(false);
               }}
-              className="text-[10px] font-bold uppercase tracking-widest text-accent hover:text-accent/80 transition-colors px-1"
+              className="text-xs font-medium text-accent hover:text-accent/80 transition-colors px-1"
             >
               Today
             </button>
@@ -288,7 +288,7 @@ export function ThemeDatePicker({
             return next;
           });
         }}
-        className={`w-full bg-bg/50 border border-border rounded-xl px-5 py-4 text-sm font-mono text-left focus:outline-none focus:border-accent/50 transition-colors flex items-center gap-3 ${
+        className={`w-full bg-bg/50 border border-border rounded-lg px-5 py-4 text-sm font-mono text-left focus:outline-none focus:border-accent/50 transition-colors flex items-center gap-3 ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'hover:border-border/80'
         }`}
       >
