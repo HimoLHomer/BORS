@@ -10,12 +10,12 @@ export type AllocationSliceRow = {
 /** Donut geometry in SVG viewBox units (the chart is drawn in a 200 × 200 box). */
 export const ALLOCATION_DONUT_VIEWBOX = 200;
 export const ALLOCATION_DONUT_CENTER = 100;
-export const ALLOCATION_DONUT_OUTER_R = 90;
-export const ALLOCATION_DONUT_INNER_R = 58;
+export const ALLOCATION_DONUT_OUTER_R = 92;
+export const ALLOCATION_DONUT_INNER_R = 76;
 /** The hovered slice grows outward by this much. */
-export const ALLOCATION_DONUT_HOVER_GROW = 5;
+export const ALLOCATION_DONUT_HOVER_GROW = 3;
 /** Gap between neighbouring slices, in degrees. */
-export const ALLOCATION_DONUT_GAP_DEG = 1.6;
+export const ALLOCATION_DONUT_GAP_DEG = 1.5;
 /** A slice never gives up more than this share of its own angle to gaps. */
 const MAX_GAP_SHARE = 0.4;
 

@@ -1,5 +1,4 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Group, Ungroup } from 'lucide-react';
 import { formatCurrency } from './formatCurrency';
 import { formatPercentFi } from './formatNumber';
 import { SkeletonBlock } from './SkeletonPulse';
@@ -9,14 +8,20 @@ import {
   donutSegmentPath,
   hitTestAllocationDonut,
   ALLOCATION_DONUT_VIEWBOX,
+  ALLOCATION_DONUT_CENTER,
   ALLOCATION_DONUT_INNER_R,
   ALLOCATION_DONUT_OUTER_R,
   ALLOCATION_DONUT_HOVER_GROW,
 } from './allocationPieLabels';
 import { AllocationPieDefs, allocationPieChromes, type PieSliceChrome } from './allocationPieChrome';
+import { AllocationLavaCore } from './AllocationLavaCore';
 
 /** Corner rounding of each ring segment, in viewBox units. */
-const ALLOCATION_DONUT_CORNER_R = 3;
+const ALLOCATION_DONUT_CORNER_R = 2;
+/** A hairline circle just inside the ring. */
+const ALLOCATION_DONUT_HAIRLINE_R = ALLOCATION_DONUT_INNER_R - 6;
+/** Its twin just outside the ring, clear of the hovered slice's growth. */
+const ALLOCATION_DONUT_OUTER_HAIRLINE_R = ALLOCATION_DONUT_OUTER_R + ALLOCATION_DONUT_HOVER_GROW + 3;
 
 function AllocationPieLegendList({
   slices,
@@ -94,25 +99,16 @@ export function AllocationPieChart({
   slices,
   holdingsCount,
   loading,
-  showAll,
-  onToggleShowAll,
 }: {
   slices: AllocationSliceRow[];
   /** Number of holdings (the slices fold small ones into "Other"). */
   holdingsCount: number;
   loading: boolean;
-  /** Every holding has its own slice (small ones are not folded into "Other"). */
-  showAll: boolean;
-  onToggleShowAll: () => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const arcs = useMemo(() => allocationDonutArcs(slices), [slices]);
   const chromes = useMemo(() => allocationPieChromes(slices), [slices]);
-  const grouped = slices.some((r) => r.key === 'other');
-  // The centre button only shows when grouping changes something: there is an "Other" slice,
-  // or every holding is listed and some were folded before.
-  const canToggleGrouping = grouped || showAll;
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<SVGSVGElement>) => {
@@ -131,6 +127,21 @@ export function AllocationPieChart({
   );
 
   const hovered = hoveredIndex != null ? slices[hoveredIndex] : undefined;
+  const hoveredChrome = hoveredIndex != null ? chromes[hoveredIndex] : undefined;
+  // Bumped by each click in the orb, to replay the ring's flash.
+  const [pulse, setPulse] = useState(0);
+
+  const slicePaths = arcs.map((arc) => {
+    const active = hoveredIndex === arc.index;
+    const outerR = ALLOCATION_DONUT_OUTER_R + (active ? ALLOCATION_DONUT_HOVER_GROW : 0);
+    return {
+      key: slices[arc.index]!.key,
+      d: donutSegmentPath(arc.startDeg, arc.endDeg, ALLOCATION_DONUT_INNER_R, outerR, ALLOCATION_DONUT_CORNER_R),
+      chrome: chromes[arc.index]!,
+      active,
+      dimmed: hoveredIndex != null && !active,
+    };
+  });
 
   return (
     <div
@@ -157,65 +168,114 @@ export function AllocationPieChart({
           aria-hidden
         >
           <AllocationPieDefs />
+          {/* The hole, and a hairline just inside the ring. */}
+          <circle cx={ALLOCATION_DONUT_CENTER} cy={ALLOCATION_DONUT_CENTER} r={ALLOCATION_DONUT_INNER_R} fill="url(#allocationHoleFill)" />
+          <circle
+            cx={ALLOCATION_DONUT_CENTER}
+            cy={ALLOCATION_DONUT_CENTER}
+            r={ALLOCATION_DONUT_HAIRLINE_R}
+            fill="none"
+            stroke="var(--color-border-strong)"
+            strokeWidth={0.75}
+          />
+          {/* A hairline just outside the ring, clear of the hovered slice's growth. */}
+          <circle
+            cx={ALLOCATION_DONUT_CENTER}
+            cy={ALLOCATION_DONUT_CENTER}
+            r={ALLOCATION_DONUT_OUTER_HAIRLINE_R}
+            fill="none"
+            stroke="var(--color-border-strong)"
+            strokeOpacity={0.7}
+            strokeWidth={0.6}
+          />
           {arcs.length === 0 ? (
             <path
               d={donutSegmentPath(0, 360, ALLOCATION_DONUT_INNER_R, ALLOCATION_DONUT_OUTER_R, 0)}
-              fill="rgba(34, 39, 52, 0.6)"
+              fill="var(--color-surface-3)"
               fillRule="evenodd"
-              stroke="rgba(59, 130, 246, 0.2)"
             />
           ) : (
-            arcs.map((arc) => {
-              const row = slices[arc.index]!;
-              const chrome = chromes[arc.index]!;
-              const active = hoveredIndex === arc.index;
-              const dimmed = hoveredIndex != null && !active;
-              const outerR = ALLOCATION_DONUT_OUTER_R + (active ? ALLOCATION_DONUT_HOVER_GROW : 0);
-              return (
-                <path
-                  key={row.key}
-                  d={donutSegmentPath(arc.startDeg, arc.endDeg, ALLOCATION_DONUT_INNER_R, outerR, ALLOCATION_DONUT_CORNER_R)}
-                  fill={`url(#${chrome.gradientId})`}
-                  fillRule="evenodd"
-                  opacity={dimmed ? 0.45 : 1}
-                  style={{ transition: 'opacity 150ms ease-out' }}
-                  // Glow only on the hovered slice, like the portfolio line's active point.
-                  filter={active ? 'url(#allocationEdgeGlow)' : undefined}
-                />
-              );
-            })
+            <>
+              <clipPath id="allocationRingClip">
+                {slicePaths.map(({ key, d }) => (
+                  <path key={key} d={d} />
+                ))}
+              </clipPath>
+              {slicePaths.map(({ key, d, chrome, active, dimmed }) => (
+                <g key={key} opacity={dimmed ? 0.4 : 1} style={{ transition: 'opacity 150ms ease-out' }}>
+                  {/* Soft halo in the slice's colour behind it; stronger on the hovered slice. */}
+                  <path d={d} fill={chrome.stroke} fillRule="evenodd" opacity={active ? 0.75 : 0.4} filter="url(#allocationHalo)" />
+                  {/* Glassy body: a translucent fill with a bright edge, like the area chart. */}
+                  <path
+                    d={d}
+                    fill={chrome.stroke}
+                    fillOpacity={active ? 0.72 : 0.45}
+                    fillRule="evenodd"
+                    stroke={chrome.stroke}
+                    strokeOpacity={0.95}
+                    strokeWidth={0.9}
+                    strokeLinejoin="round"
+                    filter={active ? 'url(#allocationEdgeGlow)' : undefined}
+                  />
+                </g>
+              ))}
+              {/* Light on the glass, kept to the slices themselves so the gaps stay clean. */}
+              <g clipPath="url(#allocationRingClip)" pointerEvents="none">
+                <rect width={ALLOCATION_DONUT_VIEWBOX} height={ALLOCATION_DONUT_VIEWBOX} fill="url(#allocationRingRim)" />
+                <rect width={ALLOCATION_DONUT_VIEWBOX} height={ALLOCATION_DONUT_VIEWBOX} fill="url(#allocationRingReflection)" />
+                {/* A glint that travels round the ring now and then. */}
+                <g className="allocation-ring-glint">
+                  <path
+                    d={donutSegmentPath(-22, 22, ALLOCATION_DONUT_INNER_R - 4, ALLOCATION_DONUT_OUTER_R + ALLOCATION_DONUT_HOVER_GROW + 4, 0)}
+                    fill="url(#allocationRingGlint)"
+                    filter="url(#allocationGlintBlur)"
+                  />
+                </g>
+                {/* Each click in the orb flashes the ring once its ripple reaches it. */}
+                {pulse > 0 ? (
+                  <rect
+                    key={pulse}
+                    className="allocation-ring-pulse"
+                    width={ALLOCATION_DONUT_VIEWBOX}
+                    height={ALLOCATION_DONUT_VIEWBOX}
+                    fill="#fff"
+                  />
+                ) : null}
+              </g>
+            </>
           )}
         </svg>
         {!loading && slices.length > 0 ? (
-          // Centre of the ring: the hovered slice's share and value, else a button that lists
-          // every holding or folds the small ones back into "Other".
-          <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center">
+          // A toy in the hole, just inside the hairline: drifting light the pointer can stir.
+          <AllocationLavaCore
+            diameterPercent={(ALLOCATION_DONUT_HAIRLINE_R * 2 * 100) / ALLOCATION_DONUT_VIEWBOX}
+            colours={chromes.map((c) => c.stroke)}
+            shares={slices.map((s) => s.percent)}
+            highlight={hoveredIndex}
+            onPoke={() => setPulse((p) => p + 1)}
+          />
+        ) : null}
+        {!loading && slices.length > 0 ? (
+          // Centre of the ring: the hovered slice's share and value, else the holdings count.
+          <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center [text-shadow:0_1px_10px_rgb(0_0_0/0.75)]">
             {hovered ? (
-              <div className="flex max-w-[52%] flex-col items-center gap-1 text-center">
-                <span className="micro-label max-w-full truncate" title={hovered.name}>
-                  {hovered.label}
+              // Laid out like the app's other stats: micro-label, stat-value, stat-subline.
+              <div className="flex max-w-[60%] flex-col items-center text-center">
+                <span className="mb-1.5 flex max-w-full items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: hoveredChrome?.stroke }} aria-hidden />
+                  <span className="micro-label truncate" title={hovered.name}>
+                    {hovered.label}
+                  </span>
                 </span>
-                <span className="stat-value !text-[26px]">{formatPercentFi(hovered.percent, 1)}</span>
-                <span className="micro-label tabular-nums">{formatCurrency(hovered.value, 'EUR')}</span>
+                <span className="stat-value !text-[28px] tabular-nums">{formatPercentFi(hovered.percent, 1)}</span>
+                <span className="stat-subline !mt-1.5">{formatCurrency(hovered.value, 'EUR')}</span>
               </div>
-            ) : canToggleGrouping ? (
-              <button
-                type="button"
-                onClick={onToggleShowAll}
-                aria-pressed={showAll}
-                aria-label={showAll ? 'Group small holdings into Other' : `Show all ${holdingsCount} holdings`}
-                title={showAll ? 'Group small holdings into Other' : `Show all ${holdingsCount} holdings`}
-                // Styled like the app's primary button, sized with the ring.
-                className="pointer-events-auto flex aspect-square w-[34%] flex-col items-center justify-center gap-1 rounded-full border border-accent/40 bg-[radial-gradient(circle_at_50%_30%,rgb(96_154_250/0.32),rgb(59_130_246/0.12)_70%)] text-accent-200 shadow-lg shadow-accent/25 transition-all hover:border-accent-300/70 hover:bg-accent hover:text-white active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60"
-              >
-                {showAll ? (
-                  <Group className="h-[34%] w-[34%]" strokeWidth={2} aria-hidden />
-                ) : (
-                  <Ungroup className="h-[34%] w-[34%]" strokeWidth={2} aria-hidden />
-                )}
-                <span className="text-[11px] font-semibold leading-none">{showAll ? 'Group' : 'Show all'}</span>
-              </button>
-            ) : null}
+            ) : (
+              <div className="flex max-w-[60%] flex-col items-center text-center">
+                <span className="micro-label mb-1.5">Holdings</span>
+                <span className="stat-value !text-[28px] tabular-nums">{holdingsCount}</span>
+              </div>
+            )}
           </div>
         ) : null}
       </div>

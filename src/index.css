@@ -289,6 +289,41 @@
   background-attachment: local;
 }
 
+/* Allocation ring: a glint that laps the ring every few seconds, and a flash when a click's
+   ripple in the centre orb reaches it. */
+.allocation-ring-glint {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  opacity: 0;
+  animation: allocation-ring-glint 9s cubic-bezier(0.45, 0, 0.25, 1) 1.5s infinite;
+}
+
+@keyframes allocation-ring-glint {
+  0% { transform: rotate(0deg); opacity: 0; }
+  5% { opacity: 1; }
+  40% { opacity: 1; }
+  45% { transform: rotate(360deg); opacity: 0; }
+  100% { transform: rotate(360deg); opacity: 0; }
+}
+
+.allocation-ring-pulse {
+  opacity: 0;
+  animation: allocation-ring-pulse 0.9s ease-out;
+}
+
+@keyframes allocation-ring-pulse {
+  0% { opacity: 0; }
+  40% { opacity: 0.3; }
+  100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .allocation-ring-glint,
+  .allocation-ring-pulse {
+    animation: none;
+  }
+}
+
 /* Allocation pie — ambient glow aligned with portfolio area chart */
 .allocation-pie-glow {
   isolation: isolate;

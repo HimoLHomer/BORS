@@ -170,7 +170,6 @@ export default function App() {
   const [cashSaving, setCashSaving] = useState(false);
   const [cashEditing, setCashEditing] = useState(false);
   /** Allocation chart lists every holding instead of folding small ones into "Other". */
-  const [allocationShowAll, setAllocationShowAll] = useState(false);
   const cashEditCancelledRef = useRef(false);
 
   const cashLineEur = useMemo(() => {
@@ -918,7 +917,7 @@ export default function App() {
     // card) fold into one "Other" slice. A single small holding keeps its own slice.
     const keep = Math.min(
       ALLOCATION_MAX_HOLDING_SLICES,
-      allocationShowAll ? rows.length : rows.filter((r) => r.percent >= ALLOCATION_MIN_SLICE_PERCENT).length
+      rows.filter((r) => r.percent >= ALLOCATION_MIN_SLICE_PERCENT).length
     );
     if (rows.length - keep >= 2) {
       const rest = rows.slice(keep);
@@ -939,7 +938,7 @@ export default function App() {
       rows.sort((a, b) => (a.key === 'other' ? 1 : b.key === 'other' ? -1 : b.value - a.value));
     }
     return rows;
-  }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur, allocationShowAll]);
+  }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur]);
 
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
@@ -1930,8 +1929,6 @@ export default function App() {
                       slices={allocationSlices}
                       holdingsCount={assets.length}
                       loading={feedMetricsLoading}
-                      showAll={allocationShowAll}
-                      onToggleShowAll={() => setAllocationShowAll((v) => !v)}
                     />
                   </div>
                 </div>
@@ -1940,14 +1937,7 @@ export default function App() {
                 {/* Holdings Table Section */}
                 <div className="lg:col-span-4 glass-panel p-8">
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-                    <h3 className="card-title mb-0">
-                      Holdings
-                      {assets.length > 0 ? (
-                        <span className="ml-2 text-xs font-medium text-text-s/60 tabular-nums">
-                          {holdingsSearchActive ? `${sortedHoldings.length} of ${assets.length}` : assets.length}
-                        </span>
-                      ) : null}
-                    </h3>
+                    <h3 className="card-title mb-0">Holdings</h3>
                     <div className="flex items-center gap-2 ml-auto">
                     {assets.length > HOLDINGS_SEARCH_MIN_ROWS || holdingsSearchActive ? (
                       <label className="relative">
