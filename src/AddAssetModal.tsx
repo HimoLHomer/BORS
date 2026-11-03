@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { useEscapeToClose } from './useEscapeToClose';
-import { X, Search, RefreshCcw, Zap, ChevronDown } from 'lucide-react';
+import { X, Search, RefreshCcw, Zap, ChevronDown, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Asset } from './types';
 import { convertAmountBetweenCurrencies, formatCurrency, fxToEur } from './formatCurrency';
@@ -113,8 +113,10 @@ function currencyOptionsWith(current: string | undefined): { code: string; label
 /** Cost this far from today's price on a new purchase suggests an older buy (shown as a hint). */
 const COST_VS_PRICE_WARN_SHARE = 0.15;
 
-export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates, existingAssets = [] }: {
+export const AddAssetModal = ({ onClose, onPersist, onRemove, editAsset, exchangeRates, existingAssets = [] }: {
   onClose: () => void,
+  /** Edit mode only: removes the holding (asks for confirmation first). */
+  onRemove?: () => void,
   onPersist: (
     asset: Asset,
     isEdit: boolean,
@@ -732,6 +734,16 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates, ex
               editAsset ? 'Save changes' : existingHolding ? 'Add to holding' : 'Add to portfolio'
             )}
           </button>
+          {editAsset && onRemove ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              disabled={isSubmitting}
+              className="w-full shrink-0 py-3 mt-2 text-red/80 hover:text-red hover:bg-red/10 disabled:opacity-50 font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Remove holding
+            </button>
+          ) : null}
         </form>
       </motion.div>
     </motion.div>

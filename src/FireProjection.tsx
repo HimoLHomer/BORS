@@ -257,7 +257,7 @@ export function FireProjection({
     dividend: formatCurrency(r.annualDividendNetEur, 'EUR'),
     labour: formatCurrency(r.annualNeededFromLabourEur, 'EUR'),
     months: formatNumberFi(r.monthsNotCoveredByDividends, {
-      minimumFractionDigits: 1,
+      minimumFractionDigits: 0,
       maximumFractionDigits: 1,
     }),
   }));

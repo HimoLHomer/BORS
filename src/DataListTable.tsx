@@ -69,6 +69,11 @@ export function DataListTable({
   maxHeight?: string;
 }) {
   const colSpan = columns.length;
+  /** Clicks on a row's own controls (buttons, inputs, links) don't count as a row click. */
+  const handleRowClick = (e: React.MouseEvent, rowIndex: number) => {
+    if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return;
+    onRowClick?.(rowIndex);
+  };
 
   return (
     <div
@@ -171,7 +176,7 @@ export function DataListTable({
                         ? { delay: i * 0.04, duration: 0.22, ease: [0.22, 1, 0.36, 1] as const }
                         : { duration: 0 }
                     }
-                    onClick={onRowClick ? () => onRowClick(i) : undefined}
+                    onClick={onRowClick ? (e) => handleRowClick(e, i) : undefined}
                   >
                     {cells}
                   </motion.tr>
@@ -182,7 +187,7 @@ export function DataListTable({
                 <tr
                   key={rowKey}
                   className={rowClass}
-                  onClick={onRowClick ? () => onRowClick(i) : undefined}
+                  onClick={onRowClick ? (e) => handleRowClick(e, i) : undefined}
                 >
                   {cells}
                 </tr>

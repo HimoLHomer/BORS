@@ -22,8 +22,14 @@ const withGap = listMissingHistoryDates(
   90
 );
 assert(
-  withGap.join(",") === "2026-05-04,2026-05-05,2026-05-06",
-  "fills from day after latest stored through untilDate, skipping existing"
+  withGap.join(",") === "2026-05-02,2026-05-04,2026-05-05,2026-05-06",
+  "fills every gap from the first stored date through untilDate, skipping existing"
+);
+
+const todaySavedFirst = listMissingHistoryDates(["2026-05-01", "2026-05-08"], "2026-05-07", 90);
+assert(
+  todaySavedFirst.join(",") === "2026-05-02,2026-05-03,2026-05-04,2026-05-05,2026-05-06,2026-05-07",
+  "a later stored day (today's live value) does not hide the gap before it"
 );
 
 const capped = listMissingHistoryDates([], "2026-05-20", 3);

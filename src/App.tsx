@@ -8,7 +8,6 @@ import {
   X,
   Activity,
   Zap,
-  Trash2,
   Pencil,
   LayoutDashboard,
   Coins,
@@ -88,17 +87,21 @@ import { apiHoldingKey, forgetTrackedHoldings } from './dividendRedemptions';
 import { AddAssetModal } from './AddAssetModal';
 import { UndoToast, useConfirmDialog } from './ConfirmDialog';
 import { InfoHint } from './InfoHint';
-import { Sparkline } from './Sparkline';
+import { Sparkline, sparklineWithLiveQuote, type HoldingSparklineData } from './Sparkline';
 import { gainPercentOf, holdingTodayGainEur, todaysPurchasesBySymbol } from './todayGain';
 
 /** Delay before saving today's total after a holding or cash change. */
 const HISTORY_SAVE_DEBOUNCE_MS = 2000;
 /** Minimum spacing between saves when only quotes/FX moved the total. */
 const HISTORY_PRICE_SAVE_INTERVAL_MS = 60_000;
+/** How often an open app checks whether history needs a backfill (new day, or days left unfilled). */
+const HISTORY_BACKFILL_RECHECK_MS = 60 * 60_000;
 /** From this many holdings the table gets a search box and scrolls under a sticky header. */
 const HOLDINGS_SEARCH_MIN_ROWS = 12;
 /** Allocation pie: largest holdings shown as their own slice; the rest become "Other". */
 const ALLOCATION_MAX_HOLDING_SLICES = 12;
+/** Holdings below this share of the portfolio (%) are folded into "Other" when there are two or more. */
+const ALLOCATION_MIN_SLICE_PERCENT = 2;
 /** Wait this long after holdings/cash change before fetching the slow chart series. */
 const SERIES_FETCH_SETTLE_MS = 400;
 /** How often the 1D intraday series is refreshed while the 1D view is open. */
@@ -108,14 +111,14 @@ const INTRADAY_REFRESH_MS = 3 * 60_000;
 
 export default function App() {
   const [loading, setLoading] = useState(true);
-  const [dataStoreHint, setDataStoreHint] = useState<string>('SQLite');
+  const [dataStoreHint, setDataStoreHint] = useState<string>('');
   const [dataStorePath, setDataStorePath] = useState<string | null>(null);
   const [dbPathCopied, setDbPathCopied] = useState(false);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [portfolioFlows, setPortfolioFlows] = useState<PortfolioFlow[]>([]);
   /** Latest trading day per holding, for the Holdings sparklines. */
-  const [sparklines, setSparklines] = useState<Record<string, { points: number[]; previousClose: number | null }>>({});
+  const [sparklines, setSparklines] = useState<Record<string, HoldingSparklineData>>({});
   const [portfolioChartRange, setPortfolioChartRange] = useState<PortfolioChartRangeId | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [historyModal, setHistoryModal] = useState<
@@ -157,14 +160,17 @@ export default function App() {
   /** Strict Mode / remount: incremented on effect cleanup so stale async cannot apply portfolio state. */
   const portfolioBootstrapGenerationRef = useRef(0);
   const statsTotalValueRef = useRef(0);
-  /** One automatic history backfill per app session after portfolio valuation is ready. */
-  const historyBackfillDoneRef = useRef(false);
+  /** Helsinki date of the last automatic backfill that left no day unfilled; re-run when it changes. */
+  const historyBackfillDayRef = useRef<string | null>(null);
+  const historyBackfillRunningRef = useRef(false);
   const [historyBackfillBusy, setHistoryBackfillBusy] = useState(false);
   const [historyBackfillNote, setHistoryBackfillNote] = useState<string | null>(null);
   const [cashEur, setCashEur] = useState(0);
   const [cashInput, setCashInput] = useState('');
   const [cashSaving, setCashSaving] = useState(false);
   const [cashEditing, setCashEditing] = useState(false);
+  /** Allocation chart lists every holding instead of folding small ones into "Other". */
+  const [allocationShowAll, setAllocationShowAll] = useState(false);
   const cashEditCancelledRef = useRef(false);
 
   const cashLineEur = useMemo(() => {
@@ -283,7 +289,7 @@ export default function App() {
         if (s.dbPath && typeof s.dbPath === 'string') {
             const short = s.dbPath.replace(/\\/g, '/').split('/').slice(-2).join('/');
             if (!cancelled) {
-              setDataStoreHint(`SQLite (${short})`);
+              setDataStoreHint(short);
               setDataStorePath(s.dbPath);
             }
           }
@@ -474,7 +480,6 @@ export default function App() {
         'gain',
         'trend',
         'today',
-        'actions',
       ]),
     [assets.length]
   );
@@ -492,7 +497,8 @@ export default function App() {
     return quantity * price * holdingQuoteFxToEur(asset.symbol, asset.currency, quoteCurrencies, exchangeRates);
   };
 
-  const removeAsset = async (id: string) => {
+  /** Returns true once the holding is removed (false if cancelled or failed). */
+  const removeAsset = async (id: string): Promise<boolean> => {
     try {
       const removed = assets.find((a) => a.id === id);
       // Removing a holding is a sale at today's value; without a live price the server looks it up.
@@ -507,7 +513,7 @@ export default function App() {
           destructive: true,
         }))
       ) {
-        return;
+        return false;
       }
       const res = await fetch(`/api/portfolio/assets/${encodeURIComponent(id)}`, {
         method: 'DELETE',
@@ -526,8 +532,10 @@ export default function App() {
       if (result.undoId && removed) {
         setRemovalUndo({ undoId: result.undoId, label: removed.displaySymbol || removed.name || removed.symbol });
       }
+      return true;
     } catch (err) {
       console.error('Failed to remove position:', err);
+      return false;
     }
   };
 
@@ -654,35 +662,15 @@ export default function App() {
           trend: sparklines[item.symbol] ? (
             <div className="flex justify-end">
               <Sparkline
-                points={sparklines[item.symbol]!.points}
-                previousClose={sparklines[item.symbol]!.previousClose}
+                {...sparklineWithLiveQuote(
+                  sparklines[item.symbol]!,
+                  hasLivePrice ? price : null,
+                  marketChanges[item.symbol]
+                )}
               />
             </div>
           ) : null,
           today: <GainDisplay amountEur={todayGainEur} percent={todayGainPercent} />,
-          actions: (
-            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingAsset(item);
-                  setIsModalOpen(true);
-                }}
-                className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
-                aria-label="Edit holding"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => removeAsset(item.id!)}
-                className="p-1.5 text-text-s hover:text-red hover:bg-red/10 rounded-lg transition-all shrink-0"
-                aria-label="Remove holding"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ),
         };
       }),
     [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, initialQuotesPending, quotedSymbols, sparklines]
@@ -926,13 +914,17 @@ export default function App() {
     let rows = assetRows
       .map((r) => ({ ...r, percent: (r.value / t) * 100 }))
       .sort((a, b) => b.value - a.value);
-    // Beyond a dozen holdings the slices are slivers and the legend outgrows its card:
-    // keep the largest ones and fold the rest into one "Other" slice.
-    if (rows.length > ALLOCATION_MAX_HOLDING_SLICES + 1) {
-      const rest = rows.slice(ALLOCATION_MAX_HOLDING_SLICES);
+    // Slivers under 2% (and anything beyond a dozen holdings, where the legend outgrows its
+    // card) fold into one "Other" slice. A single small holding keeps its own slice.
+    const keep = Math.min(
+      ALLOCATION_MAX_HOLDING_SLICES,
+      allocationShowAll ? rows.length : rows.filter((r) => r.percent >= ALLOCATION_MIN_SLICE_PERCENT).length
+    );
+    if (rows.length - keep >= 2) {
+      const rest = rows.slice(keep);
       const value = rest.reduce((s, r) => s + r.value, 0);
       rows = [
-        ...rows.slice(0, ALLOCATION_MAX_HOLDING_SLICES),
+        ...rows.slice(0, keep),
         {
           key: 'other',
           name: `${rest.length} smaller holdings: ${rest.map((r) => r.label).join(', ')}`,
@@ -947,7 +939,7 @@ export default function App() {
       rows.sort((a, b) => (a.key === 'other' ? 1 : b.key === 'other' ? -1 : b.value - a.value));
     }
     return rows;
-  }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur]);
+  }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur, allocationShowAll]);
 
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
 
@@ -1074,7 +1066,10 @@ export default function App() {
     };
   }, [pendingTodayHistoryValue]);
 
-  const runHistoryBackfill = useCallback(async () => {
+  /** Returns true when no missing day was left unfilled (nothing to retry). */
+  const runHistoryBackfill = useCallback(async (): Promise<boolean> => {
+    if (historyBackfillRunningRef.current) return false;
+    historyBackfillRunningRef.current = true;
     setHistoryBackfillBusy(true);
     try {
       const res = await fetch('/api/portfolio/history/backfill', {
@@ -1083,9 +1078,9 @@ export default function App() {
       });
       if (!res.ok) {
         setHistoryBackfillNote('Backfill failed — check Yahoo connection.');
-        return;
+        return false;
       }
-      const json = (await res.json()) as { filled?: HistoryPoint[] };
+      const json = (await res.json()) as { filled?: HistoryPoint[]; skipped?: string[] };
       const n = json.filled?.length ?? 0;
       if (n > 0) {
         const list = await fetch('/api/portfolio/history', { cache: 'no-store' }).then((r) =>
@@ -1099,20 +1094,39 @@ export default function App() {
       } else {
         setHistoryBackfillNote(null);
       }
+      return (json.skipped?.length ?? 0) === 0;
     } catch (e) {
       console.warn('History backfill failed', e);
       setHistoryBackfillNote('Backfill failed — check Yahoo connection.');
+      return false;
     } finally {
+      historyBackfillRunningRef.current = false;
       setHistoryBackfillBusy(false);
     }
   }, []);
 
-  /** Backfill missed history days once per session (gap-only, up to yesterday). */
+  /**
+   * Backfill missed history days (up to yesterday) once valuation is ready, and again whenever
+   * the app is back in view or an hour passes on a new day, or after a run left days unfilled
+   * (Yahoo down). An app left open through sleep or overnight then catches up too.
+   */
   useEffect(() => {
     if (loading || !portfolioValuationReady) return;
-    if (historyBackfillDoneRef.current) return;
-    historyBackfillDoneRef.current = true;
-    void runHistoryBackfill();
+    const maybeRun = () => {
+      if (document.visibilityState === 'hidden') return;
+      const today = todayIsoDateHelsinki();
+      if (historyBackfillDayRef.current === today) return;
+      void runHistoryBackfill().then((complete) => {
+        if (complete) historyBackfillDayRef.current = today;
+      });
+    };
+    maybeRun();
+    document.addEventListener('visibilitychange', maybeRun);
+    const t = window.setInterval(maybeRun, HISTORY_BACKFILL_RECHECK_MS);
+    return () => {
+      document.removeEventListener('visibilitychange', maybeRun);
+      window.clearInterval(t);
+    };
   }, [loading, portfolioValuationReady, runHistoryBackfill]);
 
   const historyPanelRows = useMemo((): HistoryPoint[] => {
@@ -1346,6 +1360,18 @@ export default function App() {
     setCashEditing(true);
   };
 
+  const openHoldingEditor = (item: Asset) => {
+    setEditingAsset(item);
+    setIsModalOpen(true);
+  };
+
+  /** Clicking a holding opens its editor; the trailing cash row edits cash in place. */
+  const onHoldingsRowClick = (rowIndex: number) => {
+    const item = sortedHoldings[rowIndex];
+    if (item) openHoldingEditor(item);
+    else if (!cashEditing) startCashEdit();
+  };
+
   /** Cash as the last holdings row: shown like a holding's value, edited in place. */
   const cashTableRow: Record<string, React.ReactNode> = {
     asset: (
@@ -1407,18 +1433,6 @@ export default function App() {
     gain: null,
     trend: null,
     today: null,
-    actions: (
-      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          type="button"
-          onClick={startCashEdit}
-          className="p-1.5 text-text-s hover:text-accent hover:bg-accent/10 rounded-lg transition-all shrink-0"
-          aria-label="Edit cash"
-        >
-          <Pencil className="w-3.5 h-3.5" />
-        </button>
-      </div>
-    ),
   };
 
   // While searching, only matching holdings are listed (cash is not a holding).
@@ -1532,11 +1546,11 @@ export default function App() {
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                             <div className="space-y-1.5">
                               <p className="text-xs text-text-s font-medium leading-relaxed">
-                                Daily total value (EUR) in SQLite. Edit a row or add a past date you missed.
+                                Your portfolio's total value (EUR) for each day. Edit a row or add a past date you missed.
                               </p>
                               <p className="text-[11px] text-text-s/70 leading-relaxed max-w-prose">
                                 Missing days are filled automatically when you open BÖRS (historical closes).
-                                Uses current holdings — approximate if you traded while away.
+                                Holdings and cash are stepped back through your logged buys, sales and cash changes; a day with no price data is retried later.
                               </p>
                               {historyBackfillNote ? (
                                 <p
@@ -1912,7 +1926,13 @@ export default function App() {
                     <div className="mb-2">
                       <h3 className="card-title mb-0">Allocation</h3>
                     </div>
-                    <AllocationPieChart slices={allocationSlices} loading={feedMetricsLoading} />
+                    <AllocationPieChart
+                      slices={allocationSlices}
+                      holdingsCount={assets.length}
+                      loading={feedMetricsLoading}
+                      showAll={allocationShowAll}
+                      onToggleShowAll={() => setAllocationShowAll((v) => !v)}
+                    />
                   </div>
                 </div>
 
@@ -1984,13 +2004,6 @@ export default function App() {
                       { key: 'gain', label: 'Unrealized gain', align: 'right', sortable: true },
                       { key: 'trend', label: 'Today', align: 'right', headerClassName: 'w-28' },
                       { key: 'today', label: 'Today gain', align: 'right', sortable: true },
-                      {
-                        key: 'actions',
-                        label: '',
-                        align: 'right',
-                        headerClassName: 'w-16',
-                        cellClassName: 'px-3 py-2 text-right',
-                      },
                     ]}
                     rows={feedMetricsLoading ? holdingsTableSkeletonRows : holdingsTableRowsWithCash}
                     rowKeys={feedMetricsLoading ? undefined : holdingsRowKeysWithCash}
@@ -1998,6 +2011,7 @@ export default function App() {
                     enterStaggerMax={12}
                     sort={holdingsSort}
                     onSort={toggleHoldingsSort}
+                    onRowClick={feedMetricsLoading ? undefined : onHoldingsRowClick}
                     maxHeight={assets.length > HOLDINGS_SEARCH_MIN_ROWS ? '72vh' : undefined}
                     emptyState={
                       holdingsSearchActive ? (
@@ -2063,7 +2077,7 @@ export default function App() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="panel">
-                      <h3 className="card-title">Portfolio data (SQLite)</h3>
+                      <h3 className="card-title">Portfolio data file</h3>
                       {(dataStorePath ?? dataStoreHint) && (
                         <div className="space-y-2">
                           <p className="text-[11px] font-mono text-text-p break-all bg-bg/50 rounded-lg px-3 py-2 border border-border/50">
@@ -2133,6 +2147,16 @@ export default function App() {
               setEditingAsset(null);
             }} 
             editAsset={editingAsset || undefined}
+            onRemove={
+              editingAsset?.id
+                ? async () => {
+                    if (await removeAsset(editingAsset.id!)) {
+                      setIsModalOpen(false);
+                      setEditingAsset(null);
+                    }
+                  }
+                : undefined
+            }
             onPersist={persistAsset}
             exchangeRates={exchangeRates}
             existingAssets={assets}

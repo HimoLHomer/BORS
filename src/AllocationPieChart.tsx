@@ -1,37 +1,41 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Group, Ungroup } from 'lucide-react';
 import { formatCurrency } from './formatCurrency';
 import { formatPercentFi } from './formatNumber';
 import { SkeletonBlock } from './SkeletonPulse';
 import {
   type AllocationSliceRow,
-  hitTestAllocationPieSliceIndex,
-  ALLOCATION_PIE_CHART_MARGIN,
-  ALLOCATION_PIE_PADDING_ANGLE,
-  ALLOCATION_PIE_BASE_START_ANGLE,
-  ALLOCATION_PIE_BASE_END_ANGLE,
-  ALLOCATION_PIE_OUTER_RADIUS_FRAC,
+  allocationDonutArcs,
+  donutSegmentPath,
+  hitTestAllocationDonut,
+  ALLOCATION_DONUT_VIEWBOX,
+  ALLOCATION_DONUT_INNER_R,
+  ALLOCATION_DONUT_OUTER_R,
+  ALLOCATION_DONUT_HOVER_GROW,
 } from './allocationPieLabels';
-import { AllocationPieDefs, allocationPieSliceChrome } from './allocationPieChrome';
+import { AllocationPieDefs, allocationPieChromes, type PieSliceChrome } from './allocationPieChrome';
 
-const outerRadiusPct = `${Math.round(ALLOCATION_PIE_OUTER_RADIUS_FRAC * 1000) / 10}%`;
+/** Corner rounding of each ring segment, in viewBox units. */
+const ALLOCATION_DONUT_CORNER_R = 3;
 
 function AllocationPieLegendList({
   slices,
+  chromes,
   hoveredIndex,
   onHoverIndex,
 }: {
   slices: AllocationSliceRow[];
+  chromes: PieSliceChrome[];
   hoveredIndex: number | null;
   onHoverIndex: (index: number | null) => void;
 }) {
   if (slices.length === 0) return null;
 
   return (
-    <div className="allocation-pie-legend flex max-h-full min-h-0 w-max max-w-[15rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 overflow-y-auto overflow-x-hidden">
+    <div className="allocation-pie-legend flex max-h-full min-h-0 w-max max-w-[15rem] shrink-0 flex-col self-center border-t border-border/40 pt-2 sm:border-t-0 sm:pt-0 sm:border-l sm:pl-2.5 overflow-y-auto overflow-x-hidden">
       <ul className="m-0 list-none space-y-0.5 p-0">
         {slices.map((slice, index) => {
-          const chrome = allocationPieSliceChrome(slice.key, index, slices.length, slice.label);
+          const chrome = chromes[index]!;
           const active = hoveredIndex === index;
           return (
             <li key={slice.key}>
@@ -71,7 +75,7 @@ function AllocationPieLegendList({
 function AllocationPieLegendSkeleton() {
   return (
     <div
-      className="flex max-h-full min-h-0 w-max max-w-[15rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 space-y-1.5 overflow-hidden"
+      className="flex max-h-full min-h-0 w-max max-w-[15rem] shrink-0 flex-col self-center border-t border-border/40 pt-2 sm:border-t-0 sm:pt-0 sm:border-l sm:pl-2.5 space-y-1.5 overflow-hidden"
       aria-hidden
     >
       {[0, 1, 2, 3, 4].map((i) => (
@@ -88,160 +92,139 @@ function AllocationPieLegendSkeleton() {
 
 export function AllocationPieChart({
   slices,
+  holdingsCount,
   loading,
+  showAll,
+  onToggleShowAll,
 }: {
   slices: AllocationSliceRow[];
+  /** Number of holdings (the slices fold small ones into "Other"). */
+  holdingsCount: number;
   loading: boolean;
+  /** Every holding has its own slice (small ones are not folded into "Other"). */
+  showAll: boolean;
+  onToggleShowAll: () => void;
 }) {
-  const pieHitRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef(0);
-  const pendingPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const arcs = useMemo(() => allocationDonutArcs(slices), [slices]);
+  const chromes = useMemo(() => allocationPieChromes(slices), [slices]);
+  const grouped = slices.some((r) => r.key === 'other');
+  // The centre button only shows when grouping changes something: there is an "Other" slice,
+  // or every holding is listed and some were folded before.
+  const canToggleGrouping = grouped || showAll;
 
-  const clearHover = useCallback(() => {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = 0;
-    }
-    pendingPointerRef.current = null;
-    setHoveredIndex(null);
-  }, []);
-
-  const scheduleHoverUpdate = useCallback(
-    (clientX: number, clientY: number) => {
-      pendingPointerRef.current = { clientX, clientY };
-      if (rafRef.current) return;
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = 0;
-        const pending = pendingPointerRef.current;
-        pendingPointerRef.current = null;
-        const el = pieHitRef.current;
-        if (!pending || !el || loading || slices.length === 0) return;
-        const rect = el.getBoundingClientRect();
-        if (rect.width < 64 || rect.height < 64) return;
-        const idx = hitTestAllocationPieSliceIndex(
-          rect.width,
-          rect.height,
-          slices,
-          pending.clientX - rect.left,
-          pending.clientY - rect.top,
-          { ...ALLOCATION_PIE_CHART_MARGIN }
-        );
-        setHoveredIndex((prev) => (prev === idx ? prev : idx));
-      });
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      const svg = svgRef.current;
+      if (!svg || loading) return;
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      // Client pixels → viewBox units (the square box is scaled uniformly).
+      const scale = ALLOCATION_DONUT_VIEWBOX / Math.min(rect.width, rect.height);
+      const x = (e.clientX - rect.left - (rect.width - Math.min(rect.width, rect.height)) / 2) * scale;
+      const y = (e.clientY - rect.top - (rect.height - Math.min(rect.width, rect.height)) / 2) * scale;
+      const idx = hitTestAllocationDonut(arcs, x, y);
+      setHoveredIndex((prev) => (prev === idx ? prev : idx));
     },
-    [slices, loading]
+    [arcs, loading]
   );
+
+  const hovered = hoveredIndex != null ? slices[hoveredIndex] : undefined;
 
   return (
     <div
-      className="flex flex-row flex-1 w-full min-h-0 min-w-0 items-center justify-center gap-3 outline-none focus:outline-none focus-visible:outline-none"
+      className="flex flex-col sm:flex-row flex-1 w-full min-h-0 min-w-0 items-center justify-center gap-3 outline-none focus:outline-none focus-visible:outline-none"
       aria-busy={loading}
-      onMouseLeave={clearHover}
+      onMouseLeave={() => setHoveredIndex(null)}
     >
       <div
-        ref={pieHitRef}
-        className={`allocation-pie-glow relative aspect-square h-full max-h-full w-auto max-w-[min(58%,340px)] min-h-[220px] min-w-[140px] shrink self-center overflow-visible${
+        className={`allocation-pie-glow relative aspect-square w-full max-w-[260px] sm:h-full sm:max-h-full sm:w-auto sm:max-w-[min(58%,340px)] sm:min-h-[220px] min-w-[140px] shrink self-center overflow-visible${
           hoveredIndex != null ? ' allocation-pie-glow--hovered' : ''
         }`}
-        onMouseMove={(e) => scheduleHoverUpdate(e.clientX, e.clientY)}
       >
         {loading ? (
           <div className="absolute inset-0 flex items-center justify-center z-[1]">
             <SkeletonBlock className="aspect-square h-full max-h-[min(100%,300px)] w-auto max-w-full rounded-full" />
           </div>
         ) : null}
-        <ResponsiveContainer
-          width="100%"
-          height="100%"
-          initialDimension={{ width: 1, height: 1 }}
-          className={loading ? 'opacity-0 pointer-events-none' : 'pointer-events-none'}
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${ALLOCATION_DONUT_VIEWBOX} ${ALLOCATION_DONUT_VIEWBOX}`}
+          className={`relative z-[1] h-full w-full overflow-visible${loading ? ' opacity-0' : ''}`}
+          onPointerMove={onPointerMove}
+          onPointerLeave={() => setHoveredIndex(null)}
+          aria-hidden
         >
-          <PieChart
-            accessibilityLayer={false}
-            margin={{ ...ALLOCATION_PIE_CHART_MARGIN }}
-            style={{ outline: 'none', pointerEvents: 'none' }}
-            tabIndex={-1}
-          >
-            <AllocationPieDefs />
-            <Pie
-              key={
-                slices.length > 0
-                  ? [...new Set(slices.map((r) => r.key))].sort().join('|')
-                  : 'empty-allocation'
-              }
-              data={
-                slices.length > 0
-                  ? slices
-                  : [{ key: 'empty', name: 'No holdings', label: '—', value: 1, percent: 0 }]
-              }
-              cx="50%"
-              cy="50%"
-              innerRadius="0%"
-              outerRadius={outerRadiusPct}
-              dataKey="value"
-              nameKey="name"
-              startAngle={ALLOCATION_PIE_BASE_START_ANGLE}
-              endAngle={ALLOCATION_PIE_BASE_END_ANGLE}
-              paddingAngle={ALLOCATION_PIE_PADDING_ANGLE}
-              stroke="rgba(15, 23, 42, 0.85)"
-              strokeWidth={1.5}
-              isAnimationActive={false}
-              activeShape={false}
-              label={false}
-              labelLine={false}
-            >
-              {slices.length > 0 ? (
-                slices.map((row, index) => {
-                  const chrome = allocationPieSliceChrome(row.key, index, slices.length, row.label);
-                  const active = hoveredIndex === index;
-                  return (
-                    // Faint light hairline separates slices without paddingAngle, which
-                    // would take angle away from every slice and skew the proportions.
-                    <Cell
-                      key={row.key}
-                      fill={`url(#${chrome.gradientId})`}
-                      stroke={active ? chrome.stroke : 'rgba(255, 255, 255, 0.16)'}
-                      strokeWidth={active ? 2.5 : 0.75}
-                      strokeLinejoin="round"
-                      style={{
-                        pointerEvents: 'none',
-                        filter: active ? 'url(#allocationPieGlowHover)' : undefined,
-                      }}
-                    />
-                  );
-                })
-              ) : (
-                <Cell fill="rgba(34, 39, 52, 0.6)" stroke="rgba(59, 130, 246, 0.2)" />
-              )}
-            </Pie>
-            {slices.length > 0 ? (
-              // Bright rim around the whole pie, like the portfolio line; the slices' own strokes stay dark.
-              <Pie
-                data={[{ value: 1 }]}
-                dataKey="value"
-                cx="50%"
-                cy="50%"
-                innerRadius={outerRadiusPct}
-                outerRadius={outerRadiusPct}
-                fill="none"
-                stroke="rgba(96, 154, 250, 0.7)"
-                strokeWidth={1.5}
-                isAnimationActive={false}
-                activeShape={false}
-                label={false}
-                labelLine={false}
-                style={{ pointerEvents: 'none' }}
-              />
+          <AllocationPieDefs />
+          {arcs.length === 0 ? (
+            <path
+              d={donutSegmentPath(0, 360, ALLOCATION_DONUT_INNER_R, ALLOCATION_DONUT_OUTER_R, 0)}
+              fill="rgba(34, 39, 52, 0.6)"
+              fillRule="evenodd"
+              stroke="rgba(59, 130, 246, 0.2)"
+            />
+          ) : (
+            arcs.map((arc) => {
+              const row = slices[arc.index]!;
+              const chrome = chromes[arc.index]!;
+              const active = hoveredIndex === arc.index;
+              const dimmed = hoveredIndex != null && !active;
+              const outerR = ALLOCATION_DONUT_OUTER_R + (active ? ALLOCATION_DONUT_HOVER_GROW : 0);
+              return (
+                <path
+                  key={row.key}
+                  d={donutSegmentPath(arc.startDeg, arc.endDeg, ALLOCATION_DONUT_INNER_R, outerR, ALLOCATION_DONUT_CORNER_R)}
+                  fill={`url(#${chrome.gradientId})`}
+                  fillRule="evenodd"
+                  opacity={dimmed ? 0.45 : 1}
+                  style={{ transition: 'opacity 150ms ease-out' }}
+                  // Glow only on the hovered slice, like the portfolio line's active point.
+                  filter={active ? 'url(#allocationEdgeGlow)' : undefined}
+                />
+              );
+            })
+          )}
+        </svg>
+        {!loading && slices.length > 0 ? (
+          // Centre of the ring: the hovered slice's share and value, else a button that lists
+          // every holding or folds the small ones back into "Other".
+          <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center">
+            {hovered ? (
+              <div className="flex max-w-[52%] flex-col items-center gap-1 text-center">
+                <span className="micro-label max-w-full truncate" title={hovered.name}>
+                  {hovered.label}
+                </span>
+                <span className="stat-value !text-[26px]">{formatPercentFi(hovered.percent, 1)}</span>
+                <span className="micro-label tabular-nums">{formatCurrency(hovered.value, 'EUR')}</span>
+              </div>
+            ) : canToggleGrouping ? (
+              <button
+                type="button"
+                onClick={onToggleShowAll}
+                aria-pressed={showAll}
+                aria-label={showAll ? 'Group small holdings into Other' : `Show all ${holdingsCount} holdings`}
+                title={showAll ? 'Group small holdings into Other' : `Show all ${holdingsCount} holdings`}
+                // Styled like the app's primary button, sized with the ring.
+                className="pointer-events-auto flex aspect-square w-[34%] flex-col items-center justify-center gap-1 rounded-full border border-accent/40 bg-[radial-gradient(circle_at_50%_30%,rgb(96_154_250/0.32),rgb(59_130_246/0.12)_70%)] text-accent-200 shadow-lg shadow-accent/25 transition-all hover:border-accent-300/70 hover:bg-accent hover:text-white active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60"
+              >
+                {showAll ? (
+                  <Group className="h-[34%] w-[34%]" strokeWidth={2} aria-hidden />
+                ) : (
+                  <Ungroup className="h-[34%] w-[34%]" strokeWidth={2} aria-hidden />
+                )}
+                <span className="text-[11px] font-semibold leading-none">{showAll ? 'Group' : 'Show all'}</span>
+              </button>
             ) : null}
-          </PieChart>
-        </ResponsiveContainer>
+          </div>
+        ) : null}
       </div>
       {loading ? (
         <AllocationPieLegendSkeleton />
       ) : slices.length > 0 ? (
         <AllocationPieLegendList
           slices={slices}
+          chromes={chromes}
           hoveredIndex={hoveredIndex}
           onHoverIndex={setHoveredIndex}
         />

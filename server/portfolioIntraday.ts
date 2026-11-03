@@ -32,7 +32,10 @@ const CACHE_TTL_MS = 3 * 60 * 1000;
 
 const cache = new Map<PortfolioIntradayRange, { key: string; at: number; result: PortfolioIntraday | null }>();
 
-type BarsResult = { bars: Bar[]; currency: string | null; previousClose: number | null };
+/** Regular trading hours (epoch ms) of the exchange's current or next session, from chart meta. */
+type Session = { start: number; end: number };
+
+type BarsResult = { bars: Bar[]; currency: string | null; previousClose: number | null; session: Session | null };
 
 /**
  * Per-symbol chart cache, shared by the portfolio series and the holdings sparklines (both ask
@@ -88,13 +91,17 @@ async function fetchBarsUncached(
     bars.sort((a, b) => a.t - b.t);
     const meta = chart?.meta ?? {};
     const prev = Number(meta.chartPreviousClose ?? meta.previousClose);
+    const regular = meta.currentTradingPeriod?.regular;
+    const start = new Date(regular?.start ?? NaN).getTime();
+    const end = new Date(regular?.end ?? NaN).getTime();
     return {
       bars,
       currency: meta.currency ? String(meta.currency).toUpperCase() : null,
       previousClose: Number.isFinite(prev) && prev > 0 ? prev : null,
+      session: Number.isFinite(start) && Number.isFinite(end) && end > start ? { start, end } : null,
     };
   } catch {
-    return { bars: [], currency: null, previousClose: null };
+    return { bars: [], currency: null, previousClose: null, session: null };
   }
 }
 
@@ -245,6 +252,11 @@ export async function buildPortfolioIntraday(
 export type HoldingSparkline = {
   /** Prices through the holding's latest trading day (downsampled), in its quote currency. */
   points: number[];
+  /** Bar times (epoch ms) for `points`. */
+  times: number[];
+  /** That day's regular trading hours (epoch ms), so a session in progress fills only part of the line. */
+  sessionStart: number;
+  sessionEnd: number;
   /** Close before that day, for the up/down colour and a baseline. */
   previousClose: number | null;
 };
@@ -252,11 +264,27 @@ export type HoldingSparkline = {
 const SPARKLINE_POINTS = 48;
 let sparklineCache: { key: string; at: number; result: Record<string, HoldingSparkline> } | null = null;
 
-function downsample(values: number[], max: number): number[] {
+function downsample<T>(values: T[], max: number): T[] {
   if (values.length <= max) return values;
-  const out: number[] = [];
+  const out: T[] = [];
   for (let i = 0; i < max; i++) out.push(values[Math.round((i * (values.length - 1)) / (max - 1))]!);
   return out;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Regular hours of the day the bars cover. Chart meta gives the current (or next) session; for
+ * an earlier day it is shifted back by whole days. Without meta, the bars' own span is used.
+ */
+function sessionForDay(dayBars: Bar[], session: Session | null): Session {
+  const first = dayBars[0]!.t;
+  const last = dayBars[dayBars.length - 1]!.t;
+  if (!session) return { start: first, end: last };
+  const shift = Math.round((session.start - first) / DAY_MS) * DAY_MS;
+  const start = Math.min(session.start - shift, first);
+  const end = Math.max(session.end - shift, last);
+  return { start, end };
 }
 
 /** Each holding's 5-minute prices for its own latest trading day. */
@@ -273,18 +301,20 @@ export async function buildHoldingSparklines(
   const series = await Promise.all(unique.map((s) => fetchBars(yahooFinance, s, now, "1D")));
   const result: Record<string, HoldingSparkline> = {};
   unique.forEach((symbol, i) => {
-    const { bars, previousClose } = series[i]!;
+    const { bars, previousClose, session } = series[i]!;
     const last = bars[bars.length - 1];
     if (!last) return;
     const day = isoDateFromTimestampHelsinki(last.t);
     const dayBars = bars.filter((b) => isoDateFromTimestampHelsinki(b.t) === day);
     const before = bars.filter((b) => isoDateFromTimestampHelsinki(b.t)! < day!);
     if (dayBars.length < 2) return;
+    const sampled = downsample(dayBars, SPARKLINE_POINTS);
+    const { start, end } = sessionForDay(dayBars, session);
     result[symbol] = {
-      points: downsample(
-        dayBars.map((b) => b.close),
-        SPARKLINE_POINTS
-      ),
+      points: sampled.map((b) => b.close),
+      times: sampled.map((b) => b.t),
+      sessionStart: start,
+      sessionEnd: end,
       previousClose: before[before.length - 1]?.close ?? previousClose,
     };
   });

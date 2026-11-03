@@ -1,6 +1,6 @@
 import type { Asset } from "../src/types";
-import { fxToEur, holdingQuoteFxToEur } from "../src/formatCurrency";
-import { parseIsoDateOnly } from "../src/formatDate";
+import { NEW_HOLDING_NOTE, TRANSFER_IN_NOTE } from "../src/flowNotes";
+import { parseIsoDateOnly, todayIsoDateHelsinki } from "../src/formatDate";
 import { getPortfolioDb } from "./portfolio";
 
 type YahooFinanceLike = {
@@ -79,36 +79,69 @@ function loadCashEur(): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-function periodBoundsForDates(dates: string[]): { period1: Date; period2: Date } | null {
-  const parsed = dates.map(parseIsoDateOnly).filter((d): d is Date => d != null);
-  if (parsed.length === 0) return null;
-  const minMs = Math.min(...parsed.map((d) => d.getTime()));
-  const maxMs = Math.max(...parsed.map((d) => d.getTime()));
-  const period1 = new Date(minMs);
+/** A buy or sell logged after some day, used to step holdings back from today. */
+export type AssetFlow = { date: string; amountEur: number; symbol: string; note: string | null };
+/** A cash deposit (+) or withdrawal (−). */
+export type CashFlow = { date: string; amountEur: number };
+
+/** Buys/sells and cash changes dated after `afterDate`, newest first. */
+function loadFlowsAfter(afterDate: string): { assetFlows: AssetFlow[]; cashFlows: CashFlow[] } {
+  const rows = getPortfolioDb()
+    .prepare(
+      `SELECT date, amount_eur, kind, asset_symbol, note FROM portfolio_flows
+       WHERE date > ? ORDER BY date DESC, id DESC`
+    )
+    .all(afterDate) as {
+    date: string;
+    amount_eur: number;
+    kind: string;
+    asset_symbol: string | null;
+    note: string | null;
+  }[];
+  const assetFlows: AssetFlow[] = [];
+  const cashFlows: CashFlow[] = [];
+  for (const r of rows) {
+    if (!Number.isFinite(r.amount_eur)) continue;
+    if (r.kind === "cash") {
+      cashFlows.push({ date: r.date, amountEur: r.amount_eur });
+    } else if ((r.kind === "buy" || r.kind === "sell") && r.asset_symbol?.trim()) {
+      assetFlows.push({ date: r.date, amountEur: r.amount_eur, symbol: r.asset_symbol.trim(), note: r.note });
+    }
+  }
+  return { assetFlows, cashFlows };
+}
+
+function periodBounds(minIso: string, maxIso: string): { period1: Date; period2: Date } | null {
+  const min = parseIsoDateOnly(minIso);
+  const max = parseIsoDateOnly(maxIso);
+  if (!min || !max) return null;
+  const period1 = new Date(min.getTime());
   period1.setUTCDate(period1.getUTCDate() - 7);
-  const period2 = new Date(maxMs);
+  const period2 = new Date(max.getTime());
   period2.setUTCDate(period2.getUTCDate() + 1);
   return { period1, period2 };
 }
 
+/** `ok: false` when the request failed, as opposed to Yahoo returning no closes. */
 async function fetchSymbolSeries(
   yahooFinance: YahooFinanceLike,
   symbol: string,
   period1: Date,
   period2: Date
-): Promise<{ series: DailySeries; quoteCurrency: string | null }> {
+): Promise<{ ok: boolean; series: DailySeries; quoteCurrency: string | null }> {
   try {
     const chart = await yahooFinance.chart(
       symbol,
       { period1, period2, interval: "1d" },
       { validateResult: false }
     );
-    const currency = chart?.meta?.currency
+    if (!chart) return { ok: false, series: new Map(), quoteCurrency: null };
+    const currency = chart.meta?.currency
       ? String(chart.meta.currency).toUpperCase()
       : null;
-    return { series: quotesToDailySeries(chart?.quotes), quoteCurrency: currency };
+    return { ok: true, series: quotesToDailySeries(chart.quotes), quoteCurrency: currency };
   } catch {
-    return { series: new Map(), quoteCurrency: null };
+    return { ok: false, series: new Map(), quoteCurrency: null };
   }
 }
 
@@ -132,70 +165,131 @@ async function fetchFxSeries(
   }
 }
 
-function fxRateOnDate(
-  currency: string,
-  targetIso: string,
-  fxSeriesByCurrency: Map<string, DailySeries>,
-  staticFallback: Record<string, number>
-): number {
-  const c = (currency || "EUR").toUpperCase();
-  if (c === "EUR") return 1;
-  const fromSeries = closeOnOrBefore(fxSeriesByCurrency.get(c) ?? new Map(), targetIso);
-  if (fromSeries != null && fromSeries > 0) return fromSeries;
-  return staticFallback[c] ?? 0;
-}
-
-const FX_STATIC_FALLBACK: Record<string, number> = {
-  USD: 0.92,
-  GBP: 1.17,
-  SEK: 0.088,
-};
-
 export type PortfolioValuationInputs = {
+  /** Current holdings and cash: the starting point later flows are undone from. */
   assets: Asset[];
   cashEur: number;
+  /** Buys/sells dated after the earliest valued day, newest first. */
+  assetFlows: AssetFlow[];
+  /** Cash deposits/withdrawals dated after the earliest valued day. */
+  cashFlows: CashFlow[];
   symbolCloses: Map<string, DailySeries>;
+  /** Symbols whose price history could not be fetched: days that need them are not valued. */
+  failedSymbols: Set<string>;
   quoteCurrencies: Record<string, string>;
   fxSeriesByCurrency: Map<string, DailySeries>;
 };
 
+/** EUR per unit of `currency` on `date`, or 0 when no rate is known (never a guessed rate). */
+function fxOnDate(currency: string, date: string, inputs: PortfolioValuationInputs): number {
+  const c = (currency || "EUR").toUpperCase();
+  if (c === "EUR") return 1;
+  const rate = closeOnOrBefore(inputs.fxSeriesByCurrency.get(c) ?? new Map(), date);
+  return rate != null && rate > 0 ? rate : 0;
+}
+
+/** One share's close in EUR on `date`, or null when the close or FX rate is unknown. */
+function sharePriceEurOnDate(
+  symbol: string,
+  date: string,
+  inputs: PortfolioValuationInputs,
+  assetCurrency: string
+): number | null {
+  if (inputs.failedSymbols.has(symbol)) return null;
+  const close = closeOnOrBefore(inputs.symbolCloses.get(symbol) ?? new Map(), date);
+  if (close == null) return null;
+  const fx = fxOnDate(inputs.quoteCurrencies[symbol] || assetCurrency, date, inputs);
+  return fx > 0 ? close * fx : null;
+}
+
+export type HoldingPosition = {
+  shares: number;
+  /** Separate holdings of this symbol (duplicate tickers are allowed). */
+  lots: number;
+  /** Average purchase price, for symbols Yahoo has no closes for. */
+  costPerShare: number;
+  costCurrency: string;
+};
+
+/**
+ * Holdings at the end of `asOfDate`: today's holdings with every later buy and sale undone. A
+ * buy or sale becomes shares at that day's close; a new holding (or transfer in) is taken out
+ * whole when it is the symbol's only lot. Null when a flow's day has no price.
+ */
+export function holdingsOnDate(
+  asOfDate: string,
+  inputs: PortfolioValuationInputs
+): Map<string, HoldingPosition> | null {
+  const positions = new Map<string, HoldingPosition>();
+  for (const a of inputs.assets) {
+    const symbol = a.symbol?.trim();
+    const qty = Number(a.quantity);
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) continue;
+    const p = positions.get(symbol) ?? { shares: 0, lots: 0, costPerShare: 0, costCurrency: a.currency || "EUR" };
+    const cost = p.shares * p.costPerShare + qty * (a.averagePrice > 0 ? a.averagePrice : 0);
+    p.shares += qty;
+    p.lots += 1;
+    p.costPerShare = cost / p.shares;
+    positions.set(symbol, p);
+  }
+
+  for (const f of inputs.assetFlows) {
+    if (f.date <= asOfDate) continue;
+    const p = positions.get(f.symbol) ?? { shares: 0, lots: 0, costPerShare: 0, costCurrency: "EUR" };
+    const opensHolding = f.amountEur > 0 && (f.note === NEW_HOLDING_NOTE || f.note === TRANSFER_IN_NOTE);
+    if (opensHolding && p.lots <= 1) {
+      p.shares = 0;
+      p.lots = 0;
+    } else {
+      const price = sharePriceEurOnDate(f.symbol, f.date, inputs, p.costCurrency);
+      if (price == null || !(price > 0)) return null;
+      // Undo the flow: a buy added shares, a sale (negative amount) took them away.
+      p.shares = Math.max(0, p.shares - f.amountEur / price);
+      if (opensHolding) p.lots -= 1;
+      else if (f.amountEur < 0 && p.lots === 0) p.lots = 1;
+    }
+    positions.set(f.symbol, p);
+  }
+  return positions;
+}
+
+/** Cash at the end of `asOfDate`: today's cash with later deposits and withdrawals undone. */
+export function cashOnDate(asOfDate: string, inputs: PortfolioValuationInputs): number {
+  const later = inputs.cashFlows.reduce((s, f) => (f.date > asOfDate ? s + f.amountEur : s), 0);
+  return Math.max(0, inputs.cashEur - later);
+}
+
+/**
+ * Portfolio value in EUR at the end of `asOfDate`, from that day's closes and FX rates. Null
+ * when a needed price or rate is missing, so the day stays empty and is retried later instead of
+ * being stored with a guess. A holding Yahoo has no closes for (the fetch itself succeeded) is
+ * valued at its average purchase price, as on the dashboard.
+ */
 export function computePortfolioTotalEurOnDate(
   asOfDate: string,
   inputs: PortfolioValuationInputs
 ): number | null {
   if (!parseIsoDateOnly(asOfDate)) return null;
-
-  const exchangeRates: Record<string, number> = { EUR: 1 };
-  const currencies = new Set<string>(["EUR"]);
-  for (const asset of inputs.assets) {
-    const qc = (inputs.quoteCurrencies[asset.symbol] || asset.currency || "EUR").toUpperCase();
-    currencies.add(qc);
-    currencies.add((asset.currency || "EUR").toUpperCase());
-  }
-  for (const c of currencies) {
-    if (c === "EUR") continue;
-    const rate = fxRateOnDate(c, asOfDate, inputs.fxSeriesByCurrency, FX_STATIC_FALLBACK);
-    if (!(rate > 0)) return null;
-    exchangeRates[c] = rate;
-  }
+  const positions = holdingsOnDate(asOfDate, inputs);
+  if (!positions) return null;
 
   let holdingsEur = 0;
-  for (const asset of inputs.assets) {
-    const series = inputs.symbolCloses.get(asset.symbol);
-    const close = series ? closeOnOrBefore(series, asOfDate) : null;
-    const price = close ?? (asset.averagePrice > 0 ? asset.averagePrice : null);
-    if (price == null || !Number.isFinite(price)) return null;
-    const priceFx = holdingQuoteFxToEur(
-      asset.symbol,
-      asset.currency,
-      inputs.quoteCurrencies,
-      exchangeRates
-    );
-    if (!(priceFx > 0)) return null;
-    holdingsEur += asset.quantity * price * priceFx;
+  for (const [symbol, p] of positions) {
+    if (!(p.shares > 1e-9)) continue;
+    if (inputs.failedSymbols.has(symbol)) return null;
+    const price = sharePriceEurOnDate(symbol, asOfDate, inputs, p.costCurrency);
+    if (price != null) {
+      holdingsEur += p.shares * price;
+      continue;
+    }
+    const hasCloses = (inputs.symbolCloses.get(symbol)?.size ?? 0) > 0;
+    if (hasCloses || !(p.costPerShare > 0)) return null;
+    const fx = fxOnDate(p.costCurrency, asOfDate, inputs);
+    if (!(fx > 0)) return null;
+    holdingsEur += p.shares * p.costPerShare * fx;
   }
 
-  return Math.round((holdingsEur + inputs.cashEur) * 100) / 100;
+  return Math.round((holdingsEur + cashOnDate(asOfDate, inputs)) * 100) / 100;
 }
 
 export async function buildPortfolioValuationInputs(
@@ -204,21 +298,33 @@ export async function buildPortfolioValuationInputs(
 ): Promise<PortfolioValuationInputs> {
   const assets = loadPortfolioAssets();
   const cashEur = loadCashEur();
-  const bounds = periodBoundsForDates(dates);
+  const sorted = dates.filter((d) => parseIsoDateOnly(d)).sort();
+  const earliest = sorted[0];
+  const { assetFlows, cashFlows } = earliest ? loadFlowsAfter(earliest) : { assetFlows: [], cashFlows: [] };
   const symbolCloses = new Map<string, DailySeries>();
+  const failedSymbols = new Set<string>();
   const quoteCurrencies: Record<string, string> = {};
 
-  if (bounds && assets.length > 0) {
+  // Later buys and sales are priced on their own days, so closes then reach today.
+  const latest = assetFlows.length > 0 ? todayIsoDateHelsinki() : sorted[sorted.length - 1];
+  const bounds = earliest && latest ? periodBounds(earliest, latest) : null;
+  const symbols = new Set<string>([
+    ...assets.map((a) => a.symbol?.trim()).filter((s): s is string => !!s),
+    ...assetFlows.map((f) => f.symbol),
+  ]);
+
+  if (bounds) {
     await Promise.all(
-      assets.map(async (asset) => {
-        const { series, quoteCurrency } = await fetchSymbolSeries(
+      [...symbols].map(async (symbol) => {
+        const { ok, series, quoteCurrency } = await fetchSymbolSeries(
           yahooFinance,
-          asset.symbol,
+          symbol,
           bounds.period1,
           bounds.period2
         );
-        symbolCloses.set(asset.symbol, series);
-        if (quoteCurrency) quoteCurrencies[asset.symbol] = quoteCurrency;
+        if (!ok) failedSymbols.add(symbol);
+        symbolCloses.set(symbol, series);
+        if (quoteCurrency) quoteCurrencies[symbol] = quoteCurrency;
       })
     );
   }
@@ -228,6 +334,7 @@ export async function buildPortfolioValuationInputs(
     fxCurrencies.add((quoteCurrencies[asset.symbol] || asset.currency || "EUR").toUpperCase());
     fxCurrencies.add((asset.currency || "EUR").toUpperCase());
   }
+  for (const f of assetFlows) fxCurrencies.add((quoteCurrencies[f.symbol] || "EUR").toUpperCase());
   fxCurrencies.delete("EUR");
 
   const fxSeriesByCurrency = new Map<string, DailySeries>();
@@ -240,7 +347,16 @@ export async function buildPortfolioValuationInputs(
     );
   }
 
-  return { assets, cashEur, symbolCloses, quoteCurrencies, fxSeriesByCurrency };
+  return {
+    assets,
+    cashEur,
+    assetFlows,
+    cashFlows,
+    symbolCloses,
+    failedSymbols,
+    quoteCurrencies,
+    fxSeriesByCurrency,
+  };
 }
 
 export async function computePortfolioTotalsForDates(
@@ -252,7 +368,9 @@ export async function computePortfolioTotalsForDates(
   if (unique.length === 0) return out;
 
   const inputs = await buildPortfolioValuationInputs(yahooFinance, unique);
-  if (inputs.assets.length === 0 && inputs.cashEur <= 0) return out;
+  const nothingHeld =
+    inputs.assets.length === 0 && inputs.cashEur <= 0 && inputs.assetFlows.length === 0 && inputs.cashFlows.length === 0;
+  if (nothingHeld) return out;
 
   for (const date of unique) {
     const total = computePortfolioTotalEurOnDate(date, inputs);

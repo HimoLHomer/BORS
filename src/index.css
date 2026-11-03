@@ -340,10 +340,6 @@
   display: none;
 }
 
-.allocation-pie-glow .recharts-pie {
-  filter: url(#allocationPieGlow);
-}
-
 .allocation-pie-glow::before {
   content: '';
   position: absolute;
@@ -357,9 +353,8 @@
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    rgba(59, 130, 246, 0.14) 0%,
-    rgba(59, 130, 246, 0.05) 42%,
-    transparent 68%
+    transparent 0%,
+    transparent 100%
   );
   pointer-events: none;
   z-index: 0;
@@ -369,10 +364,9 @@
 .allocation-pie-glow--hovered::before {
   background: radial-gradient(
     circle,
-    rgba(59, 130, 246, 0.3) 0%,
-    rgba(59, 130, 246, 0.14) 40%,
-    rgba(59, 130, 246, 0.04) 58%,
-    transparent 72%
+    rgba(59, 130, 246, 0.07) 0%,
+    rgba(59, 130, 246, 0.025) 40%,
+    transparent 70%
   );
 }
 

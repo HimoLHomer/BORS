@@ -41,8 +41,9 @@ export function eachCalendarDayIso(startIso: string, endIso: string): string[] {
 export const DEFAULT_HISTORY_BACKFILL_MAX_DAYS = 90;
 
 /**
- * Dates missing from `existingDates` between the last stored point and `untilDate` (inclusive),
- * capped to at most `maxDays` calendar days ending at `untilDate`.
+ * Dates missing from `existingDates` within the `maxDays` calendar days ending at `untilDate`
+ * (inclusive), from the first stored point on. Gaps before a later stored day count too, so a
+ * day saved since (e.g. today's live value) does not hide the days missed before it.
  */
 export function listMissingHistoryDates(
   existingDates: string[],
@@ -56,14 +57,9 @@ export function listMissingHistoryDates(
     addCalendarDaysIso(untilDate, -(maxDays - 1)) ?? untilDate;
 
   let rangeStart = windowStart;
-  if (existingDates.length > 0) {
-    const latest = [...existingDates].sort().at(-1)!;
-    if (latest >= untilDate) return [];
-    const dayAfterLatest = addCalendarDaysIso(latest, 1);
-    if (dayAfterLatest && dayAfterLatest > rangeStart) {
-      rangeStart = dayAfterLatest;
-    }
-  }
+  const earliest = [...existing].sort()[0];
+  // History is not invented before the portfolio's first stored day.
+  if (earliest && earliest > rangeStart) rangeStart = earliest;
 
   if (rangeStart > untilDate) return [];
 

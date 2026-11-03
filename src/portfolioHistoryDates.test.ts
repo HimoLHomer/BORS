@@ -15,12 +15,31 @@ describe('listMissingHistoryDates', () => {
     ]);
   });
 
-  it('fills gap after latest stored date', () => {
+  it('fills every gap from the first stored date', () => {
     expect(listMissingHistoryDates(['2026-05-01', '2026-05-03'], '2026-05-06', 90)).toEqual([
+      '2026-05-02',
       '2026-05-04',
       '2026-05-05',
       '2026-05-06',
     ]);
+  });
+
+  it('fills days missed before a later stored day (e.g. today saved first)', () => {
+    expect(listMissingHistoryDates(['2026-05-01', '2026-05-11'], '2026-05-10', 90)).toEqual([
+      '2026-05-02',
+      '2026-05-03',
+      '2026-05-04',
+      '2026-05-05',
+      '2026-05-06',
+      '2026-05-07',
+      '2026-05-08',
+      '2026-05-09',
+      '2026-05-10',
+    ]);
+  });
+
+  it('does not fill before the first stored date', () => {
+    expect(listMissingHistoryDates(['2026-05-12'], '2026-05-10', 90)).toEqual([]);
   });
 
   it('respects maxDays cap', () => {

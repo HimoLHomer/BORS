@@ -14,7 +14,7 @@ type Options = {
   min?: number;
   /** When false, integers render without spaced thousands (e.g. 2026 not 2 026). */
   groupThousands?: boolean;
-  /** Shown tight after the number, e.g. `7,00 %`. Parsed away on commit. */
+  /** Shown tight after the number, e.g. `7.00%`. Parsed away on commit. */
   trailingSuffix?: '%';
   /** When true, zero displays as an empty field (unset). */
   emptyWhenZero?: boolean;
@@ -33,7 +33,7 @@ function formatDraftValue(
       ? formatWholeNumber(value)
       : formatDecimalEn(value, fractionDigits);
   if (!num) return '';
-  return trailingSuffix === '%' ? `${num}\u00a0%` : num;
+  return trailingSuffix === '%' ? `${num}%` : num;
 }
 
 function parseDraftValue(raw: string, fallback: number): number {
