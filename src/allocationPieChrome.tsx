@@ -17,25 +17,27 @@ export type PieSliceChrome = {
 };
 
 /**
- * Holdings by size, largest first. Accent shades alternate light/dark so neighbouring slices
- * stay apart; the largest slice gets the app's main accent.
+ * Holdings shade from deep blue (largest) to light blue (smallest), in even steps by rank, so
+ * the ring reads as one ramp of weight. The ends are the blue scale's 600 and 300: deeper sinks
+ * to navy on the dark panel, lighter glares near-white.
  */
-const ACCENT_TIERS: PieSliceChrome[] = [
-  { stroke: 'var(--color-accent-500)' },
-  { stroke: 'var(--color-accent-300)' },
-  { stroke: 'var(--color-accent-700)' },
-  { stroke: 'var(--color-accent-200)' },
-  { stroke: 'var(--color-accent-400)' },
-  { stroke: 'var(--color-accent-600)' },
-  { stroke: 'var(--color-accent-100)' },
-  { stroke: 'var(--color-accent-800)' },
-];
+const HOLDING_DEEPEST: Rgb = [37, 99, 235]; // accent-600
+const HOLDING_LIGHTEST: Rgb = [147, 183, 253]; // accent-300
+
+type Rgb = [number, number, number];
+
+/** The blue for the holding at `rank` (0 = largest) of `count` holdings. */
+function holdingShade(rank: number, count: number): PieSliceChrome {
+  const t = count > 1 ? rank / (count - 1) : 0;
+  const [r, g, b] = HOLDING_DEEPEST.map((c, i) => Math.round(c + (HOLDING_LIGHTEST[i]! - c) * t));
+  return { stroke: `#${[r, g, b].map((c) => c!.toString(16).padStart(2, '0')).join('')}` };
+}
 
 const CASH_CHROME: PieSliceChrome = { stroke: 'var(--color-green)' };
 /** Bitcoin's own orange. */
 const BTC_CHROME: PieSliceChrome = { stroke: '#f7931a' };
-/** The grouped "Other" slice: neutral, so it doesn't read as one more holding. */
-const OTHER_CHROME: PieSliceChrome = { stroke: 'var(--color-text-s)' };
+/** The grouped "Other" slice: a dim slate, so it recedes instead of reading as one more holding. */
+const OTHER_CHROME: PieSliceChrome = { stroke: '#64748b' };
 
 function isBitcoinAllocationSlice(key: string, label?: string): boolean {
   const fromLabel = (label ?? '').trim().toUpperCase();
@@ -43,18 +45,21 @@ function isBitcoinAllocationSlice(key: string, label?: string): boolean {
   return key.trim().toUpperCase() === 'BTC';
 }
 
+function ownChrome(key: string, label?: string): PieSliceChrome | null {
+  if (key === 'cash') return CASH_CHROME;
+  if (key === 'other') return OTHER_CHROME;
+  if (isBitcoinAllocationSlice(key, label)) return BTC_CHROME;
+  return null;
+}
+
 /**
  * Colours for slices sorted largest first. Cash, Bitcoin and "Other" keep their own colours
- * and are skipped in the accent sequence, so the holdings around them keep theirs.
+ * and are skipped in the blue ramp, so the holdings around them keep theirs.
  */
 export function allocationPieChromes(slices: { key: string; label?: string }[]): PieSliceChrome[] {
-  let accentRank = 0;
-  return slices.map(({ key, label }) => {
-    if (key === 'cash') return CASH_CHROME;
-    if (key === 'other') return OTHER_CHROME;
-    if (isBitcoinAllocationSlice(key, label)) return BTC_CHROME;
-    return ACCENT_TIERS[accentRank++ % ACCENT_TIERS.length]!;
-  });
+  const holdingCount = slices.filter(({ key, label }) => !ownChrome(key, label)).length;
+  let rank = 0;
+  return slices.map(({ key, label }) => ownChrome(key, label) ?? holdingShade(rank++, holdingCount));
 }
 
 export function AllocationPieDefs() {
