@@ -1680,7 +1680,7 @@ export default function App() {
                           History builds as daily totals are recorded. Open the history icon above to add past dates.
                         </p>
                       )}
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 1, height: 1 }}>
                         <AreaChart
                           key={activePortfolioChartRange}
                           accessibilityLayer={false}
@@ -1826,14 +1826,27 @@ export default function App() {
                   </div>
 
                   <DataListTable
-                    minWidth={1120}
+                    minWidth={820}
                     columns={[
-                      // Cap long fund names (they truncate with a tooltip) so the table fits without scrolling.
-                      { key: 'asset', label: 'Asset', cellClassName: dataListCellClassName('left', 'max-w-[300px]') },
+                      // Cap long fund names (they truncate with a tooltip) so the table fits without scrolling;
+                      // below xl the share price and cost basis columns give way to keep today's move in view.
+                      { key: 'asset', label: 'Asset', cellClassName: dataListCellClassName('left', 'max-w-[220px] xl:max-w-[300px]') },
                       { key: 'value', label: 'Total value', align: 'right' },
                       { key: 'shares', label: 'Shares', align: 'right' },
-                      { key: 'price', label: 'Share price', align: 'right' },
-                      { key: 'cost', label: 'Cost basis', align: 'right' },
+                      {
+                        key: 'price',
+                        label: 'Share price',
+                        align: 'right',
+                        headerClassName: 'hidden xl:table-cell',
+                        cellClassName: dataListCellClassName('right', 'hidden xl:table-cell'),
+                      },
+                      {
+                        key: 'cost',
+                        label: 'Cost basis',
+                        align: 'right',
+                        headerClassName: 'hidden xl:table-cell',
+                        cellClassName: dataListCellClassName('right', 'hidden xl:table-cell'),
+                      },
                       { key: 'gain', label: 'Unrealized gain', align: 'right' },
                       { key: 'trend', label: 'Today', align: 'right', headerClassName: 'w-28' },
                       { key: 'today', label: 'Today gain', align: 'right' },

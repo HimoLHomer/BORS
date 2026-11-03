@@ -141,7 +141,7 @@ export function AllocationPieChart({
     >
       <div
         ref={pieHitRef}
-        className={`allocation-pie-glow relative aspect-square h-full max-h-full w-auto max-w-[min(58%,340px)] min-h-[220px] min-w-[160px] flex-none self-center overflow-visible${
+        className={`allocation-pie-glow relative aspect-square h-full max-h-full w-auto max-w-[min(58%,340px)] min-h-[220px] min-w-[140px] shrink self-center overflow-visible${
           hoveredIndex != null ? ' allocation-pie-glow--hovered' : ''
         }`}
         onMouseMove={(e) => scheduleHoverUpdate(e.clientX, e.clientY)}
@@ -154,6 +154,7 @@ export function AllocationPieChart({
         <ResponsiveContainer
           width="100%"
           height="100%"
+          initialDimension={{ width: 1, height: 1 }}
           className={loading ? 'opacity-0 pointer-events-none' : 'pointer-events-none'}
         >
           <PieChart

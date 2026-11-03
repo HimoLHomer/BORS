@@ -153,6 +153,34 @@ export function recordAssetCreateFlow(
   });
 }
 
+/**
+ * Take up to `amountEur` off today's purchases of `symbol`, newest first (rows that reach zero
+ * are deleted). Transfers in are left alone: they are logged at market value already.
+ * Returns the amount taken off.
+ */
+function undoTodaysBuys(db: Database.Database, symbol: string, amountEur: number): number {
+  if (!(amountEur > 0)) return 0;
+  const rows = db
+    .prepare(
+      `SELECT id, amount_eur FROM portfolio_flows
+       WHERE date = ? AND asset_symbol = ? AND kind = 'buy' AND amount_eur > 0 AND COALESCE(note, '') != ?
+       ORDER BY id DESC`
+    )
+    .all(todayIsoDateHelsinki(), symbol, TRANSFER_IN_NOTE) as { id: number; amount_eur: number }[];
+  let left = amountEur;
+  for (const row of rows) {
+    if (left < 0.01) break;
+    if (row.amount_eur <= left + 0.005) {
+      db.prepare(`DELETE FROM portfolio_flows WHERE id = ?`).run(row.id);
+      left -= row.amount_eur;
+    } else {
+      db.prepare(`UPDATE portfolio_flows SET amount_eur = ? WHERE id = ?`).run(row.amount_eur - left, row.id);
+      left = 0;
+    }
+  }
+  return amountEur - Math.max(0, left);
+}
+
 export function recordAssetUpdateFlows(
   db: Database.Database,
   prev: Asset,
@@ -164,7 +192,19 @@ export function recordAssetUpdateFlows(
 ): void {
   // Fewer shares = a sale: log the shares removed at market value, not at cost.
   if (Number(next.quantity) < Number(prev.quantity) && soldValueEur != null && soldValueEur >= 0.01) {
-    insertPortfolioFlow(db, { amountEur: -soldValueEur, kind: "sell", assetSymbol: next.symbol, note: "Sale" });
+    // Shares bought today and removed again are a correction (e.g. a mistyped quantity): take
+    // them off today's buy at the cost it was logged at. Valuing them at market instead would
+    // leave the gap between cost and market in the log as money moved in or out.
+    const removedCostEur = assetCostBasisEur(
+      { quantity: Number(prev.quantity) - Number(next.quantity), averagePrice: prev.averagePrice, currency: prev.currency },
+      exchangeRates
+    );
+    const undoneEur = Number.isFinite(removedCostEur) ? undoTodaysBuys(db, next.symbol, removedCostEur) : 0;
+    const remainingShare = undoneEur > 0 ? Math.max(0, 1 - undoneEur / removedCostEur) : 1;
+    const saleEur = soldValueEur * remainingShare;
+    if (saleEur >= 0.01) {
+      insertPortfolioFlow(db, { amountEur: -saleEur, kind: "sell", assetSymbol: next.symbol, note: "Sale" });
+    }
     return;
   }
 

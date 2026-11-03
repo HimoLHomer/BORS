@@ -422,9 +422,16 @@ export function DividendsEngine({
       .sort((a, b) => b.row.estimatedAnnualIncomeEur - a.row.estimatedAnnualIncomeEur);
   }, [data]);
 
+  // An estimate linked to a holding that has since been sold pays nothing. It stays saved, so
+  // it comes back if the holding is bought again.
+  const heldManualRows = useMemo(
+    () => manualRows.filter((m) => !m.linkedSymbol?.trim() || assetsMatchingLink(assets, m.linkedSymbol).length > 0),
+    [manualRows, assets]
+  );
+
   const sortedManualRows = useMemo(
-    () => [...manualRows].sort((a, b) => b.annualIncomeEur - a.annualIncomeEur),
-    [manualRows]
+    () => [...heldManualRows].sort((a, b) => b.annualIncomeEur - a.annualIncomeEur),
+    [heldManualRows]
   );
 
   const holdingsDetailRows = useMemo(() => {
@@ -461,8 +468,8 @@ export function DividendsEngine({
       ...exchangeRates,
       ...((data as { rates?: Record<string, number> }).rates ?? {}),
     };
-    return computeBlendedYieldSummary(assets, data.rows, manualRows, marketPrices, rates);
-  }, [data, assets, manualRows, marketPrices, exchangeRates]);
+    return computeBlendedYieldSummary(assets, data.rows, heldManualRows, marketPrices, rates);
+  }, [data, assets, heldManualRows, marketPrices, exchangeRates]);
 
   const barData = useMemo((): BarDatum[] => {
     const apiBars: BarDatum[] = dividendPayingRows.map(({ row, index }) => {
@@ -477,7 +484,7 @@ export function DividendsEngine({
         source: 'api',
       };
     });
-    const manualBars: BarDatum[] = manualRows
+    const manualBars: BarDatum[] = heldManualRows
       .filter((m) => !manualSupersededByApi(data, m))
       .map((m) => {
         const linked = m.linkedSymbol ? assetsMatchingLink(assets, m.linkedSymbol) : [];
@@ -493,7 +500,7 @@ export function DividendsEngine({
         };
       });
     return [...apiBars, ...manualBars].sort((a, b) => b.annualEur - a.annualEur);
-  }, [dividendPayingRows, assets, manualRows, data]);
+  }, [dividendPayingRows, assets, heldManualRows, data]);
 
   const calendarApiRows = useMemo((): ApiDividendPaymentInput[] => {
     return dividendPayingRows.map(({ row, index }) => {
@@ -517,8 +524,8 @@ export function DividendsEngine({
   }, [dividendPayingRows, assets]);
 
   const manualRowsForBlended = useMemo(
-    () => manualRowsForBlendedSummary(manualRows, data?.rows ?? []),
-    [manualRows, data]
+    () => manualRowsForBlendedSummary(heldManualRows, data?.rows ?? []),
+    [heldManualRows, data]
   );
 
   const calendarManualRows = useMemo((): ManualDividendPaymentInput[] => {
@@ -627,7 +634,7 @@ export function DividendsEngine({
     forgetTrackedHoldings([manualHoldingKey(id)]);
   };
 
-  const hasAnyDividendDisplay = dividendPayingRows.length > 0 || manualRows.length > 0;
+  const hasAnyDividendDisplay = dividendPayingRows.length > 0 || heldManualRows.length > 0;
 
   /** API fetch in flight and no payload yet — manual rows must not render ahead of holdings detail. */
   const dividendsFetchPending = loading && data == null;
@@ -635,10 +642,10 @@ export function DividendsEngine({
   const holdingsDetailSkeletonRows = useMemo(
     () =>
       buildTableSkeletonRows(
-        Math.min(Math.max(assets.length + manualRows.length, 4), 8),
+        Math.min(Math.max(assets.length + heldManualRows.length, 4), 8),
         [...HOLDINGS_DETAIL_COLUMN_KEYS]
       ),
-    [assets.length, manualRows.length]
+    [assets.length, heldManualRows.length]
   );
 
   const holdingsDetailEmptyState = useMemo(() => {
@@ -653,14 +660,14 @@ export function DividendsEngine({
     if (!hasAnyDividendDisplay && !loading) {
       return (
         <p className="text-text-s opacity-50 text-xs font-medium">
-          {assets.length === 0 && manualRows.length === 0
+          {assets.length === 0 && heldManualRows.length === 0
             ? 'No holdings or manual rows.'
             : 'No Yahoo dividend feed for these holdings — add a manual estimate or link a listing with feed data (e.g. .MI for UCITS ETFs).'}
         </p>
       );
     }
     return null;
-  }, [dividendsFetchPending, data, assets.length, hasAnyDividendDisplay, manualRows.length]);
+  }, [dividendsFetchPending, data, assets.length, hasAnyDividendDisplay, heldManualRows.length]);
 
   const holdingsDetailTableRows = useMemo(() => {
     if (holdingsDetailEmptyState != null) return [];
@@ -889,7 +896,7 @@ export function DividendsEngine({
           <div className={`${SECTION_HEAD} shrink-0`}>
             <h3 className="card-title mb-0">Annual dividend income (by holding)</h3>
           </div>
-          {assets.length === 0 && manualRows.length === 0 ? (
+          {assets.length === 0 && heldManualRows.length === 0 ? (
             <p className="text-text-s py-12 text-center opacity-50 font-mono text-xs font-medium">
               Add holdings on the Dashboard, then add a per-holding dividend estimate here if needed.
             </p>
@@ -906,7 +913,7 @@ export function DividendsEngine({
           ) : (
             <div className="flex-1 min-h-0 flex flex-col justify-center">
               <div className="flex-1 min-h-[238px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 1, height: 1 }}>
                 <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }} barCategoryGap="18%">
                   <defs>
                     <linearGradient id="dividendBarFill" x1="0" y1="0" x2="0" y2="1">

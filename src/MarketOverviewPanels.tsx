@@ -49,7 +49,8 @@ export function formatQuotePrice(q: MarketQuoteSnapshot): string {
     return formatNumberFi(q.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   if (q.id === 'usdeur') {
-    return formatNumberFi(q.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // FX rates move in the third and fourth decimals.
+    return formatNumberFi(q.price, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
   }
   if (q.id === 'btc') {
     return formatCurrency(q.price, 'USD');

@@ -370,16 +370,17 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           <X className="w-5 h-5" />
         </button>
         
-        <h2 className="text-2xl font-semibold tracking-tighter mb-1 text-text-p">{editAsset ? 'Edit Holding' : 'Add New Holding'}</h2>
-        <p className="text-text-s mb-8 text-xs font-medium">{editAsset ? 'Change shares, price or currency' : 'Add a new asset to your portfolio'}</p>
+        <h2 className="text-2xl font-semibold tracking-tighter mb-1 text-text-p">{editAsset ? 'Edit holding' : 'Add holding'}</h2>
+        <p className="text-text-s mb-6 text-xs font-medium">{editAsset ? 'Change shares, price or currency' : 'Add a new asset to your portfolio'}</p>
         
         {!editAsset && (
-        <div className="mb-8 space-y-2 relative">
-          <label className="text-xs font-medium text-text-s px-1 ml-1">Find Asset (Name or Ticker)</label>
+        <div className="mb-6 space-y-2 relative">
+          <label className="text-xs font-medium text-text-s px-1 ml-1">Find asset (name or ticker)</label>
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-s opacity-40" />
             <input 
               type="text"
+              autoFocus
               className="w-full bg-bg border border-border focus:border-accent rounded-lg pl-12 pr-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20 shadow-inner"
               placeholder="e.g. S&P 500 or AAPL"
               value={searchQuery}
@@ -410,22 +411,21 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
         )}
 
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-8 pr-1">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-6 pr-1">
           {error && (
             <div className="p-4 bg-red/10 border border-red/20 rounded-lg text-red text-xs font-medium animate-pulse">
-              System Error: {error}
+              {error}
             </div>
           )}
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
               <div className="flex items-center justify-between px-1">
-                <label className="text-xs font-medium text-text-s ml-1">Symbol (Ticker)</label>
+                <label className="text-xs font-medium text-text-s ml-1">Symbol (ticker)</label>
                 {isValidating && <RefreshCcw className="w-2.5 h-2.5 animate-spin text-accent" />}
                 {isVerified && <div className="text-xs font-semibold text-green tracking-tighter flex items-center gap-1"><Zap className="w-2.5 h-2.5" /> Verified</div>}
               </div>
               <input 
                 required
-                autoFocus
                 className={`w-full bg-bg/50 border ${isVerified ? 'border-green/30' : 'border-border'} focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20`}
                 placeholder="Ticker symbol"
                 value={formData.symbol}
@@ -434,7 +434,9 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               />
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-medium text-text-s px-1 ml-1">Display Symbol (Visual)</label>
+              <div className="flex items-center px-1">
+                <label className="text-xs font-medium text-text-s ml-1">Display symbol</label>
+              </div>
               <input 
                 className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all font-mono text-sm placeholder:opacity-20"
                 placeholder="Display symbol"
@@ -459,7 +461,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-medium text-text-s px-1 ml-1">Asset Label</label>
+            <label className="text-xs font-medium text-text-s px-1 ml-1">Name</label>
             <input 
               required
               className="w-full bg-bg/50 border border-border focus:border-accent/50 rounded-lg px-5 py-4 text-text-p focus:outline-none transition-all text-sm placeholder:opacity-20"
@@ -593,7 +595,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-xs font-medium text-text-s px-1 ml-1">Quantity (Units)</label>
+              <label className="text-xs font-medium text-text-s px-1 ml-1">Quantity</label>
               <input 
                 required
                 type="text"
@@ -612,7 +614,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
             </div>
             <div className="space-y-2">
               <label className="text-xs font-medium text-text-s px-1 ml-1">
-                Cost Per Unit ({formData.currency || 'EUR'})
+                Cost per unit ({formData.currency || 'EUR'})
               </label>
               <EurAmountInput
                 required
@@ -633,7 +635,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
           </div>
 
           {!editAsset ? (
-            <label className="flex items-start gap-3 rounded-lg border border-border/50 bg-bg/30 px-4 py-3 cursor-pointer select-none">
+            <label className="flex items-start gap-3 mt-6 rounded-lg border border-border/50 bg-bg/30 px-4 py-3 cursor-pointer select-none">
               <input
                 type="checkbox"
                 className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
@@ -656,7 +658,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
             {isSubmitting ? (
               <RefreshCcw className="w-4 h-4 animate-spin" />
             ) : (
-              editAsset ? 'Save Changes' : 'Add to Portfolio'
+              editAsset ? 'Save changes' : 'Add to portfolio'
             )}
           </button>
         </form>
