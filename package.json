@@ -2,7 +2,7 @@
   "name": "bors",
   "productName": "BÖRS",
   "private": true,
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Local-first portfolio dashboard",
   "author": "BORS",
   "main": "electron/main.cjs",
