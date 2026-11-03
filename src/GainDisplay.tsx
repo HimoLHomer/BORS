@@ -25,6 +25,9 @@ export function GainDisplay({
   variant?: 'stacked' | 'pill';
 }) {
   const positive = amountEur >= 0;
+  // Rounds to €0.00: no move, so neither green nor red.
+  const flat = Math.abs(amountEur) < 0.005;
+  const toneText = flat ? 'text-text-s' : positive ? 'text-green' : 'text-red';
   const prevRef = useRef({ amountEur, percent });
   const [flash, setFlash] = useState<'up' | 'down' | null>(null);
 
@@ -50,17 +53,24 @@ export function GainDisplay({
   if (variant === 'pill') {
     const Arrow = positive ? ArrowUpRight : ArrowDownRight;
     return (
-      <span className={`change-pill ${positive ? 'bg-green-soft text-green' : 'bg-red-soft text-red'} ${flashClass}`}>
-        <Arrow className="w-3.5 h-3.5" aria-hidden />
-        {formatCurrency(amountEur, 'EUR')}
-        <span className="opacity-75">({formatPercentEn(percent, 2, { showPlus: true })})</span>
-      </span>
+      <div className="flex flex-col items-start gap-1">
+        <span
+          className={`change-pill ${flat ? 'bg-white/5' : positive ? 'bg-green-soft' : 'bg-red-soft'} ${toneText} ${flashClass}`}
+        >
+          {flat ? null : <Arrow className="w-3.5 h-3.5" aria-hidden />}
+          {formatCurrency(amountEur, 'EUR')}
+        </span>
+        {/* Indented to line up with the amount inside the pill. */}
+        <span className={`pl-2 text-xs font-medium tabular-nums opacity-75 ${toneText}`}>
+          {formatPercentEn(percent, 2, { showPlus: true })}
+        </span>
+      </div>
     );
   }
 
   return (
     <div
-      className={`inline-block text-right rounded-md px-1 -mx-1 ${positive ? 'text-green' : 'text-red'} ${flashClass}`}
+      className={`inline-block text-right rounded-md px-1 -mx-1 ${toneText} ${flashClass}`}
     >
       <div className="text-[13px] font-semibold tabular-nums">
         {formatCurrency(amountEur, 'EUR')}

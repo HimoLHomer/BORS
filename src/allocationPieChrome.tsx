@@ -6,33 +6,33 @@ export type PieSliceChrome = {
   stroke: string;
 };
 
-/** Darkest (largest slice) → near-white (smallest). */
+/** Largest slice → smallest, deep blue → pale. Edges are the brighter step, like the portfolio line. */
 const SIZE_TIERS: PieSliceChrome[] = [
-  { gradientId: 'pieTier0', stroke: '#1e40af' },
-  { gradientId: 'pieTier1', stroke: '#1d4ed8' },
-  { gradientId: 'pieTier2', stroke: '#2563eb' },
-  { gradientId: 'pieTier3', stroke: '#3b82f6' },
-  { gradientId: 'pieTier4', stroke: '#60a5fa' },
-  { gradientId: 'pieTier5', stroke: '#93c5fd' },
-  { gradientId: 'pieTier6', stroke: '#bfdbfe' },
-  { gradientId: 'pieTier7', stroke: '#e2e8f0' },
-  { gradientId: 'pieTier8', stroke: '#f1f5f9' },
+  { gradientId: 'pieTier0', stroke: '#3b82f6' },
+  { gradientId: 'pieTier1', stroke: '#4f8ff8' },
+  { gradientId: 'pieTier2', stroke: '#609afa' },
+  { gradientId: 'pieTier3', stroke: '#7aabfb' },
+  { gradientId: 'pieTier4', stroke: '#93b7fd' },
+  { gradientId: 'pieTier5', stroke: '#a9c6fd' },
+  { gradientId: 'pieTier6', stroke: '#bfd4fe' },
+  { gradientId: 'pieTier7', stroke: '#dbe7fe' },
+  { gradientId: 'pieTier8', stroke: '#eff5ff' },
   { gradientId: 'pieTier9', stroke: '#f8fafc' },
 ];
 
-/** [inner, outer] per tier — overall a bit darker than before. */
+/** [top, bottom] per tier: lit from above and fading down, like the portfolio area fill. */
 const TIER_STOPS: Record<string, [string, string]> = {
-  pieTier0: ['#1e3a8a', '#0c1929'],
-  pieTier1: ['#1e40af', '#0f172a'],
-  pieTier2: ['#1d4ed8', '#172554'],
-  pieTier3: ['#2563eb', '#1e3a8a'],
-  pieTier4: ['#3b82f6', '#1e40af'],
-  pieTier5: ['#60a5fa', '#2563eb'],
-  pieTier6: ['#93c5fd', '#3b82f6'],
-  pieTier7: ['#bfdbfe', '#60a5fa'],
-  pieTier8: ['#dbeafe', '#93c5fd'],
-  pieTier9: ['#f1f5f9', '#e2e8f0'],
-  pieGradCash: ['#22c55e', '#14532d'],
+  pieTier0: ['#2a64d6', '#0e1c44'],
+  pieTier1: ['#2f6fe8', '#13265a'],
+  pieTier2: ['#3b82f6', '#1a347a'],
+  pieTier3: ['#4f8ff8', '#1e40af'],
+  pieTier4: ['#609afa', '#1d4ed8'],
+  pieTier5: ['#7aabfb', '#2563eb'],
+  pieTier6: ['#93b7fd', '#3b82f6'],
+  pieTier7: ['#bfd4fe', '#609afa'],
+  pieTier8: ['#dbe7fe', '#93b7fd'],
+  pieTier9: ['#eff5ff', '#bfd4fe'],
+  pieGradCash: ['#4ade80', '#14532d'],
   pieGradBtc: ['#fbbf24', '#854d0e'],
 };
 
@@ -68,12 +68,13 @@ export function allocationPieSliceChrome(
 export function AllocationPieDefs() {
   return (
     <defs>
-      <filter id="allocationPieGlow" x="-40%" y="-40%" width="180%" height="180%">
-        <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
+      {/* Soft blue halo around the whole pie, matching the portfolio line's glow. */}
+      <filter id="allocationPieGlow" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
         <feColorMatrix
           in="blur"
           type="matrix"
-          values="0 0 0 0 0.18  0 0 0 0 0.38  0 0 0 0 0.82  0 0 0 0.28 0"
+          values="0 0 0 0 0.23  0 0 0 0 0.51  0 0 0 0 0.96  0 0 0 0.45 0"
           result="glow"
         />
         <feMerge>
@@ -94,12 +95,11 @@ export function AllocationPieDefs() {
           <feMergeNode in="SourceGraphic" />
         </feMerge>
       </filter>
-      {Object.entries(TIER_STOPS).map(([id, [inner, outer]]) => (
-        <radialGradient key={id} id={id} cx="42%" cy="38%" r="72%">
-          <stop offset="0%" stopColor={inner} stopOpacity={0.96} />
-          <stop offset="58%" stopColor={inner} stopOpacity={0.88} />
-          <stop offset="100%" stopColor={outer} stopOpacity={0.92} />
-        </radialGradient>
+      {Object.entries(TIER_STOPS).map(([id, [top, bottom]]) => (
+        <linearGradient key={id} id={id} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={top} />
+          <stop offset="100%" stopColor={bottom} />
+        </linearGradient>
       ))}
     </defs>
   );

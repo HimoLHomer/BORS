@@ -10,6 +10,10 @@ export type MarketQuoteSnapshot = {
   changePercent: number;
   currency: string;
   kind: "index" | "alternative";
+  /** Closes over the 24h up to the latest bar, oldest first (alternatives only; absent when the chart fetch fails). */
+  dayTrend?: number[];
+  /** Closes over the past 7 days, oldest first (alternatives only; absent when the chart fetch fails). */
+  weekTrend?: number[];
 };
 
 export type MarketOverviewResponse = {
@@ -221,6 +225,46 @@ async function quoteBatch(
   return out;
 }
 
+const TREND_POINTS = 60;
+const DAY_MS = 86_400_000;
+
+function thin(values: number[], max: number): number[] {
+  if (values.length <= max) return values;
+  const step = (values.length - 1) / (max - 1);
+  return Array.from({ length: max }, (_, i) => values[Math.round(i * step)]!);
+}
+
+/**
+ * 15-minute closes over the past 7 days, as two background trend lines: the whole week, and the
+ * 24 hours up to the latest bar (the last session when the market is closed).
+ */
+async function fetchTrends(
+  yahooFinance: InstanceType<typeof YahooFinance>,
+  symbol: string
+): Promise<{ dayTrend?: number[]; weekTrend?: number[] }> {
+  try {
+    const now = Date.now();
+    const chart: any = await yahooFinance.chart(
+      symbol,
+      { period1: new Date(now - 7 * DAY_MS), period2: new Date(now), interval: "15m" },
+      { validateResult: false }
+    );
+    const bars: { t: number; close: number }[] = (chart?.quotes ?? [])
+      .map((q: any) => ({ t: new Date(q?.date).getTime(), close: q?.close }))
+      .filter((b: any) => Number.isFinite(b.t) && typeof b.close === "number" && b.close > 0)
+      .sort((a: any, b: any) => a.t - b.t);
+    if (bars.length < 2) return {};
+    const lastT = bars[bars.length - 1]!.t;
+    const day = bars.filter((b) => b.t > lastT - DAY_MS).map((b) => b.close);
+    return {
+      weekTrend: thin(bars.map((b) => b.close), TREND_POINTS),
+      dayTrend: day.length >= 2 ? thin(day, TREND_POINTS) : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function buildOverview(
   yahooFinance: InstanceType<typeof YahooFinance>
 ): Promise<MarketOverviewResponse> {
@@ -231,7 +275,13 @@ async function buildOverview(
   const sp500 = quotes.get("sp500") ?? (await quoteOne(yahooFinance, SP500));
   const omxhpi = quotes.get("omxhpi") ?? (await quoteOne(yahooFinance, OMXHPI));
   const alternatives = await Promise.all(
-    ALTERNATIVES.map(async (d) => quotes.get(d.id) ?? quoteOne(yahooFinance, d))
+    ALTERNATIVES.map(async (d) => {
+      const [snap, trends] = await Promise.all([
+        quotes.get(d.id) ?? quoteOne(yahooFinance, d),
+        fetchTrends(yahooFinance, d.symbol),
+      ]);
+      return { ...snap, ...trends };
+    })
   );
 
   return {

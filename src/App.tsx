@@ -32,7 +32,7 @@ import { formatDecimalEn, formatDecimalInputEn, formatPercentEn, parseDecimalInp
 import { formatDateEn, todayIsoDateHelsinki } from './formatDate';
 import { DividendsEngine } from './DividendsEngine';
 import { FireProjection } from './FireProjection';
-import { DataListTable } from './DataListTable';
+import { DataListTable, dataListCellClassName } from './DataListTable';
 import { buildTableSkeletonRows, SkeletonBlock, SkeletonCurrency } from './SkeletonPulse';
 import { GainDisplay, todayGainEurFromChange } from './GainDisplay';
 import { EurAmountInput } from './EurAmountField';
@@ -126,6 +126,7 @@ export default function App() {
   const [quotesRefreshEpoch, setQuotesRefreshEpoch] = useState(0);
   const [milestoneBannerEur, setMilestoneBannerEur] = useState<number | null>(null);
   const portfolioMilestonePrevRef = useRef<number | null>(null);
+  const mainScrollRef = useRef<HTMLElement>(null);
   const apiStatusRef = useRef(apiStatus);
   apiStatusRef.current = apiStatus;
   const feedCheckSeqRef = useRef(0);
@@ -560,7 +561,7 @@ export default function App() {
                 className="inline-flex items-center gap-1.5"
                 title="No market price for this symbol; valued at your average purchase price."
               >
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-sans font-medium text-amber-400">
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-sans font-medium text-amber-400">
                   No price
                 </span>
                 {formatCurrency(priceInEur, 'EUR')}
@@ -1244,8 +1245,9 @@ export default function App() {
   const cashTableRow: Record<string, React.ReactNode> = {
     asset: (
       <div className="flex items-center gap-2.5 min-w-0">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-text-s">
-          <Wallet className="h-3.5 w-3.5" aria-hidden />
+        {/* Green to match the Cash slice in the allocation pie. */}
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#4ade80,#16a34a)] text-white shadow-[0_0_10px_rgb(34_197_94/0.35)]">
+          <Wallet className="h-3.5 w-3.5" strokeWidth={2.25} aria-hidden />
         </span>
         <div className="min-w-0">
           <div className="text-text-p text-sm font-sans truncate">Cash</div>
@@ -1384,8 +1386,9 @@ export default function App() {
           />
         </aside>
 
-        <main className="flex-1 overflow-y-auto p-6 technical-grid">
-          <AnimatePresence mode="wait">
+        <main ref={mainScrollRef} className="flex-1 overflow-y-auto [scrollbar-gutter:stable] p-6 technical-grid">
+          {/* Each page opens at the top; reset once the old page has faded out. */}
+          <AnimatePresence mode="wait" onExitComplete={() => mainScrollRef.current?.scrollTo({ top: 0 })}>
             {activeView === View.DASHBOARD && (
               <motion.div 
                 key="dashboard"
@@ -1468,7 +1471,7 @@ export default function App() {
                           </div>
                           <div className="overflow-x-auto overflow-y-auto max-h-[min(40vh,280px)] rounded-lg border border-border/40">
                             <table className="w-full text-left text-xs">
-                              <thead className="sticky top-0 z-[1] bg-[#121214]/95 backdrop-blur-sm">
+                              <thead className="sticky top-0 z-[1] bg-card/95 backdrop-blur-sm">
                                 <tr className="text-xs font-medium text-text-s border-b border-border/60">
                                   <th className="px-3 py-2 text-left">Date</th>
                                   <th className="px-3 py-2 text-left">Total (EUR)</th>
@@ -1798,7 +1801,7 @@ export default function App() {
                 </div>
 
                 <div className="lg:col-span-2 lg:row-span-2 flex flex-col gap-4 min-h-0 overflow-visible">
-                  <div className="glass-panel !overflow-visible p-6 pb-5 flex flex-col flex-1 min-h-[480px] lg:min-h-[540px]">
+                  <div className="glass-panel panel-glow !overflow-visible p-6 pb-5 flex flex-col flex-1 min-h-[480px] lg:min-h-[540px]">
                     <div className="mb-2">
                       <h3 className="card-title mb-0">Allocation</h3>
                     </div>
@@ -1818,14 +1821,15 @@ export default function App() {
                       }}
                       className="btn-primary text-[11px] py-1.5 px-3"
                     >
-                      <Plus className="w-3.5 h-3.5" /> Add Asset
+                      <Plus className="w-3.5 h-3.5" /> Add asset
                     </button>
                   </div>
 
                   <DataListTable
                     minWidth={1120}
                     columns={[
-                      { key: 'asset', label: 'Asset' },
+                      // Cap long fund names (they truncate with a tooltip) so the table fits without scrolling.
+                      { key: 'asset', label: 'Asset', cellClassName: dataListCellClassName('left', 'max-w-[300px]') },
                       { key: 'value', label: 'Total value', align: 'right' },
                       { key: 'shares', label: 'Shares', align: 'right' },
                       { key: 'price', label: 'Share price', align: 'right' },

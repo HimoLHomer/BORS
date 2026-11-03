@@ -64,7 +64,7 @@ export function InfoHint({ children, label = 'More info' }: { children: React.Re
               width: TOOLTIP_WIDTH,
               visibility: pos ? 'visible' : 'hidden',
             }}
-            className="pointer-events-none fixed z-[100] rounded-lg border border-white/15 bg-[#0c0c0e]/95 px-3 py-2.5 text-left text-xs font-normal normal-case tracking-normal leading-relaxed text-text-s shadow-xl backdrop-blur-sm [&_strong]:font-semibold [&_strong]:text-text-p [&_p+p]:mt-1.5"
+            className="pointer-events-none fixed z-[100] rounded-lg border border-white/15 bg-surface-2/95 px-3 py-2.5 text-left text-xs font-normal normal-case tracking-normal leading-relaxed text-text-s shadow-xl backdrop-blur-sm [&_strong]:font-semibold [&_strong]:text-text-p [&_p+p]:mt-1.5"
           >
             {children}
           </div>,

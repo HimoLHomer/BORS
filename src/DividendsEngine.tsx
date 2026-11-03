@@ -126,7 +126,7 @@ function sourceBadge(kind: 'api' | 'manual') {
       : 'text-text-s bg-white/5 border-border/60';
   return (
     <span
-      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-medium ${cls}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-medium ${cls}`}
     >
       {label}
     </span>
@@ -905,7 +905,7 @@ export function DividendsEngine({
             </p>
           ) : (
             <div className="flex-1 min-h-0 flex flex-col justify-center">
-              <div className="h-[238px] w-full shrink-0">
+              <div className="flex-1 min-h-[238px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }} barCategoryGap="18%">
                   <defs>

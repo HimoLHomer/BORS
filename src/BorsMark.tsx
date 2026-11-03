@@ -58,8 +58,8 @@ export function BorsMark({
       aria-hidden
       {...props}
     >
-      <rect width="32" height="32" rx="7" fill="#18181b" />
-      <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" stroke="#27272a" />
+      <rect width="32" height="32" rx="7" fill="#10131a" />
+      <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" stroke="#222734" />
       <path
         ref={pathRef}
         d={TREND_PATH}

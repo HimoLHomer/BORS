@@ -24,6 +24,10 @@ export type MarketQuoteSnapshot = {
   changePercent: number;
   currency: string;
   kind: 'index' | 'alternative';
+  /** Closes over the 24h up to the latest bar, oldest first (alternatives only). */
+  dayTrend?: number[];
+  /** Closes over the past 7 days, oldest first (alternatives only). */
+  weekTrend?: number[];
 };
 
 export type MarketOverviewResponse = {
@@ -276,7 +280,7 @@ function QuoteChangeLine({ quote }: { quote: MarketQuoteSnapshot }) {
   const pct = quote.changePercent;
   const color = changeColorClass(pct);
   return (
-    <p className={`text-sm font-bold tabular-nums ${color}`}>
+    <p className={`mt-2 text-sm font-bold tabular-nums ${color}`}>
       {formatPercentFi(pct, 2, { showPlus: true })}
       {quote.change != null && Number.isFinite(quote.change) && (
         <span className={`font-semibold text-xs ml-2 opacity-90 ${color}`}>
@@ -385,15 +389,86 @@ export function MarketIndexPanel({
   );
 }
 
+type AlternativeRange = '1D' | '1W';
+
+const ALTERNATIVE_RANGE_STORAGE_KEY = 'bors_alternatives_range';
+
+function readAlternativeRange(): AlternativeRange {
+  try {
+    return localStorage.getItem(ALTERNATIVE_RANGE_STORAGE_KEY) === '1W' ? '1W' : '1D';
+  } catch {
+    return '1D';
+  }
+}
+
+/** % change and trend line for the chosen range; the week's % is measured from its first bar. */
+function alternativeRangeView(
+  quote: MarketQuoteSnapshot,
+  range: AlternativeRange
+): { changePercent: number; trend: number[] | undefined } {
+  if (range === '1D') return { changePercent: quote.changePercent, trend: quote.dayTrend };
+  const start = quote.weekTrend?.[0];
+  const end = quote.price ?? quote.weekTrend?.[quote.weekTrend.length - 1];
+  return {
+    changePercent: start && end ? ((end - start) / start) * 100 : quote.changePercent,
+    trend: quote.weekTrend,
+  };
+}
+
+/**
+ * Faded chart along the lower part of a tile, behind its text. Coloured like the % shown on the
+ * tile; kept low-contrast so the price stays readable.
+ */
+function TrendBackdrop({ points, up }: { points: number[]; up: boolean }) {
+  const gradientId = `alt-trend-${React.useId().replace(/:/g, '')}`;
+  if (points.length < 2) return null;
+  const color = up ? 'var(--color-green)' : 'var(--color-red)';
+  const min = Math.min(...points);
+  const span = Math.max(...points) - min || 1;
+  // 100×40 box stretched to the tile; 4 units of headroom so the peak isn't clipped by the stroke.
+  const coords = points.map((v, i) => [(i / (points.length - 1)) * 100, 4 + (1 - (v - min) / span) * 34]);
+  const line = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x!.toFixed(2)},${y!.toFixed(2)}`).join(' ');
+  return (
+    <svg
+      className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-[62%] w-full"
+      viewBox="0 0 100 40"
+      preserveAspectRatio="none"
+      aria-hidden
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.14} />
+          <stop offset="100%" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <path d={`${line} L100,40 L0,40 Z`} fill={`url(#${gradientId})`} />
+      <path
+        d={line}
+        fill="none"
+        stroke={color}
+        strokeOpacity={0.45}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
 function AlternativeAssetCard({
   quote,
   loading,
+  range,
 }: {
   quote: MarketQuoteSnapshot | undefined;
   loading: boolean;
+  range: AlternativeRange;
 }) {
+  const view = quote ? alternativeRangeView(quote, range) : null;
   return (
-    <div className={`${MARKET_SUBCARD} p-4 flex flex-col gap-1 min-h-[88px]`}>
+    <div className={`${MARKET_SUBCARD} relative isolate overflow-hidden p-4 flex flex-col gap-1 min-h-[88px]`}>
+      {view?.trend ? <TrendBackdrop points={view.trend} up={view.changePercent >= 0} /> : null}
       <p className="card-title mb-0">{quote?.label ?? '—'}</p>
       {loading && !quote ? (
         <div className="h-6 w-20 bg-white/5 rounded animate-pulse mt-1" />
@@ -402,9 +477,9 @@ function AlternativeAssetCard({
           <p className="stat-value text-xl font-black tracking-tight tabular-nums mt-1">
             {quote ? formatQuotePrice(quote) : '—'}
           </p>
-          {quote && (
-            <p className={`text-xs font-bold tabular-nums ${changeColorClass(quote.changePercent)}`}>
-              {formatPercentFi(quote.changePercent, 2, { showPlus: true })}
+          {view && (
+            <p className={`mt-1 text-xs font-bold tabular-nums ${changeColorClass(view.changePercent)}`}>
+              {formatPercentFi(view.changePercent, 2, { showPlus: true })}
             </p>
           )}
         </>
@@ -422,13 +497,46 @@ export function AlternativeInvestmentsPanel({
 }) {
   const byId = useMemo(() => new Map(alternatives.map((a) => [a.id, a])), [alternatives]);
   const order = ['btc', 'gold', 'silver', 'oil', 'usdeur'] as const;
+  const [range, setRange] = useState<AlternativeRange>(readAlternativeRange);
+
+  const chooseRange = (next: AlternativeRange) => {
+    setRange(next);
+    try {
+      localStorage.setItem(ALTERNATIVE_RANGE_STORAGE_KEY, next);
+    } catch {
+      /* remembered for this session only */
+    }
+  };
 
   return (
     <div className={`${MARKET_PANEL} min-h-[180px]`}>
-      <h3 className="card-title mb-0">Alternative investments</h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="card-title mb-0">Alternative investments</h3>
+        <div
+          className="inline-flex rounded-full border border-border bg-bg/40 p-0.5"
+          role="tablist"
+          aria-label="Change period"
+        >
+          {(['1D', '1W'] as const).map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={range === id}
+              onClick={() => chooseRange(id)}
+              title={id === '1D' ? 'Today' : 'Past week'}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                range === id ? 'bg-accent text-white' : 'text-text-s hover:text-text-p'
+              }`}
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mt-3">
         {order.map((id) => (
-          <AlternativeAssetCard key={id} quote={byId.get(id)} loading={loading} />
+          <AlternativeAssetCard key={id} quote={byId.get(id)} loading={loading} range={range} />
         ))}
       </div>
     </div>

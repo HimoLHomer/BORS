@@ -195,11 +195,14 @@ export function AllocationPieChart({
                   const chrome = allocationPieSliceChrome(row.key, index, slices.length, row.label);
                   const active = hoveredIndex === index;
                   return (
+                    // Faint light hairline separates slices without paddingAngle, which
+                    // would take angle away from every slice and skew the proportions.
                     <Cell
                       key={row.key}
                       fill={`url(#${chrome.gradientId})`}
-                      stroke={chrome.stroke}
-                      strokeWidth={active ? 3 : 2}
+                      stroke={active ? chrome.stroke : 'rgba(255, 255, 255, 0.16)'}
+                      strokeWidth={active ? 2.5 : 0.75}
+                      strokeLinejoin="round"
                       style={{
                         pointerEvents: 'none',
                         filter: active ? 'url(#allocationPieGlowHover)' : undefined,
@@ -208,9 +211,28 @@ export function AllocationPieChart({
                   );
                 })
               ) : (
-                <Cell fill="rgba(39, 39, 42, 0.6)" stroke="rgba(59, 130, 246, 0.2)" />
+                <Cell fill="rgba(34, 39, 52, 0.6)" stroke="rgba(59, 130, 246, 0.2)" />
               )}
             </Pie>
+            {slices.length > 0 ? (
+              // Bright rim around the whole pie, like the portfolio line; the slices' own strokes stay dark.
+              <Pie
+                data={[{ value: 1 }]}
+                dataKey="value"
+                cx="50%"
+                cy="50%"
+                innerRadius={outerRadiusPct}
+                outerRadius={outerRadiusPct}
+                fill="none"
+                stroke="rgba(96, 154, 250, 0.7)"
+                strokeWidth={1.5}
+                isAnimationActive={false}
+                activeShape={false}
+                label={false}
+                labelLine={false}
+                style={{ pointerEvents: 'none' }}
+              />
+            ) : null}
           </PieChart>
         </ResponsiveContainer>
       </div>

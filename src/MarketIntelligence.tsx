@@ -471,10 +471,10 @@ function TreemapLabel({
       y={py}
       textAnchor={anchor}
       dominantBaseline="middle"
-      fill="#f4f4f5"
+      fill="var(--color-text-p)"
       fontSize={fontSize}
       fontWeight={fontWeight}
-      stroke={useStroke ? 'rgba(9,9,11,0.55)' : 'none'}
+      stroke={useStroke ? 'rgba(7,8,12,0.55)' : 'none'}
       strokeWidth={useStroke ? 0.6 : 0}
       paintOrder={useStroke ? 'stroke fill' : undefined}
       style={{
@@ -581,14 +581,14 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
           y={y}
           width={width}
           height={headerH}
-          fill="#18181b"
-          stroke="rgba(39,39,42,0.95)"
+          fill="var(--color-card)"
+          stroke="var(--color-border)"
           strokeWidth={1}
         />
         <text
           x={Math.round(x + 8)}
           y={Math.round(y + headerH / 2)}
-          fill="#d4d4d8"
+          fill="var(--color-text-s)"
           fontSize={fontSize}
           fontWeight={600}
           dominantBaseline="middle"
@@ -749,7 +749,7 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
         filter={tileGlowFilter}
         style={{
           fill: color,
-          stroke: isHovered ? 'rgba(255,255,255,0.38)' : 'rgba(39,39,42,0.8)',
+          stroke: isHovered ? 'rgba(255,255,255,0.38)' : 'rgba(34,39,52,0.8)',
           strokeWidth: isHovered ? 1.5 : 1,
           cursor: 'pointer',
           transition: 'fill 0.12s ease, stroke 0.12s ease',
@@ -790,10 +790,10 @@ const CustomTreemapContent = (props: TreemapContentProps) => {
             y={cy}
             textAnchor="middle"
             dominantBaseline="middle"
-            fill="#f4f4f5"
+            fill="var(--color-text-p)"
             fontSize={fontMicro}
             fontWeight={600}
-            stroke="rgba(9,9,11,0.55)"
+            stroke="rgba(7,8,12,0.55)"
             strokeWidth={0.6}
             paintOrder="stroke fill"
             transform={`rotate(-90, ${cx}, ${cy})`}
@@ -931,7 +931,7 @@ function TreemapChart({
       {hover && (
         <div
           role="tooltip"
-          className="pointer-events-none absolute z-20 max-w-[220px] rounded-lg border border-white/15 bg-[#0c0c0e]/95 px-3 py-2 shadow-xl backdrop-blur-sm"
+          className="pointer-events-none absolute z-20 max-w-[220px] rounded-lg border border-white/15 bg-surface-2/95 px-3 py-2 shadow-xl backdrop-blur-sm"
           style={{ left: hover.x, top: hover.y }}
         >
           <p className="text-xs font-semibold text-white tracking-tight">{hover.symbol}</p>
