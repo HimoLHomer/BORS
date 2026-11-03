@@ -28,7 +28,7 @@ function AllocationPieLegendList({
   if (slices.length === 0) return null;
 
   return (
-    <div className="allocation-pie-legend flex max-h-full min-h-0 w-max max-w-[13rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 overflow-y-auto overflow-x-hidden">
+    <div className="allocation-pie-legend flex max-h-full min-h-0 w-max max-w-[15rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 overflow-y-auto overflow-x-hidden">
       <ul className="m-0 list-none space-y-0.5 p-0">
         {slices.map((slice, index) => {
           const chrome = allocationPieSliceChrome(slice.key, index, slices.length, slice.label);
@@ -38,7 +38,7 @@ function AllocationPieLegendList({
               <div
                 role="presentation"
                 onMouseEnter={() => onHoverIndex(index)}
-                className={`allocation-pie-legend-row grid grid-cols-[auto_2.35rem_2.5rem_4.85rem] gap-x-2 items-center py-0.5 px-1 rounded-md transition-colors ${
+                className={`allocation-pie-legend-row grid grid-cols-[auto_minmax(2.35rem,4.5rem)_2.5rem_4.85rem] gap-x-2 items-center py-0.5 px-1 rounded-md transition-colors ${
                   active ? 'bg-white/[0.06] ring-1 ring-accent/20' : 'hover:bg-white/[0.04]'
                 }`}
               >
@@ -71,11 +71,11 @@ function AllocationPieLegendList({
 function AllocationPieLegendSkeleton() {
   return (
     <div
-      className="flex max-h-full min-h-0 w-max max-w-[13rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 space-y-1.5 overflow-hidden"
+      className="flex max-h-full min-h-0 w-max max-w-[15rem] shrink-0 flex-col self-center border-l border-border/40 pl-2.5 space-y-1.5 overflow-hidden"
       aria-hidden
     >
       {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="grid grid-cols-[auto_2.35rem_2.5rem_4.85rem] gap-x-2 items-center py-0.5 px-1">
+        <div key={i} className="grid grid-cols-[auto_minmax(2.35rem,4.5rem)_2.5rem_4.85rem] gap-x-2 items-center py-0.5 px-1">
           <SkeletonBlock className="h-2 w-2 rounded-full" />
           <SkeletonBlock className="h-3 w-9" />
           <SkeletonBlock className="h-3 w-8" />

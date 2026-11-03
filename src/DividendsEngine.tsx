@@ -256,6 +256,24 @@ function manualAnnualDividendPerShareEur(m: ManualDividendPosition, assets: Asse
   return null;
 }
 
+const DIVIDEND_CHART_MAX_BARS = 10;
+const DIVIDEND_CHART_MAX_BARS_NARROW = 5;
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(query).matches : false
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia(query);
+    const onChange = () => setMatches(mql.matches);
+    onChange();
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, [query]);
+  return matches;
+}
+
 type BarDatum = {
   key: string;
   label: string;
@@ -501,6 +519,25 @@ export function DividendsEngine({
       });
     return [...apiBars, ...manualBars].sort((a, b) => b.annualEur - a.annualEur);
   }, [dividendPayingRows, assets, heldManualRows, data]);
+
+  // Past ~10 bars the ticker labels overlap and the bars become slivers: chart the largest
+  // payers and one "Other" bar for the rest (fewer on a phone-width card).
+  const narrowChart = useMediaQuery('(max-width: 640px)');
+  const chartBarData = useMemo((): BarDatum[] => {
+    const max = narrowChart ? DIVIDEND_CHART_MAX_BARS_NARROW : DIVIDEND_CHART_MAX_BARS;
+    if (barData.length <= max + 1) return barData;
+    const rest = barData.slice(max);
+    return [
+      ...barData.slice(0, max),
+      {
+        key: 'other',
+        label: 'Other',
+        fullName: `${rest.length} other holdings`,
+        annualEur: rest.reduce((s, b) => s + b.annualEur, 0),
+        source: 'api',
+      },
+    ];
+  }, [barData, narrowChart]);
 
   const calendarApiRows = useMemo((): ApiDividendPaymentInput[] => {
     return dividendPayingRows.map(({ row, index }) => {
@@ -914,7 +951,7 @@ export function DividendsEngine({
             <div className="flex-1 min-h-0 flex flex-col justify-center">
               <div className="flex-1 min-h-[238px] w-full">
               <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 1, height: 1 }}>
-                <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }} barCategoryGap="18%">
+                <BarChart data={chartBarData} margin={{ top: 8, right: 8, left: 0, bottom: 24 }} barCategoryGap="18%">
                   <defs>
                     <linearGradient id="dividendBarFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="var(--color-accent-400)" />
@@ -924,12 +961,13 @@ export function DividendsEngine({
                   <CartesianGrid strokeDasharray="2 6" stroke="rgba(255,255,255,0.07)" vertical={false} />
                   <XAxis
                     dataKey="label"
-                    tick={{ fill: 'var(--color-text-s)', fontSize: 11, fontWeight: 600 }}
+                    tick={{ fill: 'var(--color-text-s)', fontSize: narrowChart ? 10 : 11, fontWeight: 600 }}
                     interval={0}
-                    angle={0}
-                    textAnchor="middle"
-                    height={44}
-                    tickMargin={7}
+                    // Tilt the tickers on a phone-width card so neighbours don't run together.
+                    angle={narrowChart ? -35 : 0}
+                    textAnchor={narrowChart ? 'end' : 'middle'}
+                    height={narrowChart ? 52 : 44}
+                    tickMargin={narrowChart ? 4 : 7}
                   />
                   <YAxis
                     tick={{ fill: 'var(--color-text-s)', fontSize: 11, fontWeight: 600 }}
@@ -964,7 +1002,8 @@ export function DividendsEngine({
           )}
         </div>
 
-        <div className="panel min-h-[400px] h-[400px] max-h-[400px] flex flex-col overflow-hidden">
+        {/* Fixed height beside the bar chart; on a phone the stacked calendar grows instead of scrolling. */}
+        <div className="panel min-h-[400px] sm:h-[400px] sm:max-h-[400px] flex flex-col overflow-hidden">
           <div className={`${SECTION_HEAD} shrink-0`}>
             <div className="flex items-center gap-1.5 mb-2">
               <h3 className="card-title !mb-0">Dividend calendar</h3>

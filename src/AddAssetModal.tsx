@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useEscapeToClose } from './useEscapeToClose';
 import { X, Search, RefreshCcw, Zap, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Asset } from './types';
-import { formatCurrency, fxToEur } from './formatCurrency';
+import { convertAmountBetweenCurrencies, formatCurrency, fxToEur } from './formatCurrency';
 import { mergeHoldingPurchase } from './mergeHoldingPurchase';
 import {
   formatDecimalEn,
@@ -110,8 +110,11 @@ function currencyOptionsWith(current: string | undefined): { code: string; label
   return [...HOLDING_CURRENCIES, { code, label: code }];
 }
 
-export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: {
-  onClose: () => void, 
+/** Cost this far from today's price on a new purchase suggests an older buy (shown as a hint). */
+const COST_VS_PRICE_WARN_SHARE = 0.15;
+
+export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates, existingAssets = [] }: {
+  onClose: () => void,
   onPersist: (
     asset: Asset,
     isEdit: boolean,
@@ -119,6 +122,8 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
   ) => Promise<void>,
   editAsset?: Asset,
   exchangeRates: Record<string, number>,
+  /** Current holdings, to spot a ticker that is already held. */
+  existingAssets?: Asset[],
 }) => {
   useEscapeToClose(onClose);
   const [formData, setFormData] = useState({
@@ -145,11 +150,15 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<AssetSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  /** Today's price of the chosen symbol, in its quote currency. */
+  const [marketQuote, setMarketQuote] = useState<{ price: number; currency: string } | null>(null);
+  const searchSeqRef = useRef(0);
 
   const [error, setError] = useState<string | null>(null);
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
+    const seq = ++searchSeqRef.current;
     if (query.length < 2) {
       setSearchResults([]);
       return;
@@ -159,6 +168,8 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
+      // A slower reply to an earlier keystroke must not replace newer results.
+      if (seq !== searchSeqRef.current) return;
       if (!res.ok) {
         const msg =
           typeof data === 'object' && data && 'error' in data
@@ -182,11 +193,13 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
       setSearchResults([]);
       setError('Search failed — check your connection and try again.');
     } finally {
-      setIsSearching(false);
+      if (seq === searchSeqRef.current) setIsSearching(false);
     }
   };
 
   const selectAsset = (asset: AssetSearchResult) => {
+    const hasPrice = typeof asset.price === 'number' && Number.isFinite(asset.price) && asset.price > 0;
+    setMarketQuote(hasPrice ? { price: asset.price!, currency: asset.currency || formData.currency } : null);
     const displayName = asset.longName || asset.shortName || asset.name || asset.symbol;
     // Guess a cleaner display symbol (e.g. O instead of RY6.F)
     let displaySymbol = asset.symbol;
@@ -200,6 +213,9 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
       displaySymbol: displaySymbol,
       name: displayName,
       currency: asset.currency || prev.currency,
+      // Start from today's price; the user overwrites it with what they paid.
+      averagePrice:
+        prev.averagePrice.trim() === '' && hasPrice ? formatDecimalEn(asset.price!, 2) : prev.averagePrice,
       type: asset.quoteType?.toLowerCase().includes('etf') || asset.typeDisp?.toLowerCase().includes('etf') ? 'etf' : 
             asset.quoteType?.toLowerCase().includes('crypto') || asset.typeDisp?.toLowerCase().includes('crypto') ? 'crypto' : 'stock'
     }));
@@ -244,8 +260,15 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
             addCurrency: purchaseAddCurrency,
             exchangeRates,
           });
+          if ('error' in preview) {
+            setError(preview.error);
+            return;
+          }
+          // A filled-in purchase counts even if "Apply to holding" was not pressed.
+          newAsset.quantity = preview.quantity;
+          newAsset.averagePrice = preview.averagePrice;
           const holdingFx = fxToEur(formData.currency, exchangeRates);
-          if (!('error' in preview) && preview.totalCostBasisEur > 0 && holdingFx > 0) {
+          if (preview.totalCostBasisEur > 0 && holdingFx > 0) {
             const prevCostEur =
               parseShareInput(formData.quantity, 0) *
               parseDecimalInput(formData.averagePrice, 0) *
@@ -285,11 +308,17 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
       const res = await fetch(`/api/quote/${symbol}`);
       const data = await res.json();
       if (data.name) {
-        setFormData(prev => ({ 
-          ...prev, 
+        const price = typeof data.price === 'number' && data.price > 0 ? data.price : null;
+        if (price != null) setMarketQuote({ price, currency: data.currency || formData.currency });
+        setFormData(prev => ({
+          ...prev,
           // Only auto-fill name if it is currently empty to prevent overwriting manual input
-          name: prev.name === '' ? data.name : prev.name, 
-          currency: data.currency || prev.currency 
+          name: prev.name === '' ? data.name : prev.name,
+          currency: data.currency || prev.currency,
+          averagePrice:
+            !editAsset && prev.averagePrice.trim() === '' && price != null
+              ? formatDecimalEn(price, 2)
+              : prev.averagePrice,
         }));
         setIsVerified(true);
       } else {
@@ -351,6 +380,30 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
 
   const canApplyPurchase =
     purchasePreview != null && !('error' in purchasePreview);
+
+  /** Adding a ticker that is already held: the server adds the shares to that holding. */
+  const existingHolding = useMemo(() => {
+    if (editAsset) return null;
+    const sym = formData.symbol.trim().toUpperCase();
+    if (!sym) return null;
+    return existingAssets.find((a) => a.symbol?.trim().toUpperCase() === sym) ?? null;
+  }, [editAsset, existingAssets, formData.symbol]);
+
+  /** A new purchase far from today's price is usually an older buy entered without "already owned". */
+  const costVsPrice = useMemo(() => {
+    if (editAsset || alreadyOwned || !marketQuote) return null;
+    const cost = parseDecimalInput(formData.averagePrice, NaN);
+    if (!(cost > 0)) return null;
+    const price = convertAmountBetweenCurrencies(
+      marketQuote.price,
+      marketQuote.currency,
+      formData.currency,
+      exchangeRates
+    );
+    if (price == null || !(price > 0)) return null;
+    const diff = (cost - price) / price;
+    return Math.abs(diff) >= COST_VS_PRICE_WARN_SHARE ? { diff, price } : null;
+  }, [editAsset, alreadyOwned, marketQuote, formData.averagePrice, formData.currency, exchangeRates]);
 
   return (
     <motion.div 
@@ -632,6 +685,24 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
               />
             </div>
           </div>
+          {existingHolding && (
+            <p className="rounded-lg border border-accent/25 bg-accent/5 px-4 py-3 text-[11px] leading-relaxed text-text-s">
+              <span className="block font-bold text-text-p">
+                You already hold {formatShares(Number(existingHolding.quantity) || 0)} {existingHolding.displaySymbol || existingHolding.symbol}
+              </span>
+              These shares are added to that holding and its average cost is updated, instead of a second row.
+            </p>
+          )}
+          {costVsPrice && (
+            <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-[11px] leading-relaxed text-text-s">
+              <span className="block font-bold text-text-p">
+                Cost is {formatPercentEn(Math.abs(costVsPrice.diff) * 100, 0)}{' '}
+                {costVsPrice.diff < 0 ? 'below' : 'above'} today&rsquo;s price ({formatCurrency(costVsPrice.price, formData.currency)})
+              </span>
+              If you bought these before today, tick &ldquo;I already owned this&rdquo; below, or the whole gap is
+              counted as today&rsquo;s gain or loss.
+            </p>
+          )}
           </div>
 
           {!editAsset ? (
@@ -658,7 +729,7 @@ export const AddAssetModal = ({ onClose, onPersist, editAsset, exchangeRates }: 
             {isSubmitting ? (
               <RefreshCcw className="w-4 h-4 animate-spin" />
             ) : (
-              editAsset ? 'Save changes' : 'Add to portfolio'
+              editAsset ? 'Save changes' : existingHolding ? 'Add to holding' : 'Add to portfolio'
             )}
           </button>
         </form>

@@ -239,38 +239,71 @@ export function recordAssetUpdateFlows(
 /** Share of a deleted holding's value bought today above which deletion is treated as an undo. */
 const SAME_DAY_UNDO_SHARE = 0.95;
 
+type FlowRow = {
+  id: number;
+  date: string;
+  amount_eur: number;
+  kind: string;
+  asset_symbol: string | null;
+  note: string | null;
+  created_at: string;
+};
+
+/** What a holding's removal changed in the flow log, so it can be put back. */
+export type AssetDeleteFlowUndo = { deletedFlows: FlowRow[]; insertedFlowId?: number };
+
 /**
  * Deleting a holding is a sale: its value leaves the holdings, so log it as an outflow at
  * market value (else range returns count the whole value as a loss). Exception: a holding
  * (almost) entirely bought today is treated as an undo, and today's buy entries are removed.
+ * "Bought today" is measured against what was paid (cost basis), not today's market value,
+ * so a holding added today at a price far from the current one still counts as an undo.
  */
 export function recordAssetDeleteFlow(
   db: Database.Database,
   asset: Asset,
   saleValueEur: number | null,
   exchangeRates?: Record<string, number>
-): void {
+): AssetDeleteFlowUndo {
   const today = todayIsoDateHelsinki();
   const symbol = asset.symbol?.trim();
-  if (!symbol) return;
+  if (!symbol) return { deletedFlows: [] };
 
-  const value = saleValueEur != null && saleValueEur > 0 ? saleValueEur : assetCostBasisEur(asset, exchangeRates);
-  const boughtToday =
-    (db
-      .prepare(
-        `SELECT COALESCE(SUM(amount_eur), 0) AS s FROM portfolio_flows WHERE date = ? AND asset_symbol = ? AND kind = 'buy'`
-      )
-      .get(today, symbol) as { s: number }).s ?? 0;
+  const costEur = assetCostBasisEur(asset, exchangeRates);
+  const value = saleValueEur != null && saleValueEur > 0 ? saleValueEur : costEur;
+  const todaysBuys = db
+    .prepare(
+      `SELECT id, date, amount_eur, kind, asset_symbol, note, created_at FROM portfolio_flows
+       WHERE date = ? AND asset_symbol = ? AND kind = 'buy'`
+    )
+    .all(today, symbol) as FlowRow[];
+  const boughtToday = todaysBuys.reduce((s, r) => s + r.amount_eur, 0);
+  const paidBasis = Number.isFinite(costEur) && costEur > 0 ? costEur : value;
 
-  if (boughtToday > 0 && (!Number.isFinite(value) || boughtToday >= value * SAME_DAY_UNDO_SHARE)) {
+  if (boughtToday > 0 && (!Number.isFinite(paidBasis) || boughtToday >= paidBasis * SAME_DAY_UNDO_SHARE)) {
     db.prepare(`DELETE FROM portfolio_flows WHERE date = ? AND asset_symbol = ? AND kind = 'buy'`).run(today, symbol);
-    return;
+    return { deletedFlows: todaysBuys };
   }
   if (!Number.isFinite(value) || value < 0.01) {
     console.warn(`No value for deleted ${symbol}; sale not logged`);
-    return;
+    return { deletedFlows: [] };
   }
-  insertPortfolioFlow(db, { amountEur: -value, kind: "sell", assetSymbol: symbol, note: "Sold (holding removed)" });
+  const flow = insertPortfolioFlow(db, { amountEur: -value, kind: "sell", assetSymbol: symbol, note: "Sold (holding removed)" });
+  return { deletedFlows: [], insertedFlowId: Number(flow.id) };
+}
+
+/** Reverse `recordAssetDeleteFlow`: drop the sale it logged, put back the buys it removed. */
+export function restoreAssetDeleteFlows(db: Database.Database, undo: AssetDeleteFlowUndo): void {
+  if (undo.insertedFlowId != null) {
+    db.prepare(`DELETE FROM portfolio_flows WHERE id = ?`).run(undo.insertedFlowId);
+  }
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO portfolio_flows (id, date, amount_eur, kind, asset_symbol, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const r of undo.deletedFlows) {
+    insert.run(r.id, r.date, r.amount_eur, r.kind, r.asset_symbol, r.note, r.created_at);
+  }
 }
 
 export function recordCashChangeFlow(

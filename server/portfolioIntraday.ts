@@ -32,12 +32,40 @@ const CACHE_TTL_MS = 3 * 60 * 1000;
 
 const cache = new Map<PortfolioIntradayRange, { key: string; at: number; result: PortfolioIntraday | null }>();
 
-async function fetchBars(
+type BarsResult = { bars: Bar[]; currency: string | null; previousClose: number | null };
+
+/**
+ * Per-symbol chart cache, shared by the portfolio series and the holdings sparklines (both ask
+ * for the same 1D bars on page load). Adding one holding then fetches one chart, not all of
+ * them, and concurrent callers share a request already in flight.
+ */
+const BARS_TTL_MS = 60_000;
+const barsCache = new Map<string, { at: number; promise: Promise<BarsResult> }>();
+
+function fetchBars(
   yahooFinance: YahooClient,
   symbol: string,
   now: Date,
   range: PortfolioIntradayRange
-): Promise<{ bars: Bar[]; currency: string | null; previousClose: number | null }> {
+): Promise<BarsResult> {
+  const key = `${range}|${symbol}`;
+  const hit = barsCache.get(key);
+  if (hit && Math.abs(now.getTime() - hit.at) < BARS_TTL_MS) return hit.promise;
+  const promise = fetchBarsUncached(yahooFinance, symbol, now, range);
+  barsCache.set(key, { at: now.getTime(), promise });
+  // A failed fetch should be retried on the next request, not served for a minute.
+  void promise.then((r) => {
+    if (r.bars.length === 0 && barsCache.get(key)?.promise === promise) barsCache.delete(key);
+  });
+  return promise;
+}
+
+async function fetchBarsUncached(
+  yahooFinance: YahooClient,
+  symbol: string,
+  now: Date,
+  range: PortfolioIntradayRange
+): Promise<BarsResult> {
   const { interval, lookbackDays } = RANGE_CONFIG[range];
   try {
     const chart: any = await yahooFinance.chart(

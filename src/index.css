@@ -253,6 +253,29 @@
   gap: 0.5rem;
 }
 
+/* Narrow card (phone width): three columns leave no room for amounts, so stack the featured
+   payout above a 2×2 grid of the next ones. */
+.dividend-upcoming-container {
+  container-type: inline-size;
+}
+
+@container (max-width: 380px) {
+  .dividend-upcoming-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto auto;
+  }
+  .dividend-upcoming-featured {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: 8.5rem;
+  }
+  .dividend-upcoming-cluster {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-rows: repeat(2, minmax(6.5rem, auto));
+  }
+}
+
 .error-banner {
   @apply rounded-2xl border border-red/40 bg-red/10 px-4 py-3 text-[13px] font-medium text-red-200;
 }

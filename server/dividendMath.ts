@@ -194,13 +194,16 @@ function classifyGapMedianDays(med: number): InferredDividendPayoutFrequency {
 
 /** Infer pay cadence from Yahoo chart dividend events (recent gaps weighted). */
 export function inferPayoutFrequencyFromChartDividends(
-  divs: { date?: Date | string; amount?: number }[] | undefined | null
+  divs: { date?: Date | string; amount?: number }[] | undefined | null,
+  /** Days of history `divs` covers. One payment in a year or more of history = annual payer. */
+  lookbackDays?: number
 ): InferredDividendPayoutFrequency | null {
-  if (!divs || divs.length < 2) return null;
+  if (!divs || divs.length === 0) return null;
   const times = divs
     .map((d) => new Date(d.date as Date).getTime())
     .filter((t) => Number.isFinite(t))
     .sort((a, b) => a - b);
+  if (times.length === 1) return lookbackDays != null && lookbackDays >= 365 ? "annual" : null;
   if (times.length < 2) return null;
   const gapsDays: number[] = [];
   for (let i = 1; i < times.length; i++) {

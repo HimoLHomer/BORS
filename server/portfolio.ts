@@ -20,7 +20,11 @@ import {
   recordAssetDeleteFlow,
   recordAssetUpdateFlows,
   recordCashChangeFlow,
+  restoreAssetDeleteFlows,
+  type AssetDeleteFlowUndo,
 } from "./portfolioFlows";
+import { normalizeHoldingCurrency } from "./minorCurrency";
+import { fxToEur } from "../src/formatCurrency";
 
 let db: Database.Database | null = null;
 
@@ -59,10 +63,44 @@ export function getPortfolioDb(): Database.Database {
     INSERT OR IGNORE INTO ui_prefs (id, payload) VALUES (1, '{}');
   `);
   ensurePortfolioFlowsTable(db);
+  migrateMinorCurrencyHoldings(db);
   if (process.env.BORS_QUIET !== "1" && process.env.NODE_ENV !== "production") {
     console.log(`[portfolio] SQLite database: ${file}`);
   }
   return db;
+}
+
+/** Holdings saved in pence (`GBp`) before prices were normalized: store them in pounds. */
+function migrateMinorCurrencyHoldings(d: Database.Database): void {
+  const rows = d.prepare("SELECT id, payload FROM assets").all() as { id: string; payload: string }[];
+  const update = d.prepare("UPDATE assets SET payload = ? WHERE id = ?");
+  for (const row of rows) {
+    const asset = JSON.parse(row.payload) as Asset;
+    const next = normalizeHoldingCurrency(asset);
+    if (next !== asset) update.run(JSON.stringify(next), row.id);
+  }
+}
+
+function findAssetBySymbol(d: Database.Database, symbol: string): Asset | null {
+  const wanted = symbol.trim().toUpperCase();
+  if (!wanted) return null;
+  const rows = d.prepare("SELECT id, payload FROM assets").all() as { id: string; payload: string }[];
+  for (const row of rows) {
+    const a = rowToAsset(row);
+    if (a.symbol?.trim().toUpperCase() === wanted) return a;
+  }
+  return null;
+}
+
+/** Recently removed holdings, kept briefly so the removal can be undone. */
+const DELETE_UNDO_TTL_MS = 10 * 60_000;
+const deleteUndoJournal = new Map<
+  string,
+  { at: number; row: { id: string; payload: string }; undo: AssetDeleteFlowUndo }
+>();
+
+function pruneDeleteUndoJournal(now = Date.now()): void {
+  for (const [k, v] of deleteUndoJournal) if (now - v.at > DELETE_UNDO_TTL_MS) deleteUndoJournal.delete(k);
 }
 
 function positiveNumberOrNull(v: unknown): number | null {
@@ -261,14 +299,45 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       const body = req.body as Asset & { flowAmountEur?: number; transferIn?: boolean };
       const id = body.id || crypto.randomUUID();
       const { id: _omit, flowAmountEur: _flow, transferIn, ...rest } = body;
-      const asset: Asset = { ...rest, id, updatedAt: rest.updatedAt || new Date().toISOString() };
+      const asset: Asset = normalizeHoldingCurrency({ ...rest, id, updatedAt: rest.updatedAt || new Date().toISOString() });
+      const d = getPortfolioDb();
+
+      // Same ticker already held: add the shares to that holding instead of a second row
+      // (two rows of one symbol double-count today's purchases and same-day undo).
+      const existing = asset.symbol ? findAssetBySymbol(d, asset.symbol) : null;
+      if (existing) {
+        const rates = await getEurRates(yahooFinance, [existing.currency, asset.currency]);
+        const addQty = Number(asset.quantity);
+        const fromFx = fxToEur(asset.currency, rates);
+        const toFx = fxToEur(existing.currency, rates);
+        if (!(addQty > 0) || !(fromFx > 0) || !(toFx > 0)) {
+          return res.status(400).json({ error: `Could not add to your existing ${existing.symbol} holding` });
+        }
+        const prevQty = Number(existing.quantity) || 0;
+        const addPriceInExisting = (Number(asset.averagePrice) || 0) * (fromFx / toFx);
+        const quantity = prevQty + addQty;
+        const averagePrice = (prevQty * (Number(existing.averagePrice) || 0) + addQty * addPriceInExisting) / quantity;
+        const next: Asset = { ...existing, quantity, averagePrice, updatedAt: new Date().toISOString() };
+        d.prepare("UPDATE assets SET payload = ? WHERE id = ?").run(JSON.stringify(next), existing.id);
+        if (transferIn) {
+          const value = (await holdingMarketValueEur(yahooFinance, asset, addQty)) ?? 0;
+          recordAssetCreateFlow(d, { ...asset, quantity: addQty }, body, rates, value);
+        } else {
+          const hinted = typeof body.flowAmountEur === "number" && body.flowAmountEur > 0 ? body.flowAmountEur : null;
+          const amount = hinted ?? addQty * (Number(asset.averagePrice) || 0) * fromFx;
+          if (amount >= 0.01) {
+            insertPortfolioFlow(d, { amountEur: amount, kind: "buy", assetSymbol: existing.symbol, note: "Purchase" });
+          }
+        }
+        return res.status(200).json({ ...next, merged: true });
+      }
+
       const payload = JSON.stringify(asset);
       const rates = await getEurRates(yahooFinance, [asset.currency]);
       // Already owned: enters at today's market value (0 = unknown, falls back to cost basis).
       const transferInValueEur = transferIn
         ? (await holdingMarketValueEur(yahooFinance, asset, Number(asset.quantity))) ?? 0
         : null;
-      const d = getPortfolioDb();
       d.prepare("INSERT INTO assets (id, payload) VALUES (?, ?)").run(id, payload);
       recordAssetCreateFlow(d, asset, body, rates, transferInValueEur);
       res.status(201).json(asset);
@@ -289,12 +358,12 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       const prev = JSON.parse(row.payload) as Asset;
       const patch = req.body as Partial<Asset> & { flowAmountEur?: number; saleValueEur?: number };
       const { flowAmountEur: _flow, saleValueEur: _sale, ...assetPatch } = patch;
-      const next: Asset = {
+      const next: Asset = normalizeHoldingCurrency({
         ...prev,
         ...assetPatch,
         id,
         updatedAt: new Date().toISOString(),
-      };
+      });
       const rates = await getEurRates(yahooFinance, [prev.currency, next.currency]);
       const soldQty = Number(prev.quantity) - Number(next.quantity);
       const soldValueEur =
@@ -324,11 +393,33 @@ export function registerPortfolioRoutes(app: Express, yahooFinance?: any): void 
       const rates = await getEurRates(yahooFinance, [prev.currency]);
       const r = d.prepare("DELETE FROM assets WHERE id = ?").run(req.params.id);
       if (r.changes === 0) return res.status(404).json({ error: "Asset not found" });
-      recordAssetDeleteFlow(d, prev, saleValueEur, rates);
-      res.status(204).send();
+      const undo = recordAssetDeleteFlow(d, prev, saleValueEur, rates);
+      pruneDeleteUndoJournal();
+      const undoId = crypto.randomUUID();
+      deleteUndoJournal.set(undoId, { at: Date.now(), row, undo });
+      res.status(200).json({ undoId, recordedAs: undo.insertedFlowId ? "sale" : "undo" });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to delete asset" });
+    }
+  });
+
+  /** Put back a holding removed in the last few minutes, and reverse the flows its removal logged. */
+  app.post("/api/portfolio/assets/undo-delete/:undoId", (req: Request, res: Response) => {
+    try {
+      pruneDeleteUndoJournal();
+      const entry = deleteUndoJournal.get(req.params.undoId);
+      if (!entry) return res.status(404).json({ error: "Nothing to undo" });
+      const d = getPortfolioDb();
+      d.transaction(() => {
+        d.prepare("INSERT OR REPLACE INTO assets (id, payload) VALUES (?, ?)").run(entry.row.id, entry.row.payload);
+        restoreAssetDeleteFlows(d, entry.undo);
+      })();
+      deleteUndoJournal.delete(req.params.undoId);
+      res.json(rowToAsset(entry.row));
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to undo removal" });
     }
   });
 

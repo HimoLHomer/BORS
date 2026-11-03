@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { ArrowDown, ArrowUp } from 'lucide-react';
 
 export type DataListColumn = {
   key: string;
@@ -9,7 +10,11 @@ export type DataListColumn = {
   cellClassName?: string;
   /** Fixed column width for table-fixed layouts (e.g. `6.5rem`, `12%`). */
   width?: string;
+  /** Header becomes a button that sorts by this column (needs `onSort`). */
+  sortable?: boolean;
 };
+
+export type DataListSort = { key: string; dir: 'asc' | 'desc' };
 
 export function dataListRowClassName(rowIndex: number, highlight?: boolean): string {
   if (highlight) return 'group bg-accent/10 outline outline-1 outline-accent/40 rounded-lg';
@@ -38,6 +43,9 @@ export function DataListTable({
   enterStaggerKey,
   enterStaggerMax = 12,
   rowKeys,
+  sort,
+  onSort,
+  maxHeight,
 }: {
   columns: DataListColumn[];
   rows: Record<string, React.ReactNode>[];
@@ -55,16 +63,23 @@ export function DataListTable({
   enterStaggerKey?: number;
   enterStaggerMax?: number;
   rowKeys?: string[];
+  sort?: DataListSort;
+  onSort?: (key: string) => void;
+  /** Caps the table height (e.g. `70vh`): rows scroll under a header that stays in view. */
+  maxHeight?: string;
 }) {
   const colSpan = columns.length;
 
   return (
     <div
       className={
-        horizontalScroll
-          ? 'overflow-x-auto -mx-2 px-2'
-          : 'min-w-0 -mx-2 px-2 overflow-x-hidden'
+        maxHeight
+          ? 'overflow-auto -mx-2 px-2 overscroll-contain'
+          : horizontalScroll
+            ? 'overflow-x-auto -mx-2 px-2'
+            : 'min-w-0 -mx-2 px-2 overflow-x-hidden'
       }
+      style={maxHeight ? { maxHeight } : undefined}
     >
       <table
         className={`w-full border-separate border-spacing-y-1 text-xs font-mono${tableClassName ? ` ${tableClassName}` : ''}`}
@@ -85,14 +100,34 @@ export function DataListTable({
                 'text-xs font-medium text-text-s'
               }
             >
-              {columns.map((c) => (
-                <th
-                  key={c.key}
-                  className={`px-3 py-2 whitespace-nowrap ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.headerClassName ?? ''}`}
-                >
-                  {c.label}
-                </th>
-              ))}
+              {columns.map((c) => {
+                const sorted = sort?.key === c.key;
+                const SortIcon = sort?.dir === 'asc' ? ArrowUp : ArrowDown;
+                return (
+                  <th
+                    key={c.key}
+                    aria-sort={sorted ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                    className={`px-3 py-2 whitespace-nowrap ${c.align === 'right' ? 'text-right' : 'text-left'}${
+                      maxHeight ? ' sticky top-0 z-[2] bg-card' : ''
+                    } ${c.headerClassName ?? ''}`}
+                  >
+                    {c.sortable && onSort ? (
+                      <button
+                        type="button"
+                        onClick={() => onSort(c.key)}
+                        className={`inline-flex items-center gap-1 rounded transition-colors hover:text-text-p ${
+                          c.align === 'right' ? 'flex-row-reverse' : ''
+                        } ${sorted ? 'text-text-p' : ''}`}
+                      >
+                        {c.label}
+                        <SortIcon className={`h-3 w-3 shrink-0 ${sorted ? 'opacity-80' : 'opacity-0'}`} aria-hidden />
+                      </button>
+                    ) : (
+                      c.label
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
         ) : null}

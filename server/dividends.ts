@@ -186,7 +186,7 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
               h.displaySymbol
             );
             const divList = pickedDivList.length ? pickedDivList : [];
-            const payoutFrequency = inferPayoutFrequencyFromChartDividends(divList);
+            const payoutFrequency = inferPayoutFrequencyFromChartDividends(divList, DIVIDEND_CHART_LOOKBACK_DAYS);
 
             const sd = sum.summaryDetail as {
               trailingAnnualDividendRate?: number;
@@ -208,7 +208,12 @@ export function registerDividendRoutes(app: Express, yahooFinance: any): void {
               (typeof dks?.financialCurrency === "string" && dks.financialCurrency.trim()
                 ? dks.financialCurrency.trim()
                 : null) ??
-              (sdRec && typeof sdRec.financialCurrency === "string" ? String(sdRec.financialCurrency).trim() : null);
+              (sdRec && typeof sdRec.financialCurrency === "string" ? String(sdRec.financialCurrency).trim() : null) ??
+              // quote() often carries it when quoteSummary does not (e.g. EQNR.OL reports in USD, VOD.L in EUR).
+              (() => {
+                const q = (divSym !== sym ? fundQuote : listQuote) as { financialCurrency?: unknown } | null;
+                return q && typeof q.financialCurrency === "string" ? q.financialCurrency.trim() || null : null;
+              })();
 
             const listQ = listQuote && typeof listQuote === "object" ? (listQuote as { currency?: string; regularMarketPrice?: number }) : null;
             const fundQ = fundQuote && typeof fundQuote === "object" ? (fundQuote as { currency?: string }) : null;

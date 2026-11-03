@@ -328,7 +328,7 @@ function UpcomingMonthsPanel({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0">
-      <div className="flex items-center justify-between gap-2 shrink-0 pb-1.5 px-0.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 shrink-0 pb-1.5 px-0.5">
         <div className={DIVIDEND_MONTH_NAV_PILL}>
           <button
             type="button"
@@ -355,7 +355,7 @@ function UpcomingMonthsPanel({
         </span>
       </div>
 
-      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+      <div className="dividend-upcoming-container flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
         <UpcomingFeaturedGrid
           payments={activeGroup.payments}
           exitingId={exitingId}

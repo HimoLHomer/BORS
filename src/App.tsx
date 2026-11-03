@@ -86,6 +86,7 @@ import {
 import { NavButton } from './AppNav';
 import { apiHoldingKey, forgetTrackedHoldings } from './dividendRedemptions';
 import { AddAssetModal } from './AddAssetModal';
+import { UndoToast, useConfirmDialog } from './ConfirmDialog';
 import { InfoHint } from './InfoHint';
 import { Sparkline } from './Sparkline';
 import { gainPercentOf, holdingTodayGainEur, todaysPurchasesBySymbol } from './todayGain';
@@ -94,6 +95,12 @@ import { gainPercentOf, holdingTodayGainEur, todaysPurchasesBySymbol } from './t
 const HISTORY_SAVE_DEBOUNCE_MS = 2000;
 /** Minimum spacing between saves when only quotes/FX moved the total. */
 const HISTORY_PRICE_SAVE_INTERVAL_MS = 60_000;
+/** From this many holdings the table gets a search box and scrolls under a sticky header. */
+const HOLDINGS_SEARCH_MIN_ROWS = 12;
+/** Allocation pie: largest holdings shown as their own slice; the rest become "Other". */
+const ALLOCATION_MAX_HOLDING_SLICES = 12;
+/** Wait this long after holdings/cash change before fetching the slow chart series. */
+const SERIES_FETCH_SETTLE_MS = 400;
 /** How often the 1D intraday series is refreshed while the 1D view is open. */
 const INTRADAY_REFRESH_MS = 3 * 60_000;
 
@@ -115,8 +122,16 @@ export default function App() {
     null | { type: 'edit'; point: HistoryPoint } | { type: 'add' }
   >(null);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+  const { confirm: confirmDialog, dialog: confirmDialogElement } = useConfirmDialog();
+  const [holdingsSort, setHoldingsSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'value', dir: 'desc' });
+  const [holdingsQuery, setHoldingsQuery] = useState('');
+  /** Last removed holding, while its removal can still be undone. */
+  const [removalUndo, setRemovalUndo] = useState<{ undoId: string; label: string } | null>(null);
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
   const [initialQuotesPending, setInitialQuotesPending] = useState(false);
+  const quotesLoadedOnceRef = useRef(false);
+  /** Symbols the quote feed has answered for (a holding added since shows no "No price" badge yet). */
+  const [quotedSymbols, setQuotedSymbols] = useState<Set<string>>(() => new Set());
   const [quoteCurrencies, setQuoteCurrencies] = useState<Record<string, string>>({});
   const [marketChanges, setMarketChanges] = useState<Record<string, number>>({});
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ 'EUR': 1 });
@@ -403,7 +418,10 @@ export default function App() {
       return;
     }
 
-    if (isInitial) setInitialQuotesPending(true);
+    // Only the very first fetch blanks the page; later ones (after adding or editing a holding)
+    // keep showing the current numbers while the new quotes load.
+    const blankWhileLoading = isInitial && !quotesLoadedOnceRef.current;
+    if (blankWhileLoading) setInitialQuotesPending(true);
     try {
       const res = await fetch('/api/quotes', {
         method: 'POST',
@@ -425,10 +443,17 @@ export default function App() {
       setMarketPrices((prev) => ({ ...prev, ...newPrices }));
       setQuoteCurrencies((prev) => ({ ...prev, ...newQuoteCurrencies }));
       setMarketChanges((prev) => ({ ...prev, ...newChanges }));
+      setQuotedSymbols((prev) => {
+        if (symbols.every((s) => prev.has(s))) return prev;
+        const next = new Set(prev);
+        symbols.forEach((s) => next.add(s));
+        return next;
+      });
+      quotesLoadedOnceRef.current = true;
     } catch (e) {
       console.warn('Backend feed connection limited. Using local simulation vectors.');
     } finally {
-      if (isInitial) setInitialQuotesPending(false);
+      if (blankWhileLoading) setInitialQuotesPending(false);
     }
   }, [assets]);
 
@@ -475,9 +500,12 @@ export default function App() {
       const valueText = saleValueEur != null ? ` at today's value (${formatCurrency(saleValueEur, 'EUR')})` : '';
       if (
         removed &&
-        !window.confirm(
-          `Remove ${removed.name || removed.symbol}?\n\nIt is recorded as sold${valueText}. If you added it by mistake today, nothing is recorded.`
-        )
+        !(await confirmDialog({
+          title: `Remove ${removed.name || removed.symbol}?`,
+          body: `It is recorded as sold${valueText}. If you added it by mistake today, nothing is recorded.`,
+          confirmLabel: 'Remove',
+          destructive: true,
+        }))
       ) {
         return;
       }
@@ -487,43 +515,97 @@ export default function App() {
         body: JSON.stringify(saleValueEur != null ? { saleValueEur } : {}),
       });
       if (!res.ok) throw new Error('Delete failed');
+      const result = (await res.json().catch(() => ({}))) as { undoId?: string };
       const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
-      const removedSymbol = assets.find((a) => a.id === id)?.symbol?.trim();
+      const removedSymbol = removed?.symbol?.trim();
       if (removedSymbol && !list.some((a) => a.symbol?.trim() === removedSymbol)) {
         forgetTrackedHoldings([apiHoldingKey(removedSymbol)]);
       }
       setAssets(list);
       await reloadFlows();
+      if (result.undoId && removed) {
+        setRemovalUndo({ undoId: result.undoId, label: removed.displaySymbol || removed.name || removed.symbol });
+      }
     } catch (err) {
       console.error('Failed to remove position:', err);
     }
   };
 
-  const sortedHoldings = useMemo(
-    () =>
-      [...assets].sort((a, b) => {
-        const valA =
-          a.quantity *
-          (marketPrices[a.symbol] || a.averagePrice) *
-          holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
-        const valB =
-          b.quantity *
-          (marketPrices[b.symbol] || b.averagePrice) *
-          holdingQuoteFxToEur(b.symbol, b.currency, quoteCurrencies, exchangeRates);
-        return valB - valA;
-      }),
-    [assets, marketPrices, quoteCurrencies, exchangeRates]
+  const undoRemoval = async () => {
+    const pending = removalUndo;
+    setRemovalUndo(null);
+    if (!pending) return;
+    try {
+      const res = await fetch(`/api/portfolio/assets/undo-delete/${encodeURIComponent(pending.undoId)}`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('Undo failed');
+      const list: Asset[] = await fetch('/api/portfolio/assets').then((r) => r.json());
+      setAssets(list);
+      await reloadFlows();
+    } catch (err) {
+      console.error('Failed to undo removal:', err);
+    }
+  };
+
+  const todaysPurchases = useMemo(
+    () => todaysPurchasesBySymbol(portfolioFlows, todayIsoDateHelsinki()),
+    [portfolioFlows]
   );
+
+  /** Holdings table rows: filtered by the search box, ordered by the chosen column. */
+  const sortedHoldings = useMemo(() => {
+    const q = holdingsQuery.trim().toLowerCase();
+    const shown = q
+      ? assets.filter((a) =>
+          [a.name, a.symbol, a.displaySymbol, displayTickerForAsset(a)].some((s) => s?.toLowerCase().includes(q))
+        )
+      : assets;
+    const metric = (a: Asset): number | string => {
+      const priceEur =
+        (marketPrices[a.symbol] || a.averagePrice) *
+        holdingQuoteFxToEur(a.symbol, a.currency, quoteCurrencies, exchangeRates);
+      const value = a.quantity * priceEur;
+      const cost = a.quantity * a.averagePrice * (fxToEur(a.currency, exchangeRates) || 1);
+      switch (holdingsSort.key) {
+        case 'asset':
+          return (a.name || a.symbol).toLowerCase();
+        case 'shares':
+          return a.quantity;
+        case 'price':
+          return priceEur;
+        case 'cost':
+          return cost;
+        case 'gain':
+          return value - cost;
+        case 'today':
+          return holdingTodayGainEur(value, marketChanges[a.symbol] || 0, todaysPurchases.get(a.symbol));
+        default:
+          return value;
+      }
+    };
+    const dir = holdingsSort.dir === 'asc' ? 1 : -1;
+    return shown
+      .map((a) => ({ a, m: metric(a) }))
+      .sort((x, y) =>
+        typeof x.m === 'string' || typeof y.m === 'string'
+          ? String(x.m).localeCompare(String(y.m)) * dir
+          : ((x.m as number) - (y.m as number)) * dir
+      )
+      .map(({ a }) => a);
+  }, [assets, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, holdingsSort, holdingsQuery]);
 
   const holdingsRowKeys = useMemo(
     () => sortedHoldings.map((item) => String(item.id ?? item.symbol)),
     [sortedHoldings]
   );
 
-  const todaysPurchases = useMemo(
-    () => todaysPurchasesBySymbol(portfolioFlows, todayIsoDateHelsinki()),
-    [portfolioFlows]
-  );
+  const toggleHoldingsSort = (key: string) =>
+    setHoldingsSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'asset' ? 'asc' : 'desc' }
+    );
 
   const holdingsTableRows = useMemo(
     () =>
@@ -554,7 +636,7 @@ export default function App() {
           value: formatCurrency(totalValue, 'EUR'),
           shares: formatShares(item.quantity),
           price:
-            hasLivePrice || initialQuotesPending ? (
+            hasLivePrice || initialQuotesPending || !quotedSymbols.has(item.symbol) ? (
               formatCurrency(priceInEur, 'EUR')
             ) : (
               <span
@@ -603,7 +685,7 @@ export default function App() {
           ),
         };
       }),
-    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, initialQuotesPending, sparklines]
+    [sortedHoldings, marketPrices, quoteCurrencies, exchangeRates, marketChanges, todaysPurchases, initialQuotesPending, quotedSymbols, sparklines]
   );
 
   const holdingsStats = assets.reduce((acc, asset) => {
@@ -709,45 +791,50 @@ export default function App() {
 
   // Holdings sparklines: refresh with the intraday data cadence and when holdings change.
   const sparklineSymbolsKey = useMemo(() => assets.map((a) => a.symbol).sort().join('|'), [assets]);
+  // Both series are slow to build (one Yahoo chart per holding), so wait until the portfolio has
+  // loaded, settle quick successive changes (holdings and cash arrive separately), and cancel a
+  // request that a newer change has made stale instead of letting several run at once.
   useEffect(() => {
-    if (!sparklineSymbolsKey) return;
-    let cancelled = false;
+    if (!sparklineSymbolsKey || loading) return;
+    const ctrl = new AbortController();
     const load = async () => {
       try {
-        const res = await fetch('/api/portfolio/sparklines', { cache: 'no-store' });
-        if (res.ok && !cancelled) setSparklines(await res.json());
+        const res = await fetch('/api/portfolio/sparklines', { cache: 'no-store', signal: ctrl.signal });
+        if (res.ok && !ctrl.signal.aborted) setSparklines(await res.json());
       } catch {
         /* keep the last sparklines */
       }
     };
-    void load();
+    const startId = window.setTimeout(() => void load(), SERIES_FETCH_SETTLE_MS);
     const id = window.setInterval(() => void load(), INTRADAY_REFRESH_MS);
     return () => {
-      cancelled = true;
+      ctrl.abort();
+      window.clearTimeout(startId);
       window.clearInterval(id);
     };
-  }, [sparklineSymbolsKey, quotesRefreshEpoch]);
+  }, [sparklineSymbolsKey, quotesRefreshEpoch, loading]);
 
   useEffect(() => {
-    if (!intradayRangeActive) return;
+    if (!intradayRangeActive || loading) return;
     const range = activePortfolioChartRange;
-    let cancelled = false;
+    const ctrl = new AbortController();
     const load = async () => {
       try {
-        const res = await fetch(`/api/portfolio/intraday?range=${range}`, { cache: 'no-store' });
+        const res = await fetch(`/api/portfolio/intraday?range=${range}`, { cache: 'no-store', signal: ctrl.signal });
         const json = res.ok ? ((await res.json()) as PortfolioIntradayPayload | null) : null;
-        if (!cancelled) setPortfolioIntraday({ range, data: json });
+        if (!ctrl.signal.aborted) setPortfolioIntraday({ range, data: json });
       } catch {
         /* keep the last series; the history-based chart covers a first-load failure */
       }
     };
-    void load();
+    const startId = window.setTimeout(() => void load(), SERIES_FETCH_SETTLE_MS);
     const id = window.setInterval(() => void load(), INTRADAY_REFRESH_MS);
     return () => {
-      cancelled = true;
+      ctrl.abort();
+      window.clearTimeout(startId);
       window.clearInterval(id);
     };
-  }, [intradayRangeActive, activePortfolioChartRange, intradayHoldingsKey, quotesRefreshEpoch]);
+  }, [intradayRangeActive, activePortfolioChartRange, intradayHoldingsKey, quotesRefreshEpoch, loading]);
 
   const portfolioIntradaySeries = useMemo(
     () =>
@@ -836,12 +923,28 @@ export default function App() {
     const assetSum = assetRows.reduce((s, r) => s + r.value, 0);
     const t = assetSum + c;
     if (t <= 0) return [];
-    const rows = assetRows
+    let rows = assetRows
       .map((r) => ({ ...r, percent: (r.value / t) * 100 }))
       .sort((a, b) => b.value - a.value);
+    // Beyond a dozen holdings the slices are slivers and the legend outgrows its card:
+    // keep the largest ones and fold the rest into one "Other" slice.
+    if (rows.length > ALLOCATION_MAX_HOLDING_SLICES + 1) {
+      const rest = rows.slice(ALLOCATION_MAX_HOLDING_SLICES);
+      const value = rest.reduce((s, r) => s + r.value, 0);
+      rows = [
+        ...rows.slice(0, ALLOCATION_MAX_HOLDING_SLICES),
+        {
+          key: 'other',
+          name: `${rest.length} smaller holdings: ${rest.map((r) => r.label).join(', ')}`,
+          label: `Other (${rest.length})`,
+          value,
+          percent: (value / t) * 100,
+        },
+      ];
+    }
     if (c > 0) {
       rows.push({ key: 'cash', name: 'Cash', label: 'Cash', value: c, percent: (c / t) * 100 });
-      rows.sort((a, b) => b.value - a.value);
+      rows.sort((a, b) => (a.key === 'other' ? 1 : b.key === 'other' ? -1 : b.value - a.value));
     }
     return rows;
   }, [assets, marketPrices, quoteCurrencies, exchangeRates, cashLineEur]);
@@ -1098,9 +1201,11 @@ export default function App() {
         payload.flows?.length ?? 0
       } buy/sale/cash entries`;
       if (
-        !window.confirm(
-          `Merge this backup (${summary}) into your portfolio?\n\nMatching holdings and days are updated; entries already in the portfolio are skipped.`
-        )
+        !(await confirmDialog({
+          title: 'Merge this backup into your portfolio?',
+          body: `${summary}. Matching holdings and days are updated; entries already in the portfolio are skipped.`,
+          confirmLabel: 'Merge',
+        }))
       ) {
         return;
       }
@@ -1316,8 +1421,10 @@ export default function App() {
     ),
   };
 
-  const holdingsTableRowsWithCash = [...holdingsTableRows, cashTableRow];
-  const holdingsRowKeysWithCash = [...holdingsRowKeys, 'cash'];
+  // While searching, only matching holdings are listed (cash is not a holding).
+  const holdingsSearchActive = holdingsQuery.trim() !== '';
+  const holdingsTableRowsWithCash = holdingsSearchActive ? holdingsTableRows : [...holdingsTableRows, cashTableRow];
+  const holdingsRowKeysWithCash = holdingsSearchActive ? holdingsRowKeys : [...holdingsRowKeys, 'cash'];
 
   if (loading) return <LoadingScreen />;
 
@@ -1812,8 +1919,32 @@ export default function App() {
 
                 {/* Holdings Table Section */}
                 <div className="lg:col-span-4 glass-panel p-8">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="card-title mb-0">Holdings</h3>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                    <h3 className="card-title mb-0">
+                      Holdings
+                      {assets.length > 0 ? (
+                        <span className="ml-2 text-xs font-medium text-text-s/60 tabular-nums">
+                          {holdingsSearchActive ? `${sortedHoldings.length} of ${assets.length}` : assets.length}
+                        </span>
+                      ) : null}
+                    </h3>
+                    <div className="flex items-center gap-2 ml-auto">
+                    {assets.length > HOLDINGS_SEARCH_MIN_ROWS || holdingsSearchActive ? (
+                      <label className="relative">
+                        <span className="sr-only">Search holdings</span>
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-s/50" aria-hidden />
+                        <input
+                          type="search"
+                          value={holdingsQuery}
+                          onChange={(e) => setHoldingsQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') setHoldingsQuery('');
+                          }}
+                          placeholder="Search holdings"
+                          className="w-44 rounded-lg border border-border bg-bg/50 py-1.5 pl-8 pr-2 text-[11px] text-text-p placeholder:text-text-s/40 focus:border-accent/50 focus:outline-none"
+                        />
+                      </label>
+                    ) : null}
                     <button 
                       onClick={() => {
                         setEditingAsset(null);
@@ -1823,6 +1954,7 @@ export default function App() {
                     >
                       <Plus className="w-3.5 h-3.5" /> Add asset
                     </button>
+                    </div>
                   </div>
 
                   <DataListTable
@@ -1830,13 +1962,14 @@ export default function App() {
                     columns={[
                       // Cap long fund names (they truncate with a tooltip) so the table fits without scrolling;
                       // below xl the share price and cost basis columns give way to keep today's move in view.
-                      { key: 'asset', label: 'Asset', cellClassName: dataListCellClassName('left', 'max-w-[220px] xl:max-w-[300px]') },
-                      { key: 'value', label: 'Total value', align: 'right' },
-                      { key: 'shares', label: 'Shares', align: 'right' },
+                      { key: 'asset', label: 'Asset', sortable: true, cellClassName: dataListCellClassName('left', 'max-w-[220px] xl:max-w-[300px]') },
+                      { key: 'value', label: 'Total value', align: 'right', sortable: true },
+                      { key: 'shares', label: 'Shares', align: 'right', sortable: true },
                       {
                         key: 'price',
                         label: 'Share price',
                         align: 'right',
+                        sortable: true,
                         headerClassName: 'hidden xl:table-cell',
                         cellClassName: dataListCellClassName('right', 'hidden xl:table-cell'),
                       },
@@ -1844,12 +1977,13 @@ export default function App() {
                         key: 'cost',
                         label: 'Cost basis',
                         align: 'right',
+                        sortable: true,
                         headerClassName: 'hidden xl:table-cell',
                         cellClassName: dataListCellClassName('right', 'hidden xl:table-cell'),
                       },
-                      { key: 'gain', label: 'Unrealized gain', align: 'right' },
+                      { key: 'gain', label: 'Unrealized gain', align: 'right', sortable: true },
                       { key: 'trend', label: 'Today', align: 'right', headerClassName: 'w-28' },
-                      { key: 'today', label: 'Today gain', align: 'right' },
+                      { key: 'today', label: 'Today gain', align: 'right', sortable: true },
                       {
                         key: 'actions',
                         label: '',
@@ -1862,6 +1996,14 @@ export default function App() {
                     rowKeys={feedMetricsLoading ? undefined : holdingsRowKeysWithCash}
                     enterStaggerKey={feedMetricsLoading ? undefined : holdingsStaggerKey}
                     enterStaggerMax={12}
+                    sort={holdingsSort}
+                    onSort={toggleHoldingsSort}
+                    maxHeight={assets.length > HOLDINGS_SEARCH_MIN_ROWS ? '72vh' : undefined}
+                    emptyState={
+                      holdingsSearchActive ? (
+                        <span className="text-text-s/60 font-medium">No holdings match &ldquo;{holdingsQuery.trim()}&rdquo;</span>
+                      ) : undefined
+                    }
                   />
                 </div>
                 </div>
@@ -1993,6 +2135,7 @@ export default function App() {
             editAsset={editingAsset || undefined}
             onPersist={persistAsset}
             exchangeRates={exchangeRates}
+            existingAssets={assets}
           />
         )}
         {historyModal && (
@@ -2004,6 +2147,17 @@ export default function App() {
               await reloadHistory();
               setHistoryModal(null);
             }}
+          />
+        )}
+      </AnimatePresence>
+      {confirmDialogElement}
+      <AnimatePresence>
+        {removalUndo && (
+          <UndoToast
+            key={removalUndo.undoId}
+            message={`Removed ${removalUndo.label}`}
+            onUndo={() => void undoRemoval()}
+            onDismiss={() => setRemovalUndo(null)}
           />
         )}
       </AnimatePresence>

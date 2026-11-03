@@ -34,10 +34,13 @@ const TIER_STOPS: Record<string, [string, string]> = {
   pieTier9: ['#eff5ff', '#bfd4fe'],
   pieGradCash: ['#4ade80', '#14532d'],
   pieGradBtc: ['#fbbf24', '#854d0e'],
+  pieGradOther: ['#94a3b8', '#334155'],
 };
 
 const CASH_CHROME: PieSliceChrome = { gradientId: 'pieGradCash', stroke: '#4ade80' };
 const BTC_CHROME: PieSliceChrome = { gradientId: 'pieGradBtc', stroke: '#facc15' };
+/** The grouped "Other" slice: neutral, so it doesn't read as one more holding. */
+const OTHER_CHROME: PieSliceChrome = { gradientId: 'pieGradOther', stroke: '#94a3b8' };
 
 function isBitcoinAllocationSlice(key: string, label?: string): boolean {
   const fromLabel = (label ?? '').trim().toUpperCase();
@@ -56,6 +59,7 @@ export function allocationPieSliceChrome(
   label?: string
 ): PieSliceChrome {
   if (key === 'cash') return CASH_CHROME;
+  if (key === 'other') return OTHER_CHROME;
   if (isBitcoinAllocationSlice(key, label)) return BTC_CHROME;
   if (sliceCount <= 1) return SIZE_TIERS[0];
   const t = sizeRank / (sliceCount - 1);

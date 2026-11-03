@@ -140,20 +140,34 @@ async function startServer() {
       return res.status(400).json({ error: "Symbols must be an array" });
     }
     try {
-      // Fetch quotes and exchange rates
+      // One batched Yahoo request for all symbols; per-symbol requests only when the batch fails
+      // (one bad symbol can fail validation for the whole batch).
+      type QuoteRow = { symbol: string; price?: any; currency?: any; changePercent?: any; name?: any; error?: boolean };
+      const toRow = (s: string, q: any): QuoteRow => ({
+        symbol: s,
+        price: q.regularMarketPrice,
+        currency: q.currency,
+        changePercent: q.regularMarketChangePercent,
+        name: q.shortName || q.longName,
+      });
+      const wanted = [...new Set(symbols.filter((s): s is string => typeof s === "string" && s.trim() !== ""))];
+      let bySymbol: Map<string, any> | null = null;
+      if (wanted.length > 0) {
+        try {
+          const batch = (await yahooFinance.quote(wanted, {}, { validateResult: false })) as any[];
+          bySymbol = new Map((Array.isArray(batch) ? batch : [batch]).filter(Boolean).map((q: any) => [q.symbol, q]));
+        } catch {
+          bySymbol = null;
+        }
+      }
       const results = await Promise.all(
         symbols.map(async (s) => {
+          const hit = bySymbol?.get(s);
+          if (hit && typeof hit.regularMarketPrice === "number") return toRow(s, hit);
           try {
-            const q: any = await yahooFinance.quote(s);
-            return {
-              symbol: s,
-              price: q.regularMarketPrice,
-              currency: q.currency,
-              changePercent: q.regularMarketChangePercent,
-              name: q.shortName || q.longName
-            };
+            return toRow(s, await yahooFinance.quote(s));
           } catch (e) {
-            return { symbol: s, error: true };
+            return { symbol: s, error: true } as QuoteRow;
           }
         })
       );
@@ -196,9 +210,27 @@ async function startServer() {
         return undefined;
       };
 
+      // All direct pairs (USDEUR=X, …) in one batched request; the per-currency lookup covers misses.
+      const missingRates = () =>
+        neededRates.filter((curr): curr is string => typeof curr === 'string' && curr !== '' && !(rates[curr] > 0));
+      if (missingRates().length > 0) {
+        try {
+          const pairs = (await yahooFinance.quote(
+            missingRates().map((c) => `${c}${baseCurrency}=X`),
+            {},
+            { validateResult: false }
+          )) as any[];
+          for (const q of Array.isArray(pairs) ? pairs : [pairs]) {
+            const m = typeof q?.symbol === 'string' ? q.symbol.match(new RegExp(`^([A-Z]{3})${baseCurrency}=X$`)) : null;
+            if (m && typeof q.regularMarketPrice === 'number' && q.regularMarketPrice > 0) rates[m[1]] = q.regularMarketPrice;
+          }
+        } catch {
+          /* fall back to one lookup per currency below */
+        }
+      }
+
       await Promise.all(
-        neededRates
-          .filter((curr) => !(typeof rates[curr] === 'number' && rates[curr] > 0))
+        missingRates()
           .map(async (curr) => {
             const rate = await fetchFxRateToBase(curr);
             if (rate != null && rate > 0) rates[curr] = rate;

@@ -1,6 +1,7 @@
 import YahooFinance from "yahoo-finance2";
 import { ExtendedCookieJar } from "yahoo-finance2/lib/cookieJar";
 import { getCrumbClear } from "yahoo-finance2/lib/getCrumb";
+import { normalizeChartResult, normalizeQuoteResult, normalizeQuoteSummaryResult } from "./minorCurrency";
 
 const cookieJar = new ExtendedCookieJar();
 
@@ -35,3 +36,15 @@ export const yahooFinance = new YahooFinance({
   cookieJar,
   fetch: sessionAwareFetch,
 });
+
+// Every caller gets prices in the major unit (pence → pounds); see minorCurrency.ts.
+{
+  const yf = yahooFinance as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  const wrap = (name: string, normalize: (r: unknown) => unknown) => {
+    const original = yf[name].bind(yahooFinance);
+    yf[name] = async (...args: unknown[]) => normalize(await original(...args));
+  };
+  wrap("quote", normalizeQuoteResult);
+  wrap("quoteSummary", normalizeQuoteSummaryResult);
+  wrap("chart", normalizeChartResult);
+}
